@@ -1,13 +1,13 @@
 use crate::config::StoreConfig;
-use crate::network::NetworkBackend;
-use crate::storage::StorageBackend;
+use crate::network::Network;
+use crate::storage::Storage;
 use async_std::task;
 use libipld_core::cid::Cid;
 use libipld_core::store::{AliasStore, ReadonlyStore, Store, StoreResult, Visibility};
 use libp2p::core::{Multiaddr, PeerId};
 
 pub struct EmbeddedStore {
-    storage: StorageBackend,
+    storage: Storage,
     peer_id: PeerId,
     address: Multiaddr,
 }
@@ -16,8 +16,8 @@ impl EmbeddedStore {
     pub fn new(config: StoreConfig) -> Result<Self, std::io::Error> {
         let StoreConfig { tree, network } = config;
         let peer_id = network.peer_id();
-        let storage = StorageBackend::new(tree);
-        let (network, address) = NetworkBackend::new(network, storage.clone())?;
+        let storage = Storage::new(tree);
+        let (network, address) = Network::new(network, storage.clone())?;
         log::info!(
             "Listening on {} as {}",
             address.to_string(),

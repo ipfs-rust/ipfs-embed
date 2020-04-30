@@ -946,7 +946,6 @@ version = "0.1.0"
 dependencies = [
  "async-std",
  "env_logger",
- "futures",
  "libipld-core",
  "libp2p",
  "libp2p-bitswap",

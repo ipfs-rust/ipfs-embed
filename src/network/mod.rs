@@ -1,8 +1,6 @@
-use async_std::task;
-use core::future::Future;
+use async_std::prelude::*;
+use async_std::task::{self, Context, Poll};
 use core::pin::Pin;
-use core::task::{Context, Poll};
-use futures::stream::Stream;
 use libipld_core::store::Visibility;
 use libp2p::core::transport::upgrade::Version;
 use libp2p::core::transport::Transport;
@@ -20,19 +18,19 @@ mod mdns;
 mod ping;
 
 use crate::error::Error;
-use crate::storage::{StorageBackend, StorageEvent, StorageSubscriber};
+use crate::storage::{Storage, NetworkEvent as StorageEvent, NetworkSubscriber as StorageSubscriber};
 use behaviour::NetworkBackendBehaviour;
 pub use behaviour::NetworkEvent;
 pub use config::NetworkConfig;
 
-pub struct NetworkBackend {
+pub struct Network {
     swarm: Swarm<NetworkBackendBehaviour>,
-    storage: StorageBackend,
+    storage: Storage,
     subscriber: StorageSubscriber,
 }
 
-impl NetworkBackend {
-    pub fn new(config: NetworkConfig, storage: StorageBackend) -> Result<(Self, Multiaddr), Error> {
+impl Network {
+    pub fn new(config: NetworkConfig, storage: Storage) -> Result<(Self, Multiaddr), Error> {
         let transport = TcpConfig::new()
             .nodelay(true)
             .upgrade(Version::V1)
@@ -58,7 +56,7 @@ impl NetworkBackend {
         for public in storage.public() {
             swarm.provide_block(&public?);
         }
-        let subscriber = storage.watch();
+        let subscriber = storage.watch_network();
         Ok((
             Self {
                 swarm,
@@ -70,7 +68,7 @@ impl NetworkBackend {
     }
 }
 
-impl Future for NetworkBackend {
+impl Future for Network {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {

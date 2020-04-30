@@ -4,19 +4,23 @@ use core::convert::TryFrom;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use futures::stream::Stream;
 use libipld_core::cid::Cid;
 use libipld_core::store::Visibility;
 use sled::{Event, IVec, Subscriber, Tree};
 
+mod gc;
 mod key;
+mod network;
+
+pub use gc::{GcEvent, GcSubscriber};
+pub use network::{NetworkEvent, NetworkSubscriber};
 
 #[derive(Debug, Clone)]
-pub struct StorageBackend {
+pub struct Storage {
     tree: Tree,
 }
 
-impl StorageBackend {
+impl Storage {
     pub fn new(tree: sled::Tree) -> Self {
         Self { tree }
     }
@@ -134,15 +138,6 @@ impl StorageBackend {
             Ok(None)
         }
     }
-
-    pub fn watch(&self) -> StorageSubscriber {
-        log::trace!("watching public() with prefix {:?}", Key::Public.prefix());
-        log::trace!("watching want() with prefix {:?}", Key::Want.prefix());
-        StorageSubscriber {
-            public: self.tree.watch_prefix(Key::Public.prefix()),
-            want: self.tree.watch_prefix(Key::Want.prefix()),
-        }
-    }
 }
 
 pub struct GetFuture {
@@ -182,85 +177,20 @@ impl Drop for GetFuture {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum StorageEvent {
-    Want(Cid),
-    Cancel(Cid),
-    Provide(Cid),
-    Unprovide(Cid),
-}
-
-pub struct StorageSubscriber {
-    public: Subscriber,
-    want: Subscriber,
-}
-
-impl Stream for StorageSubscriber {
-    type Item = StorageEvent;
-
-    fn poll_next(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Option<Self::Item>> {
-        match Pin::new(&mut self.want).poll(ctx) {
-            Poll::Ready(Some(event)) => {
-                let key = match &event {
-                    Event::Insert { key, .. } => key,
-                    Event::Remove { key } => key,
-                };
-                let cid = Cid::try_from(&key[1..]).expect("valid cid");
-                let event = match event {
-                    Event::Insert { .. } => {
-                        log::trace!("emit want event {}", cid.to_string());
-                        StorageEvent::Want(cid)
-                    }
-                    Event::Remove { .. } => {
-                        log::trace!("emit cancel event {}", cid.to_string());
-                        StorageEvent::Cancel(cid)
-                    }
-                };
-                return Poll::Ready(Some(event));
-            }
-            Poll::Ready(None) => return Poll::Ready(None),
-            Poll::Pending => {}
-        }
-        match Pin::new(&mut self.public).poll(ctx) {
-            Poll::Ready(Some(event)) => {
-                let key = match &event {
-                    Event::Insert { key, .. } => key,
-                    Event::Remove { key } => key,
-                };
-                let cid = Cid::try_from(&key[1..]).expect("valid cid");
-                let event = match event {
-                    Event::Insert { .. } => {
-                        log::trace!("emit provide event {}", cid.to_string());
-                        StorageEvent::Provide(cid)
-                    }
-                    Event::Remove { .. } => {
-                        log::trace!("emit unprovide event {}", cid.to_string());
-                        StorageEvent::Unprovide(cid)
-                    }
-                };
-                return Poll::Ready(Some(event));
-            }
-            Poll::Ready(None) => return Poll::Ready(None),
-            Poll::Pending => {}
-        }
-        Poll::Pending
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_std::prelude::*;
     use async_std::task;
-    use futures::stream::StreamExt;
     use libipld_core::cid::Codec;
     use libipld_core::multihash::Sha2_256;
     use tempdir::TempDir;
 
-    fn create_store() -> (StorageBackend, TempDir) {
+    fn create_store() -> (Storage, TempDir) {
         let tmp = TempDir::new("").unwrap();
         let db = sled::open(tmp.path()).unwrap();
         let tree = db.open_tree("ipfs_tree").unwrap();
-        let storage = StorageBackend::new(tree);
+        let storage = Storage::new(tree);
         (storage, tmp)
     }
 
@@ -270,110 +200,187 @@ mod tests {
         (cid, bytes.into())
     }
 
-    #[async_std::test]
-    async fn test_local() {
-        env_logger::try_init().ok();
-        let (store, _) = create_store();
-        let (cid, data) = create_block(b"test_local");
-        let mut sub = store.watch();
+    struct Tester {
+        _tmp: TempDir,
+        store: Storage,
+        gc: GcSubscriber,
+        net: NetworkSubscriber,
+        cid: Cid,
+        data: IVec,
+    }
 
-        assert_eq!(store.get_local(&cid).unwrap(), None);
-        store
-            .insert(&cid, data.clone(), Visibility::Private)
-            .unwrap();
-        assert_eq!(store.get_local(&cid).unwrap(), Some(data.clone()));
-        store.remove(&cid).unwrap();
-        assert_eq!(store.get_local(&cid).unwrap(), Some(data.clone()));
-        store.unpin(&cid).unwrap();
-        store.remove(&cid).unwrap();
-        assert_eq!(store.get_local(&cid).unwrap(), None);
+    impl Tester {
+        fn setup() -> Self {
+            env_logger::try_init().ok();
+            let (store, tmp) = create_store();
+            let (cid, data) = create_block(b"block");
+            let gc = store.watch_gc();
+            let net = store.watch_network();
+            Self { tmp, store, gc, net, cid, data }
+        }
 
-        drop(store);
-        assert_eq!((&mut sub).next().await, None);
+        fn cid(&self) -> Cid {
+            self.cid.clone()
+        }
+
+        fn data(&self) -> IVec {
+            self.data.clone()
+        }
+
+        fn get_local(&self) -> Option<IVec> {
+            self.store.get_local(&self.cid).unwrap()
+        }
+
+        fn get(&self) -> IVec {
+            task::block_on(self.store.get(&self.cid)).unwrap()
+        }
+
+        fn insert(&self, visibility: Visibility) {
+            self.store.insert(&self.cid, self.data.clone(), visibility).unwrap();
+        }
+
+        fn unpin(&self) {
+            self.store.unpin(&self.cid).unwrap();
+        }
+
+        fn remove(&self) {
+            self.store.remove(&self.cid).unwrap();
+        }
+
+        fn alias(&self, alias: &[u8]) {
+            self.store.alias(alias, &self.cid, Visibility::Private).unwrap();
+        }
+
+        fn unalias(&self, alias: &[u8]) {
+            self.store.unalias(alias).unwrap();
+        }
+
+        fn resolve(&self, alias: &[u8]) -> Option<Cid> {
+            self.store.resolve(alias).unwrap()
+        }
+
+        fn assert_gc(&mut self, event: GcEvent) {
+            assert_eq!(task::block_on((&mut self.gc).next()), Some(event));
+        }
+
+        fn assert_pin(&mut self) {
+            let event = GcEvent::Pin(self.cid.clone());
+            self.assert_gc(event);
+        }
+
+        fn assert_unpin(&mut self) {
+            let event = GcEvent::Unpin(self.cid.clone());
+            self.assert_gc(event);
+        }
+
+        fn assert_net(&mut self, event: NetworkEvent) {
+            assert_eq!(task::block_on((&mut self.net).next()), Some(event));
+        }
+
+        fn assert_want(&mut self) {
+            let event = NetworkEvent::Want(self.cid.clone());
+            self.assert_net(event);
+        }
+
+        fn assert_cancel(&mut self) {
+            let event = NetworkEvent::Cancel(self.cid.clone());
+            self.assert_net(event);
+        }
+
+        fn assert_provide(&mut self) {
+            let event = NetworkEvent::Provide(self.cid.clone());
+            self.assert_net(event);
+        }
+
+        fn assert_unprovide(&mut self) {
+            let event = NetworkEvent::Unprovide(self.cid.clone());
+            self.assert_net(event);
+        }
+
+        fn assert_no_events(mut self) {
+            drop(self.store);
+            assert_eq!(task::block_on((&mut self.gc).next()), None);
+            assert_eq!(task::block_on((&mut self.net).next()), None);
+        }
+    }
+
+    #[test]
+    fn test_insert_remove_private() {
+        let mut tester = Tester::setup();
+        tester.insert(Visibility::Private);
+        tester.assert_pin();
+        tester.unpin();
+        tester.assert_unpin();
+        tester.remove();
+        tester.assert_no_events();
+    }
+
+    #[test]
+    fn test_insert_remove_public() {
+        let mut tester = Tester::setup();
+        tester.insert(Visibility::Public);
+        tester.assert_pin();
+        tester.assert_provide();
+        tester.unpin();
+        tester.assert_unpin();
+        tester.remove();
+        tester.assert_unprovide();
+        tester.assert_no_events();
+    }
+
+    #[test]
+    fn test_get_local() {
+        let tester = Tester::setup();
+        tester.insert(Visibility::Private);
+        assert_eq!(tester.get_local(), Some(tester.data()));
+    }
+
+    #[test]
+    fn test_remove_pinned() {
+        let tester = Tester::setup();
+        tester.insert(Visibility::Private);
+        tester.remove();
+        assert_eq!(tester.get_local(), Some(tester.data()));
     }
 
     #[async_std::test]
-    async fn test_get_want() {
-        env_logger::try_init().ok();
-        let (store, _) = create_store();
-        let (cid, data) = create_block(b"test_get_want");
-        let mut sub = store.watch();
+    async fn test_get() {
+        let mut tester = Tester::setup();
 
-        let block = data.clone();
-        let storage = store.clone();
+        let cid = tester.cid();
+        let data = tester.data();
+        let store = tester.store.clone();
+        let mut net = store.watch_network();
         task::spawn(async move {
-            if let Some(StorageEvent::Want(cid)) = sub.next().await {
-                storage.insert(&cid, block, Visibility::Public).unwrap();
-            } else {
-                panic!();
-            }
+            assert_eq!((&mut net).next().await.unwrap(), NetworkEvent::Want(cid.clone()));
+            store.insert(&cid, data, Visibility::Public).unwrap();
         });
 
-        let block = store.get(&cid).await.unwrap();
-        assert_eq!(block, data);
+        assert_eq!(tester.data(), tester.get());
+        tester.assert_pin();
     }
 
-    #[async_std::test]
-    async fn test_get_cancel() {
-        env_logger::try_init().ok();
-        let (store, _) = create_store();
-        let (cid, _data) = create_block(b"test_get_cancel");
-        let mut sub = store.watch();
-        let future = store.get(&cid);
-        assert_eq!(
-            (&mut sub).next().await,
-            Some(StorageEvent::Want(cid.clone()))
-        );
+    #[test]
+    fn test_get_cancel() {
+        let mut tester = Tester::setup();
+
+        let store = tester.store.clone();
+        let future = store.get(&tester.cid);
+        tester.assert_want();
+
         drop(future);
-        assert_eq!(
-            (&mut sub).next().await,
-            Some(StorageEvent::Cancel(cid.clone()))
-        );
+        tester.assert_cancel();
     }
 
-    #[async_std::test]
-    async fn test_insert_provide() {
-        env_logger::try_init().ok();
-        let (store, _) = create_store();
-        let (cid, data) = create_block(b"test_insert_provide");
-        let mut sub = store.watch();
-        store
-            .insert(&cid, data.clone(), Visibility::Public)
-            .unwrap();
-        assert_eq!((&mut sub).next().await, Some(StorageEvent::Provide(cid)));
-    }
+    #[test]
+    fn test_alias() {
+        let tester = Tester::setup();
+        tester.insert(Visibility::Private);
 
-    #[async_std::test]
-    async fn test_remove_unprovide() {
-        env_logger::try_init().ok();
-        let (store, _) = create_store();
-        let (cid, data) = create_block(b"test_remove_unprovide");
-        let mut sub = store.watch();
-        store
-            .insert(&cid, data.clone(), Visibility::Public)
-            .unwrap();
-        assert_eq!(
-            (&mut sub).next().await,
-            Some(StorageEvent::Provide(cid.clone()))
-        );
-        store.unpin(&cid).unwrap();
-        store.remove(&cid).unwrap();
-        assert_eq!((&mut sub).next().await, Some(StorageEvent::Unprovide(cid)));
-    }
-
-    #[async_std::test]
-    async fn test_alias() {
-        env_logger::try_init().ok();
-        let (store, _) = create_store();
-        let (cid, data) = create_block(b"test_alias");
-        store.insert(&cid, data, Visibility::Private).unwrap();
-
-        assert_eq!(store.resolve(b"test_alias").unwrap(), None);
-        store
-            .alias(b"test_alias", &cid, Visibility::Private)
-            .unwrap();
-        assert_eq!(store.resolve(b"test_alias").unwrap(), Some(cid));
-        store.unalias(b"test_alias").unwrap();
-        assert_eq!(store.resolve(b"test_alias").unwrap(), None);
+        assert_eq!(tester.resolve(b"test_alias"), None);
+        tester.alias(b"test_alias");
+        assert_eq!(tester.resolve(b"test_alias"), Some(tester.cid()));
+        tester.unalias(b"test_alias");
+        assert_eq!(tester.resolve(b"test_alias"), None);
     }
 }
