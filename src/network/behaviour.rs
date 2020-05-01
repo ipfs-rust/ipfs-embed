@@ -9,8 +9,7 @@ use libp2p::ping::Ping;
 use libp2p::swarm::toggle::Toggle;
 use libp2p::swarm::{NetworkBehaviourAction, NetworkBehaviourEventProcess, PollParameters};
 use libp2p::NetworkBehaviour;
-use libp2p_bitswap::{Bitswap, BitswapEvent, Block, Priority};
-use sled::IVec;
+use libp2p_bitswap::{Bitswap, BitswapEvent, Priority};
 use std::collections::VecDeque;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -34,7 +33,7 @@ pub struct NetworkBackendBehaviour {
 impl NetworkBehaviourEventProcess<BitswapEvent> for NetworkBackendBehaviour {
     fn inject_event(&mut self, event: BitswapEvent) {
         let event = match event {
-            BitswapEvent::ReceivedBlock(peer_id, Block { cid, data }) => {
+            BitswapEvent::ReceivedBlock(peer_id, cid, data) => {
                 log::debug!("received block {}", cid.to_string());
                 NetworkEvent::ReceivedBlock(peer_id, cid, data)
             }
@@ -86,15 +85,9 @@ impl NetworkBackendBehaviour {
         self.bitswap.connect(peer_id);
     }
 
-    pub fn send_block(&mut self, peer_id: &PeerId, cid: Cid, data: IVec) {
+    pub fn send_block(&mut self, peer_id: &PeerId, cid: Cid, data: Box<[u8]>) {
         log::debug!("send {}", cid.to_string());
-        self.bitswap.send_block(
-            peer_id,
-            Block {
-                cid,
-                data: data.to_vec().into_boxed_slice(),
-            },
-        );
+        self.bitswap.send_block(peer_id, cid, data);
     }
 
     pub fn want_block(&mut self, cid: Cid, priority: Priority) {
@@ -115,12 +108,9 @@ impl NetworkBackendBehaviour {
         self.kad.start_providing(key);
     }
 
-    pub fn provide_and_send_block(&mut self, cid: Cid, data: IVec) {
+    pub fn provide_and_send_block(&mut self, cid: &Cid, data: &[u8]) {
         self.provide_block(&cid);
-        self.bitswap.send_block_all(Block {
-            cid,
-            data: data.to_vec().into_boxed_slice(),
-        });
+        self.bitswap.send_block_all(&cid, &data);
     }
 
     pub fn unprovide_block(&mut self, cid: &Cid) {

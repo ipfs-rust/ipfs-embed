@@ -162,9 +162,24 @@ mod tests {
     }
 
     #[async_std::test]
-    #[ignore]
     async fn test_received_want_before_insert() {
-        // TODO
+        env_logger::try_init().ok();
+        let (store1, _) = create_store(vec![]);
+        let (store2, _) = create_store(vec![]);
+        let (cid, data) = create_block(b"hello world");
+
+        let get_cid = cid.clone();
+        let get = task::spawn(async move { store2.get(&get_cid).await });
+
+        task::sleep(Duration::from_millis(100)).await;
+
+        store1
+            .insert(&cid, data.clone(), Visibility::Public)
+            .await
+            .unwrap();
+
+        let data2 = get.await.unwrap();
+        assert_eq!(data, data2);
     }
 
     #[async_std::test]

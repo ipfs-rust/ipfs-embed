@@ -1,9 +1,9 @@
-use crate::storage::Storage;
 use crate::storage::key::Key;
-use core::convert::TryFrom;
-use core::pin::Pin;
+use crate::storage::Storage;
 use async_std::prelude::*;
 use async_std::task::{Context, Poll};
+use core::convert::TryFrom;
+use core::pin::Pin;
 use libipld_core::cid::Cid;
 use sled::{Event, Subscriber};
 

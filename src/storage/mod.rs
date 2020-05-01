@@ -212,11 +212,18 @@ mod tests {
     impl Tester {
         fn setup() -> Self {
             env_logger::try_init().ok();
-            let (store, tmp) = create_store();
+            let (store, _tmp) = create_store();
             let (cid, data) = create_block(b"block");
             let gc = store.watch_gc();
             let net = store.watch_network();
-            Self { tmp, store, gc, net, cid, data }
+            Self {
+                _tmp,
+                store,
+                gc,
+                net,
+                cid,
+                data,
+            }
         }
 
         fn cid(&self) -> Cid {
@@ -236,7 +243,9 @@ mod tests {
         }
 
         fn insert(&self, visibility: Visibility) {
-            self.store.insert(&self.cid, self.data.clone(), visibility).unwrap();
+            self.store
+                .insert(&self.cid, self.data.clone(), visibility)
+                .unwrap();
         }
 
         fn unpin(&self) {
@@ -248,7 +257,9 @@ mod tests {
         }
 
         fn alias(&self, alias: &[u8]) {
-            self.store.alias(alias, &self.cid, Visibility::Private).unwrap();
+            self.store
+                .alias(alias, &self.cid, Visibility::Private)
+                .unwrap();
         }
 
         fn unalias(&self, alias: &[u8]) {
@@ -352,7 +363,10 @@ mod tests {
         let store = tester.store.clone();
         let mut net = store.watch_network();
         task::spawn(async move {
-            assert_eq!((&mut net).next().await.unwrap(), NetworkEvent::Want(cid.clone()));
+            assert_eq!(
+                (&mut net).next().await.unwrap(),
+                NetworkEvent::Want(cid.clone())
+            );
             store.insert(&cid, data, Visibility::Public).unwrap();
         });
 
