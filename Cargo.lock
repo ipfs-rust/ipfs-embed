@@ -423,6 +423,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "disco"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8887bc92b12bc69d1c644b6f02c6832f4b57daae044f307aa6e25173f1ccf7ae"
+dependencies = [
+ "ed25519-dalek",
+ "rand 0.7.3",
+ "strobe-rs",
+ "x25519-dalek",
+]
+
+[[package]]
 name = "dns-parser"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -768,6 +780,7 @@ name = "ipfs-embed"
 version = "0.1.0"
 dependencies = [
  "async-std",
+ "disco",
  "env_logger",
  "ipld-block-builder",
  "libipld",
@@ -1842,6 +1855,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "strobe-rs"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8649202c7205a65d275be9a4fd44f9a65d184c23fdf278e0062bcaac42145d5"
+dependencies = [
+ "bitflags",
+ "byteorder",
+ "subtle 2.2.2",
+ "tiny-keccak",
+]
+
+[[package]]
 name = "subtle"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1936,6 +1961,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d40c6d1b69745a6ec6fb1ca717914848da4b44ae29d9b3080cbee91d72a69b14"
 dependencies = [
  "lazy_static",
+]
+
+[[package]]
+name = "tiny-keccak"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c9d3793400a45f954c52e73d068316d76b6f4e36977e3fcebb13a2721e80237"
+dependencies = [
+ "crunchy",
 ]
 
 [[package]]
@@ -2191,6 +2225,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "x25519-dalek"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "637ff90c9540fa3073bb577e65033069e4bae7c79d49d74aa3ffdf5342a53217"
+dependencies = [
+ "curve25519-dalek",
+ "rand_core 0.5.1",
+ "zeroize",
+]
+
+[[package]]
 name = "yamux"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2209,3 +2254,18 @@ name = "zeroize"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3cbac2ed2ba24cc90f5e06485ac8c7c1e5449fe8911aef4d8877218af021a5b8"
+dependencies = [
+ "zeroize_derive",
+]
+
+[[package]]
+name = "zeroize_derive"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de251eec69fc7c1bc3923403d18ececb929380e016afe103da75f396704f8ca2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "synstructure",
+]

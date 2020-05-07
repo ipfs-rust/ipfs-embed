@@ -42,7 +42,7 @@ impl Network {
 
         let peer_id = config.peer_id();
         let behaviour = NetworkBackendBehaviour::new(config);
-        let mut swarm = Swarm::new(transport, behaviour, peer_id.clone());
+        let mut swarm = Swarm::new(transport, behaviour, peer_id);
         Swarm::listen_on(&mut swarm, "/ip4/127.0.0.1/tcp/0".parse().unwrap())?;
         let event = task::block_on(swarm.next_event());
         let addr = if let SwarmEvent::NewListenAddr(addr) = event {
@@ -101,7 +101,7 @@ impl Future for Network {
                             Ok(Some(block)) => {
                                 let data = block.to_vec().into_boxed_slice();
                                 self.swarm.send_block(&peer_id, cid, data)
-                            },
+                            }
                             Ok(None) => log::trace!("don't have local block {}", cid.to_string()),
                             Err(err) => log::error!("failed to get local block {:?}", err),
                         }
@@ -112,12 +112,10 @@ impl Future for Network {
                 match event {
                     StorageEvent::Want(cid) => self.swarm.want_block(cid, 1000),
                     StorageEvent::Cancel(cid) => self.swarm.cancel_block(&cid),
-                    StorageEvent::Provide(cid) => {
-                        match self.storage.get_local(&cid) {
-                            Ok(Some(block)) => self.swarm.provide_and_send_block(&cid, &block),
-                            _ => self.swarm.provide_block(&cid),
-                        }
-                    }
+                    StorageEvent::Provide(cid) => match self.storage.get_local(&cid) {
+                        Ok(Some(block)) => self.swarm.provide_and_send_block(&cid, &block),
+                        _ => self.swarm.provide_block(&cid),
+                    },
                     StorageEvent::Unprovide(cid) => self.swarm.unprovide_block(&cid),
                 }
             }

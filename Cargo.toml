@@ -19,6 +19,7 @@ default-features = false
 features = ["kad", "mdns", "ping", "secio", "tcp", "yamux"]
 
 [dev-dependencies]
+disco = "0.1.0"
 env_logger = "0.7.1"
 ipld-block-builder = "0.1.0"
 tempdir = "0.3.7"

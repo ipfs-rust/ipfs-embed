@@ -7,6 +7,7 @@ use libipld::cid::Cid;
 use libipld::store::{AliasStore, ReadonlyStore, Store as WritableStore, StoreResult, Visibility};
 use libp2p::core::{Multiaddr, PeerId};
 
+#[derive(Clone, Debug)]
 pub struct Store {
     storage: Storage,
     peer_id: PeerId,
@@ -39,15 +40,6 @@ impl Store {
     pub fn address(&self) -> &Multiaddr {
         &self.address
     }
-
-    pub fn get_from_peer<'a>(
-        &'a self,
-        _peer_id: &'a PeerId,
-        _cid: &'a Cid,
-    ) -> StoreResult<'a, Option<Box<[u8]>>> {
-        // TODO
-        Box::pin(async move { Ok(Some(b"hello world".to_vec().into_boxed_slice())) })
-    }
 }
 
 impl ReadonlyStore for Store {
@@ -66,7 +58,7 @@ impl WritableStore for Store {
         Box::pin(async move { Ok(self.storage.insert(cid, data.into(), visibility)?) })
     }
 
-    fn flush<'a>(&'a self) -> StoreResult<'a, ()> {
+    fn flush(&self) -> StoreResult<'_, ()> {
         Box::pin(async move { Ok(self.storage.flush().await?) })
     }
 
@@ -132,30 +124,13 @@ mod tests {
     }
 
     #[async_std::test]
-    #[ignore]
-    async fn test_exchange_private() {
-        // TODO
-        env_logger::try_init().ok();
-        let (store1, _) = create_store(vec![]);
-        let (store2, _) = create_store(vec![]);
-        let (cid, data) = create_block(b"hello world");
-        store1
-            .insert(&cid, data.clone(), Visibility::Private)
-            .await
-            .unwrap();
-        let peer_id = store1.peer_id();
-        let data2 = store2.get_from_peer(peer_id, &cid).await.unwrap().unwrap();
-        assert_eq!(data, data2);
-    }
-
-    #[async_std::test]
     async fn test_exchange_mdns() {
         env_logger::try_init().ok();
         let (store1, _) = create_store(vec![]);
         let (store2, _) = create_store(vec![]);
         let (cid, data) = create_block(b"hello world");
         store1
-            .insert(&cid, data.clone(), Visibility::Public)
+            .insert(&cid, data.clone(), Visibility::Private)
             .await
             .unwrap();
         let data2 = store2.get(&cid).await.unwrap();
@@ -206,12 +181,6 @@ mod tests {
     #[async_std::test]
     #[ignore]
     async fn test_provider_not_found_kad() {
-        // TODO
-    }
-
-    #[async_std::test]
-    #[ignore]
-    async fn test_ping_closes_connection() {
         // TODO
     }
 }
