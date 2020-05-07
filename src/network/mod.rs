@@ -1,7 +1,7 @@
 use async_std::prelude::*;
 use async_std::task::{self, Context, Poll};
 use core::pin::Pin;
-use libipld_core::store::Visibility;
+use libipld::store::Visibility;
 use libp2p::core::transport::upgrade::Version;
 use libp2p::core::transport::Transport;
 use libp2p::core::Multiaddr;

@@ -4,8 +4,8 @@ use core::convert::TryFrom;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use libipld_core::cid::Cid;
-use libipld_core::store::Visibility;
+use libipld::cid::Cid;
+use libipld::store::Visibility;
 use sled::{Event, IVec, Subscriber, Tree};
 
 mod gc;
@@ -68,9 +68,7 @@ impl Storage {
             if let Visibility::Public = visibility {
                 tree.insert(Key::public(cid), &[])?;
             }
-            if tree.get(Key::want(cid))?.is_some() {
-                tree.remove(Key::want(cid))?;
-            }
+            tree.remove(Key::want(cid))?;
             Ok(())
         })?;
         Ok(())
@@ -93,12 +91,8 @@ impl Storage {
         self.tree.transaction(|tree| {
             if tree.get(Key::pin(cid))?.is_none() {
                 tree.remove(Key::block(cid))?;
-                if tree.get(Key::public(cid))?.is_some() {
-                    tree.remove(Key::public(cid))?;
-                }
-                if tree.get(Key::want(cid))?.is_some() {
-                    tree.remove(Key::want(cid))?;
-                }
+                tree.remove(Key::public(cid))?;
+                tree.remove(Key::want(cid))?;
             }
             Ok(())
         })?;
@@ -182,8 +176,8 @@ mod tests {
     use super::*;
     use async_std::prelude::*;
     use async_std::task;
-    use libipld_core::cid::Codec;
-    use libipld_core::multihash::Sha2_256;
+    use libipld::cid::Codec;
+    use libipld::multihash::Sha2_256;
     use tempdir::TempDir;
 
     fn create_store() -> (Storage, TempDir) {

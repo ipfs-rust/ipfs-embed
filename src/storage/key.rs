@@ -1,4 +1,4 @@
-use libipld_core::cid::Cid;
+use libipld::cid::Cid;
 use sled::IVec;
 
 #[derive(Clone, Copy, Debug)]

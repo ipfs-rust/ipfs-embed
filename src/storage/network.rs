@@ -4,7 +4,7 @@ use async_std::prelude::*;
 use async_std::task::{Context, Poll};
 use core::convert::TryFrom;
 use core::pin::Pin;
-use libipld_core::cid::Cid;
+use libipld::cid::Cid;
 use sled::{Event, Subscriber};
 
 #[derive(Clone, Debug, Eq, PartialEq)]

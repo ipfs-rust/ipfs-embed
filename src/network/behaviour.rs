@@ -1,6 +1,6 @@
 use crate::network::NetworkConfig;
 use core::task::{Context, Poll};
-use libipld_core::cid::Cid;
+use libipld::cid::Cid;
 use libp2p::core::PeerId;
 use libp2p::kad::record::store::MemoryStore;
 use libp2p::kad::Kademlia;

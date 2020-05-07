@@ -1,9 +1,10 @@
 use crate::config::StoreConfig;
+use crate::error::Error;
 use crate::network::Network;
 use crate::storage::Storage;
 use async_std::task;
-use libipld_core::cid::Cid;
-use libipld_core::store::{AliasStore, ReadonlyStore, Store, StoreResult, Visibility};
+use libipld::cid::Cid;
+use libipld::store::{AliasStore, ReadonlyStore, Store, StoreResult, Visibility};
 use libp2p::core::{Multiaddr, PeerId};
 
 pub struct EmbeddedStore {
@@ -13,7 +14,7 @@ pub struct EmbeddedStore {
 }
 
 impl EmbeddedStore {
-    pub fn new(config: StoreConfig) -> Result<Self, std::io::Error> {
+    pub fn new(config: StoreConfig) -> Result<Self, Error> {
         let StoreConfig { tree, network } = config;
         let peer_id = network.peer_id();
         let storage = Storage::new(tree);
@@ -96,8 +97,8 @@ impl AliasStore for EmbeddedStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use libipld_core::cid::Codec;
-    use libipld_core::multihash::Sha2_256;
+    use libipld::cid::Codec;
+    use libipld::multihash::Sha2_256;
     use std::time::Duration;
     use tempdir::TempDir;
 
