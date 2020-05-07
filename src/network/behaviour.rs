@@ -3,6 +3,7 @@ use core::task::{Context, Poll};
 use libipld::cid::Cid;
 use libp2p::core::PeerId;
 use libp2p::kad::record::store::MemoryStore;
+use libp2p::kad::record::Key;
 use libp2p::kad::Kademlia;
 use libp2p::mdns::Mdns;
 use libp2p::ping::Ping;
@@ -92,7 +93,7 @@ impl NetworkBackendBehaviour {
 
     pub fn want_block(&mut self, cid: Cid, priority: Priority) {
         log::debug!("want {}", cid.to_string());
-        let key = cid.hash().to_owned().into();
+        let key = Key::new(&cid.hash().as_bytes());
         self.kad.get_providers(key);
         self.bitswap.want_block(cid, priority);
     }
@@ -104,7 +105,7 @@ impl NetworkBackendBehaviour {
 
     pub fn provide_block(&mut self, cid: &Cid) {
         log::debug!("provide {}", cid.to_string());
-        let key = cid.hash().to_owned().into();
+        let key = Key::new(&cid.hash().as_bytes());
         self.kad.start_providing(key);
     }
 
@@ -115,7 +116,7 @@ impl NetworkBackendBehaviour {
 
     pub fn unprovide_block(&mut self, cid: &Cid) {
         log::debug!("unprovide {}", cid.to_string());
-        let key = cid.hash().to_owned().into();
+        let key = Key::new(&cid.hash().as_bytes());
         self.kad.stop_providing(&key);
     }
 

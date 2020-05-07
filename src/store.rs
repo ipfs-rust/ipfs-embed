@@ -1,21 +1,21 @@
-use crate::config::StoreConfig;
+use crate::config::Config;
 use crate::error::Error;
 use crate::network::Network;
 use crate::storage::Storage;
 use async_std::task;
 use libipld::cid::Cid;
-use libipld::store::{AliasStore, ReadonlyStore, Store, StoreResult, Visibility};
+use libipld::store::{AliasStore, ReadonlyStore, Store as WritableStore, StoreResult, Visibility};
 use libp2p::core::{Multiaddr, PeerId};
 
-pub struct EmbeddedStore {
+pub struct Store {
     storage: Storage,
     peer_id: PeerId,
     address: Multiaddr,
 }
 
-impl EmbeddedStore {
-    pub fn new(config: StoreConfig) -> Result<Self, Error> {
-        let StoreConfig { tree, network } = config;
+impl Store {
+    pub fn new(config: Config) -> Result<Self, Error> {
+        let Config { tree, network } = config;
         let peer_id = network.peer_id();
         let storage = Storage::new(tree);
         let (network, address) = Network::new(network, storage.clone())?;
@@ -50,13 +50,13 @@ impl EmbeddedStore {
     }
 }
 
-impl ReadonlyStore for EmbeddedStore {
+impl ReadonlyStore for Store {
     fn get<'a>(&'a self, cid: &'a Cid) -> StoreResult<'a, Box<[u8]>> {
         Box::pin(async move { Ok(self.storage.get(cid).await?.to_vec().into_boxed_slice()) })
     }
 }
 
-impl Store for EmbeddedStore {
+impl WritableStore for Store {
     fn insert<'a>(
         &'a self,
         cid: &'a Cid,
@@ -75,7 +75,7 @@ impl Store for EmbeddedStore {
     }
 }
 
-impl AliasStore for EmbeddedStore {
+impl AliasStore for Store {
     fn alias<'a>(
         &'a self,
         alias: &'a [u8],
@@ -102,12 +102,12 @@ mod tests {
     use std::time::Duration;
     use tempdir::TempDir;
 
-    fn create_store(bootstrap: Vec<(Multiaddr, PeerId)>) -> (EmbeddedStore, TempDir) {
+    fn create_store(bootstrap: Vec<(Multiaddr, PeerId)>) -> (Store, TempDir) {
         let tmp = TempDir::new("").unwrap();
-        let mut config = StoreConfig::from_path(tmp.path()).unwrap();
+        let mut config = Config::from_path(tmp.path()).unwrap();
         config.network.enable_mdns = bootstrap.is_empty();
         config.network.bootstrap_nodes = bootstrap;
-        let store = EmbeddedStore::new(config).unwrap();
+        let store = Store::new(config).unwrap();
         (store, tmp)
     }
 
