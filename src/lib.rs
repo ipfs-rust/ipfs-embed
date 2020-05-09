@@ -14,4 +14,6 @@ mod storage;
 mod store;
 
 pub use config::Config;
+pub use error::Error;
+pub use network::NetworkConfig;
 pub use store::Store;
