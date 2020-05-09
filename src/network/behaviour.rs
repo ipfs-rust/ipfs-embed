@@ -63,6 +63,9 @@ impl NetworkBackendBehaviour {
         for (addr, peer_id) in &config.bootstrap_nodes {
             kad.add_address(peer_id, addr.to_owned());
         }
+        if !config.bootstrap_nodes.is_empty() {
+            kad.bootstrap();
+        }
 
         let ping = if config.enable_ping {
             Some(Ping::default())

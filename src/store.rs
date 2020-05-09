@@ -20,12 +20,14 @@ impl Store {
         let peer_id = network.peer_id();
         let storage = Storage::new(tree);
         let (network, address) = Network::new(network, storage.clone())?;
-        log::info!(
-            "Listening on {} as {}",
-            address.to_string(),
-            peer_id.to_base58()
-        );
-        task::spawn(network);
+
+        let address_str = address.to_string();
+        let peer_id_str = peer_id.to_base58();
+        task::spawn(async move {
+            // make sure async std logs the right task id
+            log::info!("Listening on {} as {}", address_str, peer_id_str);
+            network.await;
+        });
         Ok(Self {
             storage,
             peer_id,
@@ -159,16 +161,23 @@ mod tests {
     }
 
     #[async_std::test]
-    #[ignore]
     async fn test_exchange_kad() {
-        // TODO
-        env_logger::try_init().ok();
+        let logger = env_logger::Builder::from_default_env().build();
+        async_log::Logger::wrap(logger, || {
+            let task_id = async_std::task::current().id();
+            format!("{}", task_id).parse().unwrap()
+        })
+            .start(log::LevelFilter::Trace)
+            .ok();
+
         let (store, _) = create_store(vec![]);
+        task::sleep(Duration::from_secs(5)).await;
         let bootstrap = vec![(store.address().clone(), store.peer_id().clone())];
         let (store1, _) = create_store(bootstrap.clone());
+        task::sleep(Duration::from_secs(5)).await;
         let (store2, _) = create_store(bootstrap);
+        task::sleep(Duration::from_secs(5)).await;
         let (cid, data) = create_block(b"hello world");
-        task::sleep(Duration::from_secs(10)).await;
         store1
             .insert(&cid, data.clone(), Visibility::Public)
             .await
