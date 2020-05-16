@@ -7,6 +7,7 @@ use core::task::{Context, Poll};
 use libipld::cid::Cid;
 use libipld::store::Visibility;
 use sled::{Event, IVec, Subscriber, Tree};
+use std::collections::HashSet;
 
 mod gc;
 mod key;
@@ -61,14 +62,29 @@ impl Storage {
 
     pub fn insert(&self, cid: &Cid, data: IVec, visibility: Visibility) -> Result<(), Error> {
         log::trace!("insert {}", cid.to_string());
+        let ipld = libipld::block::decode_ipld(cid, &data)?;
+        let refs = libipld::block::references(&ipld);
+        let refs_bytes = encode_refs(&refs);
         self.tree.transaction(|tree| {
             log::trace!("insert key {:?}", Key::block(cid));
-            tree.insert(Key::block(cid), &*data)?;
-            tree.insert(Key::pin(cid), &[])?;
-            if let Visibility::Public = visibility {
-                tree.insert(Key::public(cid), &[])?;
+            let pin_key = Key::pin(cid);
+            if let Some(pin) = tree.get(&pin_key)? {
+                log::trace!("duplicate incrementing pin count");
+                tree.insert(pin_key, &[pin[0] + 1])?;
+            } else {
+                for cid in &refs {
+                    let refer_key = Key::refer(cid);
+                    let refer = tree.get(refer_key.clone())?.map(|buf| buf[0]).unwrap_or_default();
+                    tree.insert(refer_key, &[refer + 1])?;
+                }
+                tree.insert(Key::block(cid), &*data)?;
+                tree.insert(pin_key, &[1])?;
+                tree.insert(Key::refs(cid), &refs_bytes)?;
+                if let Visibility::Public = visibility {
+                    tree.insert(Key::public(cid), &[])?;
+                }
+                tree.remove(Key::want(cid))?;
             }
-            tree.remove(Key::want(cid))?;
             Ok(())
         })?;
         Ok(())
@@ -82,35 +98,65 @@ impl Storage {
 
     pub fn unpin(&self, cid: &Cid) -> Result<(), Error> {
         log::trace!("unpin {}", cid.to_string());
-        self.tree.remove(Key::pin(cid))?;
-        Ok(())
-    }
-
-    pub fn remove(&self, cid: &Cid) -> Result<(), Error> {
-        log::trace!("remove {}", cid.to_string());
         self.tree.transaction(|tree| {
-            if tree.get(Key::pin(cid))?.is_none() {
-                tree.remove(Key::block(cid))?;
-                tree.remove(Key::public(cid))?;
-                tree.remove(Key::want(cid))?;
+            let pin_key = Key::pin(cid);
+            if let Some(pin) = tree.remove(&pin_key)? {
+                if pin[0] > 1 {
+                    tree.insert(pin_key, &[pin[0] - 1])?;
+                }
             }
             Ok(())
         })?;
         Ok(())
     }
 
-    pub fn wanted(&self) -> impl Iterator<Item = Result<Cid, Error>> {
+    fn remove_one(&self, cid: &Cid) -> Result<Option<HashSet<Cid>>, Error> {
+        log::trace!("remove {}", cid.to_string());
+        Ok(self.tree.transaction(|tree| {
+            let pinned = tree.get(Key::pin(cid))?.is_some();
+            let referers = tree.get(Key::refer(cid))?.is_some();
+            if pinned || referers {
+                return Ok(None);
+            }
+            tree.remove(Key::block(cid))?;
+            tree.remove(Key::public(cid))?;
+            tree.remove(Key::want(cid))?;
+            let refs = tree.remove(Key::refs(cid))?.unwrap();
+            let refs = decode_refs(refs);
+            for cid in &refs {
+                let refer_key = Key::refer(cid);
+                if let Some(refer) = tree.remove(&refer_key)? {
+                    if refer[0] > 1 {
+                        tree.insert(refer_key, &[refer[0] - 1])?;
+                    }
+                }
+            }
+            Ok(Some(refs))
+        })?)
+    }
+
+    pub fn remove(&self, cid: &Cid) -> Result<(), Error> {
+        if let Some(refs) = self.remove_one(cid)? {
+            for cid in refs {
+                self.remove(&cid)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn iter_prefix(&self, prefix: IVec) -> impl Iterator<Item = Result<Cid, Error>> {
         self.tree
-            .scan_prefix(Key::Want.prefix())
+            .scan_prefix(prefix)
             .keys()
             .map(|result| Ok(Cid::try_from(&result?[1..])?))
     }
 
+    pub fn wanted(&self) -> impl Iterator<Item = Result<Cid, Error>> {
+        self.iter_prefix(Key::Want.prefix())
+    }
+
     pub fn public(&self) -> impl Iterator<Item = Result<Cid, Error>> {
-        self.tree
-            .scan_prefix(Key::Public.prefix())
-            .keys()
-            .map(|result| Ok(Cid::try_from(&result?[1..])?))
+        self.iter_prefix(Key::Public.prefix())
     }
 
     pub fn alias(&self, alias: &[u8], cid: &Cid, _visibility: Visibility) -> Result<(), Error> {
@@ -132,6 +178,33 @@ impl Storage {
             Ok(None)
         }
     }
+}
+
+fn encode_refs(refs: &HashSet<Cid>) -> IVec {
+    let mut buf = vec![];
+    buf.extend(&(refs.len() as u64).to_le_bytes());
+    for cid in refs.iter() {
+        let bytes = cid.to_bytes();
+        buf.extend(&[bytes.len() as u8]);
+        buf.extend(bytes);
+    }
+    buf.into()
+}
+
+fn decode_refs(buf: IVec) -> HashSet<Cid> {
+    let mut len_buf = [0u8; 8];
+    len_buf.copy_from_slice(&buf[..8]);
+    let len = u64::from_le_bytes(len_buf);
+    let mut refs = HashSet::with_capacity(len as _);
+    let mut pos = 8;
+    for _ in 0..len {
+        let len = buf[pos] as usize;
+        pos += 1;
+        let cid = Cid::try_from(&buf[pos..(pos + len)]).expect("valid refs");
+        pos += len;
+        refs.insert(cid);
+    }
+    refs
 }
 
 pub struct GetFuture {
@@ -268,11 +341,6 @@ mod tests {
             assert_eq!(task::block_on((&mut self.gc).next()), Some(event));
         }
 
-        fn assert_pin(&mut self) {
-            let event = GcEvent::Pin(self.cid.clone());
-            self.assert_gc(event);
-        }
-
         fn assert_unpin(&mut self) {
             let event = GcEvent::Unpin(self.cid.clone());
             self.assert_gc(event);
@@ -313,7 +381,6 @@ mod tests {
     fn test_insert_remove_private() {
         let mut tester = Tester::setup();
         tester.insert(Visibility::Private);
-        tester.assert_pin();
         tester.unpin();
         tester.assert_unpin();
         tester.remove();
@@ -324,7 +391,6 @@ mod tests {
     fn test_insert_remove_public() {
         let mut tester = Tester::setup();
         tester.insert(Visibility::Public);
-        tester.assert_pin();
         tester.assert_provide();
         tester.unpin();
         tester.assert_unpin();
@@ -350,7 +416,7 @@ mod tests {
 
     #[async_std::test]
     async fn test_get() {
-        let mut tester = Tester::setup();
+        let tester = Tester::setup();
 
         let cid = tester.cid();
         let data = tester.data();
@@ -365,7 +431,6 @@ mod tests {
         });
 
         assert_eq!(tester.data(), tester.get());
-        tester.assert_pin();
     }
 
     #[test]
@@ -390,5 +455,39 @@ mod tests {
         assert_eq!(tester.resolve(b"test_alias"), Some(tester.cid()));
         tester.unalias(b"test_alias");
         assert_eq!(tester.resolve(b"test_alias"), None);
+    }
+
+    #[test]
+    fn test_duplicate_no_unpin() {
+        let tester = Tester::setup();
+        tester.insert(Visibility::Private);
+        tester.insert(Visibility::Private);
+        tester.unpin();
+        tester.assert_no_events();
+    }
+
+    #[test]
+    fn test_duplicate_unpin() {
+        let mut tester = Tester::setup();
+        tester.insert(Visibility::Private);
+        tester.insert(Visibility::Private);
+        tester.unpin();
+        tester.unpin();
+        tester.assert_unpin();
+        tester.assert_no_events();
+    }
+
+    #[test]
+    fn test_refs() {
+        let (cid1, _) = create_block(b"a");
+        let (cid2, _) = create_block(b"b");
+        let (cid3, _) = create_block(b"c");
+        let mut refs = HashSet::new();
+        refs.insert(cid1);
+        refs.insert(cid2);
+        refs.insert(cid3);
+        let bytes = encode_refs(&refs);
+        let refs2 = decode_refs(bytes);
+        assert_eq!(refs, refs2);
     }
 }

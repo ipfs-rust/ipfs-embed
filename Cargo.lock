@@ -913,9 +913,9 @@ checksum = "3baa92041a6fec78c687fa0cc2b3fae8884f743d672cf551bed1d6dac6988d0f"
 
 [[package]]
 name = "libipld"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52bdc5d895093f098a8ca0da1ca817a8b293dcc40fc8aa6f4d642267e20f1ac8"
+checksum = "06b79e5c9bc34bbf7b45fc473835ee6a92da4f517a2619d90bf51ad524db92e1"
 dependencies = [
  "async-std",
  "libipld-cbor",

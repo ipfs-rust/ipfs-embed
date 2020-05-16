@@ -9,6 +9,8 @@ pub enum Key {
     Alias,
     Public,
     Want,
+    Refs,
+    Refer,
 }
 
 impl Key {
@@ -45,6 +47,14 @@ impl Key {
 
     pub fn want(cid: &Cid) -> IVec {
         Self::Want.cid_key(cid)
+    }
+
+    pub fn refs(cid: &Cid) -> IVec {
+        Self::Refs.cid_key(cid)
+    }
+
+    pub fn refer(cid: &Cid) -> IVec {
+        Self::Refer.cid_key(cid)
     }
 }
 

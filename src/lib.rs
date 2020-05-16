@@ -9,6 +9,7 @@
 //! ```
 mod config;
 mod error;
+mod gc;
 mod network;
 mod storage;
 mod store;

@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::error::Error;
+use crate::gc::GarbageCollector;
 use crate::network::Network;
 use crate::storage::Storage;
 use async_std::task;
@@ -28,6 +29,9 @@ impl Store {
             log::info!("Listening on {} as {}", address_str, peer_id_str);
             network.await;
         });
+
+        task::spawn(GarbageCollector::new(storage.clone()));
+
         Ok(Self {
             storage,
             peer_id,
@@ -91,7 +95,11 @@ impl AliasStore for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use libipld::block::{decode, encode, Block};
+    use libipld::cbor::DagCbor;
     use libipld::cid::Codec;
+    use libipld::ipld;
+    use libipld::ipld::Ipld;
     use libipld::multihash::Sha2_256;
     use std::time::Duration;
     use tempdir::TempDir;
@@ -167,8 +175,8 @@ mod tests {
             let task_id = async_std::task::current().id();
             format!("{}", task_id).parse().unwrap()
         })
-            .start(log::LevelFilter::Trace)
-            .ok();
+        .start(log::LevelFilter::Trace)
+        .ok();
 
         let (store, _) = create_store(vec![]);
         task::sleep(Duration::from_secs(5)).await;
@@ -191,5 +199,64 @@ mod tests {
     #[ignore]
     async fn test_provider_not_found_kad() {
         // TODO
+    }
+
+    async fn get(store: &Store, cid: &Cid) -> Option<Ipld> {
+        store.storage.get_local(cid).unwrap()
+            .map(|bytes| decode::<DagCbor, Ipld>(cid, &bytes).unwrap())
+    }
+
+    async fn insert(store: &Store, ipld: &Ipld) -> Cid {
+        let Block { cid, data } = encode::<DagCbor, Sha2_256, Ipld>(ipld).unwrap();
+        store.insert(&cid, data, Visibility::Public).await.unwrap();
+        cid
+    }
+
+    #[async_std::test]
+    async fn test_gc() {
+        env_logger::try_init().ok();
+        let (store, _) = create_store(vec![]);
+        let a = insert(&store, &ipld!({ "a": [] })).await;
+        let b = insert(&store, &ipld!({ "b": [&a] })).await;
+        store.unpin(&a).await.unwrap();
+        task::sleep(Duration::from_millis(100)).await;
+        let c = insert(&store, &ipld!({ "c": [&a] })).await;
+        assert!(get(&store, &a).await.is_some());
+        assert!(get(&store, &b).await.is_some());
+        assert!(get(&store, &c).await.is_some());
+        store.unpin(&b).await.unwrap();
+        task::sleep(Duration::from_millis(100)).await;
+        assert!(get(&store, &a).await.is_some());
+        assert!(get(&store, &b).await.is_none());
+        assert!(get(&store, &c).await.is_some());
+        store.unpin(&c).await.unwrap();
+        task::sleep(Duration::from_millis(100)).await;
+        assert!(get(&store, &a).await.is_none());
+        assert!(get(&store, &b).await.is_none());
+        assert!(get(&store, &c).await.is_none());
+    }
+
+    #[async_std::test]
+    async fn test_gc_2() {
+        env_logger::try_init().ok();
+        let (store, _) = create_store(vec![]);
+        let a = insert(&store, &ipld!({ "a": [] })).await;
+        let b = insert(&store, &ipld!({ "b": [&a] })).await;
+        store.unpin(&a).await.unwrap();
+        task::sleep(Duration::from_millis(100)).await;
+        let c = insert(&store, &ipld!({ "b": [&a] })).await;
+        assert!(get(&store, &a).await.is_some());
+        assert!(get(&store, &b).await.is_some());
+        assert!(get(&store, &c).await.is_some());
+        store.unpin(&b).await.unwrap();
+        task::sleep(Duration::from_millis(100)).await;
+        assert!(get(&store, &a).await.is_some());
+        assert!(get(&store, &b).await.is_some());
+        assert!(get(&store, &c).await.is_some());
+        store.unpin(&c).await.unwrap();
+        task::sleep(Duration::from_millis(100)).await;
+        assert!(get(&store, &a).await.is_none());
+        assert!(get(&store, &b).await.is_none());
+        assert!(get(&store, &c).await.is_none());
     }
 }

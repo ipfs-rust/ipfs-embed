@@ -9,7 +9,6 @@ use sled::{Event, Subscriber};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GcEvent {
-    Pin(Cid),
     Unpin(Cid),
 }
 
@@ -30,27 +29,18 @@ impl Stream for GcSubscriber {
     type Item = GcEvent;
 
     fn poll_next(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Option<Self::Item>> {
-        match Pin::new(&mut self.pin).poll(ctx) {
-            Poll::Ready(Some(event)) => {
-                let key = match &event {
-                    Event::Insert { key, .. } => key,
-                    Event::Remove { key } => key,
-                };
-                let cid = Cid::try_from(&key[1..]).expect("valid cid");
-                let event = match event {
-                    Event::Insert { .. } => {
-                        log::trace!("emit pin event {}", cid.to_string());
-                        GcEvent::Pin(cid)
-                    }
-                    Event::Remove { .. } => {
-                        log::trace!("emit unpin event {}", cid.to_string());
-                        GcEvent::Unpin(cid)
-                    }
-                };
-                Poll::Ready(Some(event))
+        loop {
+            match Pin::new(&mut self.pin).poll(ctx) {
+                Poll::Ready(Some(Event::Remove { key })) => {
+                    let cid = Cid::try_from(&key[1..]).expect("valid cid");
+                    log::trace!("emit unpin event {}", cid.to_string());
+                    return Poll::Ready(Some(GcEvent::Unpin(cid)));
+                }
+                Poll::Ready(Some(_)) => continue,
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => break,
             }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
         }
+        Poll::Pending
     }
 }
