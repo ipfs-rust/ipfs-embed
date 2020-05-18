@@ -19,7 +19,7 @@ impl Store {
     pub fn new(config: Config) -> Result<Self, Error> {
         let Config { tree, network } = config;
         let peer_id = network.peer_id();
-        let storage = Storage::new(tree);
+        let storage = Storage::new(tree)?;
         let (network, address) = task::block_on(Network::new(network, storage.clone()))?;
 
         let address_str = address.to_string();
@@ -179,7 +179,8 @@ mod tests {
         .ok();
 
         let (store, _) = create_store(vec![]);
-        task::sleep(Duration::from_secs(100)).await;
+        // make sure bootstrap node has started
+        task::sleep(Duration::from_secs(500)).await;
         let bootstrap = vec![(store.address().clone(), store.peer_id().clone())];
         let (store1, _) = create_store(bootstrap.clone());
         let (store2, _) = create_store(bootstrap);
@@ -188,6 +189,7 @@ mod tests {
             .insert(&cid, data.clone(), Visibility::Public)
             .await
             .unwrap();
+        // make insert had enough time to propagate
         task::sleep(Duration::from_secs(500)).await;
         let data2 = store2.get(&cid).await.unwrap();
         assert_eq!(data, data2);

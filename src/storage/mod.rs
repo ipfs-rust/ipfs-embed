@@ -22,8 +22,12 @@ pub struct Storage {
 }
 
 impl Storage {
-    pub fn new(tree: sled::Tree) -> Self {
-        Self { tree }
+    pub fn new(tree: sled::Tree) -> Result<Self, Error> {
+        // cleanup wanted on startup
+        for key in tree.scan_prefix(Key::Want.prefix()).keys() {
+            tree.remove(key?)?;
+        }
+        Ok(Self { tree })
     }
 
     pub fn get_local(&self, cid: &Cid) -> Result<Option<IVec>, Error> {
@@ -152,10 +156,6 @@ impl Storage {
             .scan_prefix(prefix)
             .keys()
             .map(|result| Ok(Cid::try_from(&result?[1..])?))
-    }
-
-    pub fn wanted(&self) -> impl Iterator<Item = Result<Cid, Error>> {
-        self.iter_prefix(Key::Want.prefix())
     }
 
     pub fn public(&self) -> impl Iterator<Item = Result<Cid, Error>> {

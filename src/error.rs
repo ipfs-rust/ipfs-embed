@@ -11,11 +11,11 @@ pub enum Error {
     #[error(transparent)]
     Sled(#[from] SledError),
     #[error(transparent)]
-    Sled2(#[from] TransactionError),
+    Transaction(#[from] TransactionError),
     #[error(transparent)]
     Cid(#[from] CidError),
     #[error(transparent)]
-    Net(#[from] TransportError<IoError>),
+    Transport(#[from] TransportError<IoError>),
     #[error(transparent)]
     Ipld(#[from] IpldError),
     #[error(transparent)]

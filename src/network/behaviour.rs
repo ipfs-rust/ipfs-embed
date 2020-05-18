@@ -1,23 +1,29 @@
+use crate::error::Error;
 use crate::network::NetworkConfig;
 use core::task::{Context, Poll};
 use libipld::cid::Cid;
 use libp2p::core::PeerId;
 use libp2p::identify::{Identify, IdentifyEvent};
-use libp2p::kad::record::store::MemoryStore;
+use libp2p::kad::record::store::{Error as RecordError, MemoryStore};
 use libp2p::kad::record::Key;
-use libp2p::kad::Kademlia;
+use libp2p::kad::{
+    BootstrapError, BootstrapOk, GetProvidersOk, Kademlia, KademliaEvent, QueryId, QueryResult,
+};
 use libp2p::mdns::{Mdns, MdnsEvent};
 use libp2p::ping::{Ping, PingEvent};
 use libp2p::swarm::toggle::Toggle;
 use libp2p::swarm::{NetworkBehaviourAction, NetworkBehaviourEventProcess, PollParameters};
 use libp2p::NetworkBehaviour;
 use libp2p_bitswap::{Bitswap, BitswapEvent, Priority};
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NetworkEvent {
     ReceivedBlock(PeerId, Cid, Box<[u8]>),
     ReceivedWant(PeerId, Cid),
+    BootstrapComplete,
+    Providers(Cid, HashSet<PeerId>),
+    NoProviders(Cid),
 }
 
 /// Behaviour type.
@@ -31,6 +37,8 @@ pub struct NetworkBackendBehaviour {
     bitswap: Bitswap,
     #[behaviour(ignore)]
     events: VecDeque<NetworkEvent>,
+    #[behaviour(ignore)]
+    queries: HashMap<QueryId, Cid>,
 }
 
 impl NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendBehaviour {
@@ -42,6 +50,42 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendBehaviour {
                 }
             }
             MdnsEvent::Expired(_) => {}
+        }
+    }
+}
+
+impl NetworkBehaviourEventProcess<KademliaEvent> for NetworkBackendBehaviour {
+    fn inject_event(&mut self, event: KademliaEvent) {
+        match event {
+            KademliaEvent::QueryResult { id, result, .. } => match result {
+                QueryResult::GetProviders(Ok(GetProvidersOk { providers, .. })) => {
+                    if let Some(cid) = self.queries.remove(&id) {
+                        if providers.is_empty() {
+                            self.events.push_back(NetworkEvent::NoProviders(cid));
+                        } else {
+                            self.events
+                                .push_back(NetworkEvent::Providers(cid, providers));
+                        }
+                    }
+                }
+                QueryResult::Bootstrap(Ok(BootstrapOk { num_remaining, .. })) => {
+                    if num_remaining == 0 {
+                        self.events.push_back(NetworkEvent::BootstrapComplete);
+                    }
+                }
+                QueryResult::Bootstrap(Err(BootstrapError::Timeout { num_remaining, .. })) => {
+                    match num_remaining {
+                        Some(0) => self.events.push_back(NetworkEvent::BootstrapComplete),
+                        None => {
+                            log::error!("bootstrap timeout before self lookup completed");
+                            self.kad.bootstrap().ok();
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
         }
     }
 }
@@ -90,9 +134,9 @@ impl NetworkBehaviourEventProcess<BitswapEvent> for NetworkBackendBehaviour {
 
 impl NetworkBackendBehaviour {
     /// Create a Kademlia behaviour with the IPFS bootstrap nodes.
-    pub fn new(config: NetworkConfig) -> Self {
+    pub fn new(config: NetworkConfig) -> Result<Self, Error> {
         let mdns = if config.enable_mdns {
-            Some(Mdns::new().expect("Failed to create mDNS service"))
+            Some(Mdns::new()?)
         } else {
             None
         }
@@ -104,7 +148,7 @@ impl NetworkBackendBehaviour {
             kad.add_address(peer_id, addr.to_owned());
         }
         if !config.bootstrap_nodes.is_empty() {
-            kad.bootstrap();
+            kad.bootstrap().expect("bootstrap nodes not empty");
         }
 
         let ping = if config.enable_ping {
@@ -122,14 +166,15 @@ impl NetworkBackendBehaviour {
 
         let bitswap = Bitswap::new();
 
-        Self {
+        Ok(Self {
             mdns,
             kad,
             ping,
             identify,
             bitswap,
             events: Default::default(),
-        }
+            queries: Default::default(),
+        })
     }
 
     pub fn connect(&mut self, peer_id: PeerId) {
@@ -153,15 +198,17 @@ impl NetworkBackendBehaviour {
         self.bitswap.cancel_block(cid);
     }
 
-    pub fn provide_block(&mut self, cid: &Cid) {
+    pub fn provide_block(&mut self, cid: &Cid) -> Result<(), RecordError> {
         log::debug!("provide {}", cid.to_string());
         let key = Key::new(&cid.hash().as_bytes());
-        self.kad.start_providing(key);
+        self.kad.start_providing(key)?;
+        Ok(())
     }
 
-    pub fn provide_and_send_block(&mut self, cid: &Cid, data: &[u8]) {
-        self.provide_block(&cid);
+    pub fn provide_and_send_block(&mut self, cid: &Cid, data: &[u8]) -> Result<(), RecordError> {
+        self.provide_block(&cid)?;
         self.bitswap.send_block_all(&cid, &data);
+        Ok(())
     }
 
     pub fn unprovide_block(&mut self, cid: &Cid) {

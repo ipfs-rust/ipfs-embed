@@ -13,7 +13,6 @@ use std::time::Duration;
 
 mod behaviour;
 mod config;
-mod kad;
 
 use crate::error::Error;
 use crate::storage::{
@@ -39,7 +38,7 @@ impl Network {
             .timeout(Duration::from_secs(20));
 
         let peer_id = config.peer_id();
-        let behaviour = NetworkBackendBehaviour::new(config);
+        let behaviour = NetworkBackendBehaviour::new(config)?;
         let mut swarm = Swarm::new(transport, behaviour, peer_id);
         Swarm::listen_on(&mut swarm, "/ip4/127.0.0.1/tcp/0".parse().unwrap())?;
         let addr = loop {
@@ -50,12 +49,6 @@ impl Network {
             }
         };
 
-        for want in storage.wanted() {
-            swarm.want_block(want?, 10);
-        }
-        for public in storage.public() {
-            swarm.provide_block(&public?);
-        }
         let subscriber = storage.watch_network();
         Ok((
             Self {
@@ -72,6 +65,28 @@ impl Future for Network {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
+        loop {
+            let event = match Pin::new(&mut self.subscriber).poll_next(ctx) {
+                Poll::Ready(Some(event)) => event,
+                Poll::Ready(None) => return Poll::Ready(()),
+                Poll::Pending => break,
+            };
+            match event {
+                StorageEvent::Want(cid) => self.swarm.want_block(cid, 1000),
+                StorageEvent::Cancel(cid) => self.swarm.cancel_block(&cid),
+                StorageEvent::Provide(cid) => {
+                    if let Err(err) = match self.storage.get_local(&cid) {
+                        Ok(Some(block)) => self.swarm.provide_and_send_block(&cid, &block),
+                        _ => self.swarm.provide_block(&cid),
+                    } {
+                        log::error!("error providing block {:?}", err);
+                    }
+                },
+                StorageEvent::Unprovide(cid) => self.swarm.unprovide_block(&cid),
+            }
+        }
+        // polling the swarm needs to happen last as calling methods on swarm can
+        // make the swarm ready, but won't register a waker.
         loop {
             let event = match Pin::new(&mut self.swarm).poll_next(ctx) {
                 Poll::Ready(Some(event)) => event,
@@ -92,22 +107,23 @@ impl Future for Network {
                     Ok(None) => log::trace!("don't have local block {}", cid.to_string()),
                     Err(err) => log::error!("failed to get local block {:?}", err),
                 },
-            }
-        }
-        loop {
-            let event = match Pin::new(&mut self.subscriber).poll_next(ctx) {
-                Poll::Ready(Some(event)) => event,
-                Poll::Ready(None) => return Poll::Ready(()),
-                Poll::Pending => break,
-            };
-            match event {
-                StorageEvent::Want(cid) => self.swarm.want_block(cid, 1000),
-                StorageEvent::Cancel(cid) => self.swarm.cancel_block(&cid),
-                StorageEvent::Provide(cid) => match self.storage.get_local(&cid) {
-                    Ok(Some(block)) => self.swarm.provide_and_send_block(&cid, &block),
-                    _ => self.swarm.provide_block(&cid),
-                },
-                StorageEvent::Unprovide(cid) => self.swarm.unprovide_block(&cid),
+                NetworkEvent::Providers(_cid, providers) => {
+                    let peer_id = providers.into_iter().next().unwrap();
+                    self.swarm.connect(peer_id);
+                }
+                NetworkEvent::NoProviders(_cid) => {
+                    log::info!("TODO no providers");
+                    // abort get
+                }
+                NetworkEvent::BootstrapComplete => {
+                    for public in self.storage.public() {
+                        match public.map(|cid| self.swarm.provide_block(&cid)) {
+                            Ok(Ok(())) => {}
+                            Ok(Err(err)) => log::error!("error providing block {:?}", err),
+                            Err(err) => log::error!("error reading public blocks {:?}", err)
+                        }
+                    }
+                }
             }
         }
         Poll::Pending
