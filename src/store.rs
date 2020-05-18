@@ -20,7 +20,7 @@ impl Store {
         let Config { tree, network } = config;
         let peer_id = network.peer_id();
         let storage = Storage::new(tree);
-        let (network, address) = Network::new(network, storage.clone())?;
+        let (network, address) = task::block_on(Network::new(network, storage.clone()))?;
 
         let address_str = address.to_string();
         let peer_id_str = peer_id.to_base58();
@@ -124,7 +124,7 @@ mod tests {
     async fn test_local_store() {
         env_logger::try_init().ok();
         let (store, _) = create_store(vec![]);
-        let (cid, data) = create_block(b"hello world");
+        let (cid, data) = create_block(b"test_local_store");
         store
             .insert(&cid, data.clone(), Visibility::Private)
             .await
@@ -138,7 +138,7 @@ mod tests {
         env_logger::try_init().ok();
         let (store1, _) = create_store(vec![]);
         let (store2, _) = create_store(vec![]);
-        let (cid, data) = create_block(b"hello world");
+        let (cid, data) = create_block(b"test_exchange_mdns");
         store1
             .insert(&cid, data.clone(), Visibility::Private)
             .await
@@ -152,7 +152,7 @@ mod tests {
         env_logger::try_init().ok();
         let (store1, _) = create_store(vec![]);
         let (store2, _) = create_store(vec![]);
-        let (cid, data) = create_block(b"hello world");
+        let (cid, data) = create_block(b"test_received_want_before_insert");
 
         let get_cid = cid.clone();
         let get = task::spawn(async move { store2.get(&get_cid).await });
@@ -185,7 +185,7 @@ mod tests {
         task::sleep(Duration::from_secs(5)).await;
         let (store2, _) = create_store(bootstrap);
         task::sleep(Duration::from_secs(5)).await;
-        let (cid, data) = create_block(b"hello world");
+        let (cid, data) = create_block(b"test_exchange_kad");
         store1
             .insert(&cid, data.clone(), Visibility::Public)
             .await
@@ -197,8 +197,11 @@ mod tests {
 
     #[async_std::test]
     #[ignore]
-    async fn test_provider_not_found_kad() {
-        // TODO
+    async fn test_provider_not_found() {
+        env_logger::try_init().ok();
+        let (store1, _) = create_store(vec![]);
+        let (cid, _) = create_block(b"test_provider_not_found");
+        assert!(store1.get(&cid).await.is_err());
     }
 
     async fn get(store: &Store, cid: &Cid) -> Option<Ipld> {

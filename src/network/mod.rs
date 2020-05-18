@@ -1,5 +1,5 @@
 use async_std::prelude::*;
-use async_std::task::{self, Context, Poll};
+use async_std::task::{Context, Poll};
 use core::pin::Pin;
 use libipld::store::Visibility;
 use libp2p::core::transport::upgrade::Version;
@@ -32,7 +32,7 @@ pub struct Network {
 }
 
 impl Network {
-    pub fn new(config: NetworkConfig, storage: Storage) -> Result<(Self, Multiaddr), Error> {
+    pub async fn new(config: NetworkConfig, storage: Storage) -> Result<(Self, Multiaddr), Error> {
         let transport = TcpConfig::new()
             .nodelay(true)
             .upgrade(Version::V1)
@@ -44,12 +44,12 @@ impl Network {
         let behaviour = NetworkBackendBehaviour::new(config);
         let mut swarm = Swarm::new(transport, behaviour, peer_id);
         Swarm::listen_on(&mut swarm, "/ip4/127.0.0.1/tcp/0".parse().unwrap())?;
-        let event = task::block_on(swarm.next_event());
-        let addr = if let SwarmEvent::NewListenAddr(addr) = event {
-            addr
-        } else {
-            // TODO: Can this happen?
-            panic!("failed to start listener");
+        let addr = loop {
+            match swarm.next_event().await {
+                SwarmEvent::NewListenAddr(addr) => break addr,
+                SwarmEvent::ListenerClosed { reason, .. } => reason?,
+                _ => {}
+            }
         };
 
         for want in storage.wanted() {
@@ -75,50 +75,45 @@ impl Future for Network {
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         loop {
-            let network = match Pin::new(&mut self.swarm).poll_next(ctx) {
-                Poll::Ready(Some(event)) => Some(event),
+            let event = match Pin::new(&mut self.swarm).poll_next(ctx) {
+                Poll::Ready(Some(event)) => event,
                 Poll::Ready(None) => return Poll::Ready(()),
-                Poll::Pending => None,
+                Poll::Pending => break,
             };
-            let storage = match Pin::new(&mut self.subscriber).poll_next(ctx) {
-                Poll::Ready(Some(event)) => Some(event),
-                Poll::Ready(None) => return Poll::Ready(()),
-                Poll::Pending => None,
-            };
-            if network.is_none() && storage.is_none() {
-                return Poll::Pending;
-            }
-            if let Some(event) = network {
-                match event {
-                    NetworkEvent::ReceivedBlock(_, cid, data) => {
-                        if let Err(err) = self.storage.insert(&cid, data.into(), Visibility::Public)
-                        {
-                            log::error!("failed to insert received block {:?}", err);
-                        }
-                    }
-                    NetworkEvent::ReceivedWant(peer_id, cid) => {
-                        match self.storage.get_local(&cid) {
-                            Ok(Some(block)) => {
-                                let data = block.to_vec().into_boxed_slice();
-                                self.swarm.send_block(&peer_id, cid, data)
-                            }
-                            Ok(None) => log::trace!("don't have local block {}", cid.to_string()),
-                            Err(err) => log::error!("failed to get local block {:?}", err),
-                        }
+            match event {
+                NetworkEvent::ReceivedBlock(_, cid, data) => {
+                    if let Err(err) = self.storage.insert(&cid, data.into(), Visibility::Public) {
+                        log::error!("failed to insert received block {:?}", err);
                     }
                 }
-            }
-            if let Some(event) = storage {
-                match event {
-                    StorageEvent::Want(cid) => self.swarm.want_block(cid, 1000),
-                    StorageEvent::Cancel(cid) => self.swarm.cancel_block(&cid),
-                    StorageEvent::Provide(cid) => match self.storage.get_local(&cid) {
-                        Ok(Some(block)) => self.swarm.provide_and_send_block(&cid, &block),
-                        _ => self.swarm.provide_block(&cid),
-                    },
-                    StorageEvent::Unprovide(cid) => self.swarm.unprovide_block(&cid),
+                NetworkEvent::ReceivedWant(peer_id, cid) => {
+                    match self.storage.get_local(&cid) {
+                        Ok(Some(block)) => {
+                            let data = block.to_vec().into_boxed_slice();
+                            self.swarm.send_block(&peer_id, cid, data)
+                        }
+                        Ok(None) => log::trace!("don't have local block {}", cid.to_string()),
+                        Err(err) => log::error!("failed to get local block {:?}", err),
+                    }
                 }
             }
         }
+        loop {
+            let event = match Pin::new(&mut self.subscriber).poll_next(ctx) {
+                Poll::Ready(Some(event)) => event,
+                Poll::Ready(None) => return Poll::Ready(()),
+                Poll::Pending => break,
+            };
+            match event {
+                StorageEvent::Want(cid) => self.swarm.want_block(cid, 1000),
+                StorageEvent::Cancel(cid) => self.swarm.cancel_block(&cid),
+                StorageEvent::Provide(cid) => match self.storage.get_local(&cid) {
+                    Ok(Some(block)) => self.swarm.provide_and_send_block(&cid, &block),
+                    _ => self.swarm.provide_block(&cid),
+                },
+                StorageEvent::Unprovide(cid) => self.swarm.unprovide_block(&cid),
+            }
+        }
+        Poll::Pending
     }
 }

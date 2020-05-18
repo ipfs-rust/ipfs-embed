@@ -8,16 +8,18 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("{0}")]
+    #[error(transparent)]
     Sled(#[from] SledError),
-    #[error("{0}")]
+    #[error(transparent)]
     Sled2(#[from] TransactionError),
-    #[error("{0}")]
+    #[error(transparent)]
     Cid(#[from] CidError),
-    #[error("{0}")]
+    #[error(transparent)]
     Net(#[from] TransportError<IoError>),
-    #[error("{0}")]
+    #[error(transparent)]
     Ipld(#[from] IpldError),
+    #[error(transparent)]
+    Io(#[from] IoError),
     #[error("failed to retrieve block {0}")]
     BlockNotFound(Cid),
 }
