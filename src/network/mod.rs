@@ -71,6 +71,7 @@ impl Future for Network {
                 Poll::Ready(None) => return Poll::Ready(()),
                 Poll::Pending => break,
             };
+            log::trace!("{:?}", event);
             match event {
                 StorageEvent::Want(cid) => self.swarm.want_block(cid, 1000),
                 StorageEvent::Cancel(cid) => self.swarm.cancel_block(&cid),
@@ -81,7 +82,7 @@ impl Future for Network {
                     } {
                         log::error!("error providing block {:?}", err);
                     }
-                },
+                }
                 StorageEvent::Unprovide(cid) => self.swarm.unprovide_block(&cid),
             }
         }
@@ -93,6 +94,7 @@ impl Future for Network {
                 Poll::Ready(None) => return Poll::Ready(()),
                 Poll::Pending => break,
             };
+            log::trace!("{:?}", event);
             match event {
                 NetworkEvent::ReceivedBlock(_, cid, data) => {
                     if let Err(err) = self.storage.insert(&cid, data.into(), Visibility::Public) {
@@ -120,7 +122,7 @@ impl Future for Network {
                         match public.map(|cid| self.swarm.provide_block(&cid)) {
                             Ok(Ok(())) => {}
                             Ok(Err(err)) => log::error!("error providing block {:?}", err),
-                            Err(err) => log::error!("error reading public blocks {:?}", err)
+                            Err(err) => log::error!("error reading public blocks {:?}", err),
                         }
                     }
                 }

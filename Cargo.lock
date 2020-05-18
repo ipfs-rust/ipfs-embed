@@ -824,6 +824,7 @@ dependencies = [
  "async-log",
  "async-std",
  "env_logger",
+ "futures",
  "ipld-block-builder",
  "libipld",
  "libp2p",

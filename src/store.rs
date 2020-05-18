@@ -3,21 +3,29 @@ use crate::error::Error;
 use crate::gc::GarbageCollector;
 use crate::network::Network;
 use crate::storage::Storage;
+use async_std::future::timeout;
 use async_std::task;
 use libipld::cid::Cid;
+use libipld::error::StoreError;
 use libipld::store::{AliasStore, ReadonlyStore, Store as WritableStore, StoreResult, Visibility};
 use libp2p::core::{Multiaddr, PeerId};
+use std::time::Duration;
 
 #[derive(Clone, Debug)]
 pub struct Store {
     storage: Storage,
+    timeout: Duration,
     peer_id: PeerId,
     address: Multiaddr,
 }
 
 impl Store {
     pub fn new(config: Config) -> Result<Self, Error> {
-        let Config { tree, network } = config;
+        let Config {
+            tree,
+            network,
+            timeout,
+        } = config;
         let peer_id = network.peer_id();
         let storage = Storage::new(tree)?;
         let (network, address) = task::block_on(Network::new(network, storage.clone()))?;
@@ -34,6 +42,7 @@ impl Store {
 
         Ok(Self {
             storage,
+            timeout,
             peer_id,
             address,
         })
@@ -50,7 +59,13 @@ impl Store {
 
 impl ReadonlyStore for Store {
     fn get<'a>(&'a self, cid: &'a Cid) -> StoreResult<'a, Box<[u8]>> {
-        Box::pin(async move { Ok(self.storage.get(cid).await?.to_vec().into_boxed_slice()) })
+        Box::pin(async move {
+            let future = self.storage.get(cid);
+            let block = timeout(self.timeout, future)
+                .await
+                .map_err(|_| StoreError::BlockNotFound(cid.clone()))??;
+            Ok(block.to_vec().into_boxed_slice())
+        })
     }
 }
 
@@ -180,7 +195,7 @@ mod tests {
 
         let (store, _) = create_store(vec![]);
         // make sure bootstrap node has started
-        task::sleep(Duration::from_secs(500)).await;
+        task::sleep(Duration::from_millis(500)).await;
         let bootstrap = vec![(store.address().clone(), store.peer_id().clone())];
         let (store1, _) = create_store(bootstrap.clone());
         let (store2, _) = create_store(bootstrap);
@@ -190,18 +205,21 @@ mod tests {
             .await
             .unwrap();
         // make insert had enough time to propagate
-        task::sleep(Duration::from_secs(500)).await;
+        task::sleep(Duration::from_millis(500)).await;
         let data2 = store2.get(&cid).await.unwrap();
         assert_eq!(data, data2);
     }
 
     #[async_std::test]
-    #[ignore]
     async fn test_provider_not_found() {
         env_logger::try_init().ok();
         let (store1, _) = create_store(vec![]);
         let (cid, _) = create_block(b"test_provider_not_found");
-        assert!(store1.get(&cid).await.is_err());
+        if let Err(StoreError::BlockNotFound(cid2)) = store1.get(&cid).await {
+            assert_eq!(cid, cid2);
+        } else {
+            panic!("expected block not found error");
+        }
     }
 
     async fn get(store: &Store, cid: &Cid) -> Option<Ipld> {

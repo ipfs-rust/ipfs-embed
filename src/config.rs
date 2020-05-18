@@ -2,9 +2,11 @@ use crate::network::NetworkConfig;
 use libp2p::identity::Keypair;
 use sled::{Error, Tree};
 use std::path::Path;
+use std::time::Duration;
 
 pub struct Config {
     pub tree: Tree,
+    pub timeout: Duration,
     pub network: NetworkConfig,
 }
 
@@ -12,6 +14,7 @@ impl Config {
     pub fn new(tree: Tree, keypair: Keypair) -> Self {
         Self {
             tree,
+            timeout: Duration::from_millis(20000),
             network: NetworkConfig::new(keypair),
         }
     }

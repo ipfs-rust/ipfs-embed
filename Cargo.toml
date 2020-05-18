@@ -21,5 +21,6 @@ features = ["identify", "kad", "mdns", "ping", "secio", "tcp-async-std", "yamux"
 [dev-dependencies]
 async-log = "2.0.0"
 env_logger = "0.7.1"
+futures = "0.3.5"
 ipld-block-builder = { version = "0.1.2", features = ["crypto"] }
 tempdir = "0.3.7"

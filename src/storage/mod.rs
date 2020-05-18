@@ -35,33 +35,25 @@ impl Storage {
         Ok(self.tree.get(Key::block(cid))?)
     }
 
-    pub fn get<'a>(
-        &'a self,
-        cid: &Cid,
-    ) -> Pin<Box<dyn Future<Output = Result<IVec, Error>> + Send + 'a>> {
+    pub async fn get(&self, cid: &Cid) -> Result<IVec, Error> {
         log::trace!("get {}", cid.to_string());
         let key = Key::block(cid);
-        match self.tree.get(&key) {
-            Ok(Some(block)) => return Box::pin(async move { Ok(block) }),
-            Ok(None) => {}
-            Err(err) => return Box::pin(async move { Err(err.into()) }),
+        if let Some(block) = self.tree.get(&key)? {
+            return Ok(block);
         }
         let subscription = self.tree.watch_prefix(&key);
-        match self.tree.get(&key) {
-            Ok(Some(block)) => return Box::pin(async move { Ok(block) }),
-            Ok(None) => {}
-            Err(err) => return Box::pin(async move { Err(err.into()) }),
+        if let Some(block) = self.tree.get(&key)? {
+            return Ok(block);
         }
-        if let Err(err) = self.tree.insert(Key::want(cid), &[]) {
-            return Box::pin(async move { Err(err.into()) });
-        }
+        self.tree.insert(Key::want(cid), &[])?;
         log::trace!("watching block({}) with prefix {:?}", cid.to_string(), key);
-        Box::pin(GetFuture {
+        GetFuture {
             tree: self.tree.clone(),
             subscription,
             key,
             cid: cid.clone(),
-        })
+        }
+        .await
     }
 
     pub fn insert(&self, cid: &Cid, data: IVec, visibility: Visibility) -> Result<(), Error> {
@@ -252,6 +244,7 @@ mod tests {
     use super::*;
     use async_std::prelude::*;
     use async_std::task;
+    use futures::future::FutureExt;
     use libipld::cid::Codec;
     use libipld::multihash::Sha2_256;
     use tempdir::TempDir;
@@ -260,7 +253,7 @@ mod tests {
         let tmp = TempDir::new("").unwrap();
         let db = sled::open(tmp.path()).unwrap();
         let tree = db.open_tree("ipfs_tree").unwrap();
-        let storage = Storage::new(tree);
+        let storage = Storage::new(tree).unwrap();
         (storage, tmp)
     }
 
@@ -441,10 +434,9 @@ mod tests {
         let mut tester = Tester::setup();
 
         let store = tester.store.clone();
-        let future = store.get(&tester.cid);
+        let cid = tester.cid.clone();
+        store.get(&cid).now_or_never();
         tester.assert_want();
-
-        drop(future);
         tester.assert_cancel();
     }
 
