@@ -16,7 +16,7 @@ thiserror = "1.0.17"
 [dependencies.libp2p]
 version = "0.18.1"
 default-features = false
-features = ["kad", "mdns", "ping", "secio", "tcp", "yamux"]
+features = ["identify", "kad", "mdns", "ping", "secio", "tcp", "yamux"]
 
 [dev-dependencies]
 async-log = "2.0.0"

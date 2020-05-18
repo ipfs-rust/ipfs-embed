@@ -74,7 +74,10 @@ impl Storage {
             } else {
                 for cid in &refs {
                     let refer_key = Key::refer(cid);
-                    let refer = tree.get(refer_key.clone())?.map(|buf| buf[0]).unwrap_or_default();
+                    let refer = tree
+                        .get(refer_key.clone())?
+                        .map(|buf| buf[0])
+                        .unwrap_or_default();
                     tree.insert(refer_key, &[refer + 1])?;
                 }
                 tree.insert(Key::block(cid), &*data)?;

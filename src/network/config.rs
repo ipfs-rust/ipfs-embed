@@ -1,5 +1,5 @@
 use libp2p::core::{Multiaddr, PeerId};
-use libp2p::identity::Keypair;
+use libp2p::identity::{Keypair, PublicKey};
 use libp2p::multiaddr::Protocol;
 
 const IPFS_BOOTSTRAP_NODES: &[&str] = &[
@@ -42,6 +42,10 @@ impl NetworkConfig {
             bootstrap_nodes: ipfs_bootstrap_nodes(),
             keypair,
         }
+    }
+
+    pub fn public(&self) -> PublicKey {
+        self.keypair.public().clone()
     }
 
     pub fn peer_id(&self) -> PeerId {

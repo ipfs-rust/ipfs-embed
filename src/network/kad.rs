@@ -15,7 +15,7 @@ impl NetworkBehaviourEventProcess<KademliaEvent> for NetworkBackendBehaviour {
                     log::debug!("no provider for {:?}", key);
                 } else {
                     log::debug!("found provider for {:?}", key);
-                    for peer in closest_peers {
+                    for peer in providers {
                         self.connect(peer);
                     }
                 }

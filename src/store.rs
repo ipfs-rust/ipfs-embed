@@ -179,18 +179,16 @@ mod tests {
         .ok();
 
         let (store, _) = create_store(vec![]);
-        task::sleep(Duration::from_secs(5)).await;
+        task::sleep(Duration::from_secs(100)).await;
         let bootstrap = vec![(store.address().clone(), store.peer_id().clone())];
         let (store1, _) = create_store(bootstrap.clone());
-        task::sleep(Duration::from_secs(5)).await;
         let (store2, _) = create_store(bootstrap);
-        task::sleep(Duration::from_secs(5)).await;
         let (cid, data) = create_block(b"test_exchange_kad");
         store1
             .insert(&cid, data.clone(), Visibility::Public)
             .await
             .unwrap();
-        task::sleep(Duration::from_secs(5)).await;
+        task::sleep(Duration::from_secs(500)).await;
         let data2 = store2.get(&cid).await.unwrap();
         assert_eq!(data, data2);
     }
@@ -205,7 +203,10 @@ mod tests {
     }
 
     async fn get(store: &Store, cid: &Cid) -> Option<Ipld> {
-        store.storage.get_local(cid).unwrap()
+        store
+            .storage
+            .get_local(cid)
+            .unwrap()
             .map(|bytes| decode::<DagCbor, Ipld>(cid, &bytes).unwrap())
     }
 
@@ -222,18 +223,18 @@ mod tests {
         let a = insert(&store, &ipld!({ "a": [] })).await;
         let b = insert(&store, &ipld!({ "b": [&a] })).await;
         store.unpin(&a).await.unwrap();
-        task::sleep(Duration::from_millis(100)).await;
+        task::sleep(Duration::from_millis(200)).await;
         let c = insert(&store, &ipld!({ "c": [&a] })).await;
         assert!(get(&store, &a).await.is_some());
         assert!(get(&store, &b).await.is_some());
         assert!(get(&store, &c).await.is_some());
         store.unpin(&b).await.unwrap();
-        task::sleep(Duration::from_millis(100)).await;
+        task::sleep(Duration::from_millis(200)).await;
         assert!(get(&store, &a).await.is_some());
         assert!(get(&store, &b).await.is_none());
         assert!(get(&store, &c).await.is_some());
         store.unpin(&c).await.unwrap();
-        task::sleep(Duration::from_millis(100)).await;
+        task::sleep(Duration::from_millis(200)).await;
         assert!(get(&store, &a).await.is_none());
         assert!(get(&store, &b).await.is_none());
         assert!(get(&store, &c).await.is_none());
@@ -246,18 +247,18 @@ mod tests {
         let a = insert(&store, &ipld!({ "a": [] })).await;
         let b = insert(&store, &ipld!({ "b": [&a] })).await;
         store.unpin(&a).await.unwrap();
-        task::sleep(Duration::from_millis(100)).await;
+        task::sleep(Duration::from_millis(200)).await;
         let c = insert(&store, &ipld!({ "b": [&a] })).await;
         assert!(get(&store, &a).await.is_some());
         assert!(get(&store, &b).await.is_some());
         assert!(get(&store, &c).await.is_some());
         store.unpin(&b).await.unwrap();
-        task::sleep(Duration::from_millis(100)).await;
+        task::sleep(Duration::from_millis(200)).await;
         assert!(get(&store, &a).await.is_some());
         assert!(get(&store, &b).await.is_some());
         assert!(get(&store, &c).await.is_some());
         store.unpin(&c).await.unwrap();
-        task::sleep(Duration::from_millis(100)).await;
+        task::sleep(Duration::from_millis(200)).await;
         assert!(get(&store, &a).await.is_none());
         assert!(get(&store, &b).await.is_none());
         assert!(get(&store, &c).await.is_none());

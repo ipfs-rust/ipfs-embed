@@ -14,8 +14,6 @@ use std::time::Duration;
 mod behaviour;
 mod config;
 mod kad;
-mod mdns;
-mod ping;
 
 use crate::error::Error;
 use crate::storage::{
@@ -86,16 +84,14 @@ impl Future for Network {
                         log::error!("failed to insert received block {:?}", err);
                     }
                 }
-                NetworkEvent::ReceivedWant(peer_id, cid) => {
-                    match self.storage.get_local(&cid) {
-                        Ok(Some(block)) => {
-                            let data = block.to_vec().into_boxed_slice();
-                            self.swarm.send_block(&peer_id, cid, data)
-                        }
-                        Ok(None) => log::trace!("don't have local block {}", cid.to_string()),
-                        Err(err) => log::error!("failed to get local block {:?}", err),
+                NetworkEvent::ReceivedWant(peer_id, cid) => match self.storage.get_local(&cid) {
+                    Ok(Some(block)) => {
+                        let data = block.to_vec().into_boxed_slice();
+                        self.swarm.send_block(&peer_id, cid, data)
                     }
-                }
+                    Ok(None) => log::trace!("don't have local block {}", cid.to_string()),
+                    Err(err) => log::error!("failed to get local block {:?}", err),
+                },
             }
         }
         loop {
