@@ -984,6 +984,7 @@ dependencies = [
  "libp2p-identify",
  "libp2p-kad",
  "libp2p-mdns",
+ "libp2p-mplex",
  "libp2p-ping",
  "libp2p-secio",
  "libp2p-swarm",
@@ -1123,6 +1124,22 @@ dependencies = [
  "smallvec 1.4.0",
  "void",
  "wasm-timer",
+]
+
+[[package]]
+name = "libp2p-mplex"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4095bce2100f840883f1f75dbd010c966ee4ad323ae9f82026396da5cf6cce68"
+dependencies = [
+ "bytes",
+ "fnv",
+ "futures",
+ "futures_codec",
+ "libp2p-core",
+ "log",
+ "parking_lot 0.10.2",
+ "unsigned-varint",
 ]
 
 [[package]]

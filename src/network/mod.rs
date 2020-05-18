@@ -5,10 +5,11 @@ use libipld::store::Visibility;
 use libp2p::core::transport::upgrade::Version;
 use libp2p::core::transport::Transport;
 use libp2p::core::Multiaddr;
+use libp2p::mplex::MplexConfig;
 use libp2p::secio::SecioConfig;
 use libp2p::swarm::{Swarm, SwarmEvent};
 use libp2p::tcp::TcpConfig;
-use libp2p::yamux::Config as YamuxConfig;
+//use libp2p::yamux::Config as YamuxConfig;
 use std::time::Duration;
 
 mod behaviour;
@@ -34,7 +35,7 @@ impl Network {
             .nodelay(true)
             .upgrade(Version::V1)
             .authenticate(SecioConfig::new(config.keypair.clone()))
-            .multiplex(YamuxConfig::default())
+            .multiplex(MplexConfig::new())
             .timeout(Duration::from_secs(20));
 
         let peer_id = config.peer_id();
