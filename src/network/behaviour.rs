@@ -56,8 +56,8 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendBehaviour {
 
 impl NetworkBehaviourEventProcess<KademliaEvent> for NetworkBackendBehaviour {
     fn inject_event(&mut self, event: KademliaEvent) {
-        match event {
-            KademliaEvent::QueryResult { id, result, .. } => match result {
+        if let KademliaEvent::QueryResult { id, result, .. } = event {
+            match result {
                 QueryResult::GetProviders(Ok(GetProvidersOk { providers, .. })) => {
                     if let Some(cid) = self.queries.remove(&id) {
                         if providers.is_empty() {
@@ -84,8 +84,7 @@ impl NetworkBehaviourEventProcess<KademliaEvent> for NetworkBackendBehaviour {
                     }
                 }
                 _ => {}
-            },
-            _ => {}
+            }
         }
     }
 }
@@ -103,13 +102,10 @@ impl NetworkBehaviourEventProcess<IdentifyEvent> for NetworkBackendBehaviour {
     fn inject_event(&mut self, event: IdentifyEvent) {
         // When a peer opens a connection we only have it's outgoing address. The identify
         // protocol sends the listening address which needs to be registered with kademlia.
-        match event {
-            IdentifyEvent::Received { peer_id, info, .. } => {
-                for addr in info.listen_addrs {
-                    self.kad.add_address(&peer_id, addr);
-                }
+        if let IdentifyEvent::Received { peer_id, info, .. } = event {
+            for addr in info.listen_addrs {
+                self.kad.add_address(&peer_id, addr);
             }
-            _ => {}
         }
     }
 }

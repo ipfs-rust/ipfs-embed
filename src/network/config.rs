@@ -45,7 +45,7 @@ impl NetworkConfig {
     }
 
     pub fn public(&self) -> PublicKey {
-        self.keypair.public().clone()
+        self.keypair.public()
     }
 
     pub fn peer_id(&self) -> PeerId {
