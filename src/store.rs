@@ -149,6 +149,7 @@ mod tests {
     }
 
     #[async_std::test]
+    #[cfg(not(target_os = "macos"))] // mdns doesn't work on macos in github actions
     async fn test_exchange_mdns() {
         env_logger::try_init().ok();
         let (store1, _) = create_store(vec![]);
@@ -163,6 +164,7 @@ mod tests {
     }
 
     #[async_std::test]
+    #[cfg(not(target_os = "macos"))] // mdns doesn't work on macos in github action
     async fn test_received_want_before_insert() {
         env_logger::try_init().ok();
         let (store1, _) = create_store(vec![]);
