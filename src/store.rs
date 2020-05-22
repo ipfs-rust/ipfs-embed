@@ -85,7 +85,8 @@ impl WritableStore for Store {
         batch: Vec<Block>,
         visibility: Visibility,
     ) -> StoreResult<'a, Cid> {
-        todo!()
+        let batch = batch.into_iter().map(|Block { cid, data }| (cid, data.into()));
+        Box::pin(async move { Ok(self.storage.insert_batch(batch, visibility)?) })
     }
 
     fn flush(&self) -> StoreResult<'_, ()> {

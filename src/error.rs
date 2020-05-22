@@ -20,10 +20,15 @@ pub enum Error {
     Ipld(#[from] IpldError),
     #[error(transparent)]
     Io(#[from] IoError),
+    #[error("empty batch")]
+    EmptyBatch,
 }
 
 impl From<Error> for StoreError {
     fn from(error: Error) -> Self {
+        if let Error::EmptyBatch = error {
+            return Self::EmptyBatch;
+        }
         Self::Other(Box::new(error))
     }
 }

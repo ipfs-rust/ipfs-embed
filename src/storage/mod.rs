@@ -58,17 +58,36 @@ impl Storage {
 
     pub fn insert(&self, cid: &Cid, data: IVec, visibility: Visibility) -> Result<(), Error> {
         log::trace!("insert {}", cid.to_string());
-        let ipld = libipld::block::decode_ipld(cid, &data)?;
-        let refs = libipld::block::references(&ipld);
-        let refs_bytes = encode_refs(&refs);
+        self.insert_batch(std::iter::once((cid.clone(), data)), visibility)?;
+        Ok(())
+    }
+
+    pub fn insert_batch(
+        &self,
+        batch: impl Iterator<Item = (Cid, IVec)>,
+        visibility: Visibility,
+    ) -> Result<Cid, Error> {
+        log::trace!("insert_batch");
+        let blocks: Result<Vec<(Cid, IVec, HashSet<Cid>, IVec)>, Error> = batch.into_iter()
+            .map(|(cid, data)| {
+                let ipld = libipld::block::decode_ipld(&cid, &data)?;
+                let refs = libipld::block::references(&ipld);
+                let encoded = encode_refs(&refs);
+                Ok((cid, data, refs, encoded))
+            })
+            .collect();
+        let blocks = blocks?;
+        if blocks.is_empty() {
+            return Err(Error::EmptyBatch);
+        }
         self.tree.transaction(|tree| {
-            log::trace!("insert key {:?}", Key::block(cid));
-            let pin_key = Key::pin(cid);
-            if let Some(pin) = tree.get(&pin_key)? {
-                log::trace!("duplicate incrementing pin count");
-                tree.insert(pin_key, &[pin[0] + 1])?;
-            } else {
-                for cid in &refs {
+            let mut last_cid = None;
+            for (cid, data, refs, encoded_refs) in &blocks {
+                last_cid = Some(cid);
+                if tree.get(Key::block(cid))?.is_some() {
+                    continue;
+                }
+                for cid in refs {
                     let refer_key = Key::refer(cid);
                     let refer = tree
                         .get(refer_key.clone())?
@@ -76,17 +95,24 @@ impl Storage {
                         .unwrap_or_default();
                     tree.insert(refer_key, &[refer + 1])?;
                 }
-                tree.insert(Key::block(cid), &*data)?;
-                tree.insert(pin_key, &[1])?;
-                tree.insert(Key::refs(cid), &refs_bytes)?;
+                tree.insert(Key::block(cid), data)?;
+                tree.insert(Key::refs(cid), encoded_refs)?;
                 if let Visibility::Public = visibility {
                     tree.insert(Key::public(cid), &[])?;
                 }
                 tree.remove(Key::want(cid))?;
             }
+            let last_cid = last_cid.unwrap();
+            let pin_key = Key::pin(last_cid);
+            if let Some(pin) = tree.get(&pin_key)? {
+                log::trace!("duplicate incrementing pin count");
+                tree.insert(pin_key, &[pin[0] + 1])?;
+            } else {
+                tree.insert(pin_key, &[1])?;
+            }
             Ok(())
         })?;
-        Ok(())
+        Ok(blocks.into_iter().last().map(|(cid, _, _, _)| cid).unwrap())
     }
 
     pub async fn flush(&self) -> Result<(), Error> {
