@@ -1,5 +1,6 @@
 use ipfs_embed::{Config, Store};
-use ipld_block_builder::{BlockBuilder, DagCbor, Key};
+use ipld_block_builder::{BlockBuilder, Key, StrobeCodec};
+use libipld::DagCbor;
 
 #[derive(Clone, DagCbor, Debug, Eq, PartialEq)]
 struct Identity {
@@ -13,7 +14,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_path("/tmp/db")?;
     let store = Store::new(config)?;
     let key = Key::from(b"private encryption key".to_vec());
-    let builder = BlockBuilder::new_private(store, key);
+    let codec = StrobeCodec::new(key);
+    let builder = BlockBuilder::new_private(store, codec);
 
     let identity = Identity {
         id: 0,

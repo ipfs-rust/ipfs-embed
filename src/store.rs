@@ -5,6 +5,7 @@ use crate::network::Network;
 use crate::storage::Storage;
 use async_std::future::timeout;
 use async_std::task;
+use libipld::block::Block;
 use libipld::cid::Cid;
 use libipld::error::StoreError;
 use libipld::store::{AliasStore, ReadonlyStore, Store as WritableStore, StoreResult, Visibility};
@@ -79,6 +80,14 @@ impl WritableStore for Store {
         Box::pin(async move { Ok(self.storage.insert(cid, data.into(), visibility)?) })
     }
 
+    fn insert_batch<'a>(
+        &'a self,
+        batch: Vec<Block>,
+        visibility: Visibility,
+    ) -> StoreResult<'a, Cid> {
+        todo!()
+    }
+
     fn flush(&self) -> StoreResult<'_, ()> {
         Box::pin(async move { Ok(self.storage.flush().await?) })
     }
@@ -111,7 +120,7 @@ impl AliasStore for Store {
 mod tests {
     use super::*;
     use libipld::block::{decode, encode, Block};
-    use libipld::cbor::DagCbor;
+    use libipld::cbor::DagCborCodec;
     use libipld::cid::Codec;
     use libipld::ipld;
     use libipld::ipld::Ipld;
@@ -229,11 +238,11 @@ mod tests {
             .storage
             .get_local(cid)
             .unwrap()
-            .map(|bytes| decode::<DagCbor, Ipld>(cid, &bytes).unwrap())
+            .map(|bytes| decode::<DagCborCodec, Ipld>(cid, &bytes).unwrap())
     }
 
     async fn insert(store: &Store, ipld: &Ipld) -> Cid {
-        let Block { cid, data } = encode::<DagCbor, Sha2_256, Ipld>(ipld).unwrap();
+        let Block { cid, data } = encode::<DagCborCodec, Sha2_256, Ipld>(ipld).unwrap();
         store.insert(&cid, data, Visibility::Public).await.unwrap();
         cid
     }

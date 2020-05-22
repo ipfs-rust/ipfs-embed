@@ -1,5 +1,6 @@
 use ipfs_embed::{Config, Store};
-use ipld_block_builder::{BlockBuilder, DagCbor};
+use ipld_block_builder::{BlockBuilder, Codec};
+use libipld::DagCbor;
 
 #[derive(Clone, DagCbor, Debug, Eq, PartialEq)]
 struct Identity {
@@ -12,7 +13,8 @@ struct Identity {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_path("/tmp/db")?;
     let store = Store::new(config)?;
-    let builder = BlockBuilder::new(store);
+    let codec = Codec::new();
+    let builder = BlockBuilder::new(store, codec);
 
     let identity = Identity {
         id: 0,
