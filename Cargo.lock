@@ -835,6 +835,7 @@ dependencies = [
  "env_logger",
  "futures",
  "ipld-block-builder",
+ "ipld-collections",
  "libipld",
  "libp2p",
  "libp2p-bitswap",
@@ -859,6 +860,18 @@ dependencies = [
  "thiserror",
  "unsigned-varint 0.4.0",
  "zeroize",
+]
+
+[[package]]
+name = "ipld-collections"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bcc4f1c832caf29d78147a7ed87f3db6716f01a80d72d73b4f89b07e91e3c6b3"
+dependencies = [
+ "async-std",
+ "ipld-block-builder",
+ "libipld",
+ "thiserror",
 ]
 
 [[package]]
