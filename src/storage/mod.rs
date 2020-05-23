@@ -92,9 +92,9 @@ impl Storage {
                     let refer_key = Key::refer(cid);
                     let refer = tree
                         .get(refer_key.clone())?
-                        .map(|buf| buf[0])
+                        .map(|buf| decode_u32(buf))
                         .unwrap_or_default();
-                    tree.insert(refer_key, &[refer + 1])?;
+                    tree.insert(refer_key, encode_u32(refer + 1))?;
                 }
                 tree.insert(Key::block(cid), data)?;
                 tree.insert(Key::refs(cid), encoded_refs)?;
@@ -107,9 +107,9 @@ impl Storage {
             let pin_key = Key::pin(last_cid);
             if let Some(pin) = tree.get(&pin_key)? {
                 log::trace!("duplicate incrementing pin count");
-                tree.insert(pin_key, &[pin[0] + 1])?;
+                tree.insert(pin_key, encode_u32(decode_u32(pin) + 1))?;
             } else {
-                tree.insert(pin_key, &[1])?;
+                tree.insert(pin_key, encode_u32(1))?;
             }
             Ok(())
         })?;
@@ -127,8 +127,9 @@ impl Storage {
         self.tree.transaction(|tree| {
             let pin_key = Key::pin(cid);
             if let Some(pin) = tree.remove(&pin_key)? {
-                if pin[0] > 1 {
-                    tree.insert(pin_key, &[pin[0] - 1])?;
+                let pin = decode_u32(pin);
+                if pin > 1 {
+                    tree.insert(pin_key, encode_u32(pin - 1))?;
                 }
             }
             Ok(())
@@ -152,8 +153,9 @@ impl Storage {
             for cid in &refs {
                 let refer_key = Key::refer(cid);
                 if let Some(refer) = tree.remove(&refer_key)? {
-                    if refer[0] > 1 {
-                        tree.insert(refer_key, &[refer[0] - 1])?;
+                    let refer = decode_u32(refer);
+                    if refer > 1 {
+                        tree.insert(refer_key, encode_u32(refer - 1))?;
                     }
                 }
             }
@@ -227,6 +229,17 @@ fn decode_refs(buf: IVec) -> HashSet<Cid> {
         refs.insert(cid);
     }
     refs
+}
+
+fn encode_u32(u: u32) -> IVec {
+    let bytes = u.to_le_bytes();
+    IVec::from(&bytes[..])
+}
+
+fn decode_u32(ivec: IVec) -> u32 {
+    let mut buf = [0u8; 4];
+    buf.copy_from_slice(&ivec);
+    u32::from_le_bytes(buf)
 }
 
 pub struct GetFuture {
