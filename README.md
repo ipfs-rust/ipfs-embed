@@ -1,6 +1,13 @@
 # ipfs-embed
 A small embeddable ipfs implementation compatible with libipld and with a concurrent garbage
-collector.
+collector. It supports discovering nodes via mdns and providers via kademlia and exchanging
+blocks via bitswap.
+
+The `ipld-block-builder` can be used for using the store effectively. It also supports creating
+encrypted/private block stores for sensitive data and caching of native data types to maximize
+performance.
+
+`ipld-collections` provide high level multiblock abstractions using the `ipld-block-builder`.
 
 ## Getting started
 ```rust
@@ -18,8 +25,8 @@ struct Identity {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_path("/tmp/db")?;
     let store = Store::new(config)?;
-    let key = Key::from(b"private encryption key".to_vec());
-    let builder = BlockBuilder::new_private(store, key);
+    let codec = Codec::new(key);
+    let builder = BlockBuilder::new(store, codec);
 
     let identity = Identity {
         id: 0,
@@ -29,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cid = builder.insert(&identity).await?;
     let identity2 = builder.get(&cid).await?;
     assert_eq!(identity, identity2);
-    println!("encrypted identity cid is {}", cid);
+    println!("identity cid is {}", cid);
 
     Ok(())
 }
@@ -63,6 +70,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // #roots = {c} #live = {a, c}
     builder.unpin(&c).await?;
     // #roots = {} #live = {}
+```
+
+## Multiblock collections
+```rust
+use ipfs_embed::{Config, Store};
+use ipld_collections::List;
+
+#[async_std::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config::from_path("/tmp/list")?;
+    let store = Store::new(config)?;
+
+    let mut list = List::new(store, 64, 256).await?;
+    // push: 1024xi128; n: 4; width: 256; size: 4096
+    for i in 0..1024 {
+        list.push(i as i64).await?;
+    }
+    Ok(())
+}
 ```
 
 ## License
