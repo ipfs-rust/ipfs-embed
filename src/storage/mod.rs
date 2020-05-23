@@ -68,7 +68,8 @@ impl Storage {
         visibility: Visibility,
     ) -> Result<Cid, Error> {
         log::trace!("insert_batch");
-        let blocks: Result<Vec<(Cid, IVec, HashSet<Cid>, IVec)>, Error> = batch.into_iter()
+        let blocks: Result<Vec<(Cid, IVec, HashSet<Cid>, IVec)>, Error> = batch
+            .into_iter()
             .map(|(cid, data)| {
                 let ipld = libipld::block::decode_ipld(&cid, &data)?;
                 let refs = libipld::block::references(&ipld);
