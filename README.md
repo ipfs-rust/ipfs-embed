@@ -1,11 +1,13 @@
 # ipfs-embed
 A small embeddable ipfs implementation compatible with libipld and with a concurrent garbage
-collector. It supports discovering nodes via mdns and providers via kademlia and exchanging
-blocks via bitswap.
+collector. It supports 
+* node discovery via mdns
+* provider discovery via kademlia
+* exchange blocks via bitswap
 
-The `ipld-block-builder` can be used for using the store effectively. It also supports creating
-encrypted/private block stores for sensitive data and caching of native data types to maximize
-performance.
+The `ipld-block-builder` can be used for using the store effectively. It also supports 
+* creating encrypted/private block stores for sensitive data
+* caching of native data types to maximize performance
 
 `ipld-collections` provide high level multiblock abstractions using the `ipld-block-builder`.
 
