@@ -20,6 +20,7 @@ features = ["identify", "kad", "mdns", "mplex", "ping", "secio", "tcp-async-std"
 
 [dev-dependencies]
 async-log = "2.0.0"
+criterion = "0.3.2"
 env_logger = "0.7.1"
 futures = "0.3.5"
 ipld-block-builder = { version = "0.3.0", features = ["crypto"] }
@@ -27,3 +28,10 @@ ipld-collections = "0.1.1"
 libipld = "0.3.0"
 model = "0.1.2"
 tempdir = "0.3.7"
+
+[profile.release]
+debug = true
+
+[[bench]]
+name = "list"
+harness = false
