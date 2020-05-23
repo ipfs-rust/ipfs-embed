@@ -50,7 +50,7 @@ fn join<T: Send>(
 #[ignore]
 fn store_eqv() {
     const LEN: usize = 4;
-    let blocks: Vec<_> = (0..LEN).into_iter().map(create_block).collect();
+    let blocks: Vec<_> = (0..LEN).map(create_block).collect();
     model! {
         Model => let mem = MemStore::default(),
         Implementation => let (store, _) = create_store(),
@@ -81,9 +81,10 @@ fn store_eqv() {
 
 #[test]
 #[ignore]
+#[allow(clippy::clone_on_copy)]
 fn linearizable() {
     const LEN: usize = 4;
-    let blocks: Vec<_> = (0..LEN).into_iter().map(create_block).collect();
+    let blocks: Vec<_> = (0..LEN).map(create_block).collect();
     let blocks = Shared::new(blocks);
     let (store, _) = create_store();
     linearizable! {

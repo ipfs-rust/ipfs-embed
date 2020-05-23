@@ -1,11 +1,11 @@
 # ipfs-embed
 A small embeddable ipfs implementation compatible with libipld and with a concurrent garbage
-collector. It supports 
+collector. It supports
 * node discovery via mdns
 * provider discovery via kademlia
 * exchange blocks via bitswap
 
-The `ipld-block-builder` can be used for using the store effectively. It also supports 
+The `ipld-block-builder` can be used for using the store effectively. It also supports
 * creating encrypted/private block stores for sensitive data
 * caching of native data types to maximize performance
 
@@ -14,7 +14,8 @@ The `ipld-block-builder` can be used for using the store effectively. It also su
 ## Getting started
 ```rust
 use ipfs_embed::{Config, Store};
-use ipld_block_builder::{BlockBuilder, DagCbor, Key};
+use ipld_block_builder::{BlockBuilder, Codec};
+use libipld::DagCbor;
 
 #[derive(Clone, DagCbor, Debug, Eq, PartialEq)]
 struct Identity {
