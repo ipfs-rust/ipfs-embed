@@ -28,7 +28,7 @@ struct Identity {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_path("/tmp/db")?;
     let store = Store::new(config)?;
-    let codec = Codec::new(key);
+    let codec = Codec::new();
     let builder = BlockBuilder::new(store, codec);
 
     let identity = Identity {
