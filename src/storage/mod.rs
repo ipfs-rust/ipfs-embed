@@ -68,8 +68,7 @@ impl Storage {
         visibility: Visibility,
     ) -> Result<Cid, Error> {
         log::trace!("insert_batch");
-        let blocks: Result<Vec<(Cid, IVec, HashSet<Cid>, IVec)>, Error> = batch
-            .into_iter()
+        let blocks: Result<Vec<_>, Error> = batch
             .map(|(cid, data)| {
                 let ipld = libipld::block::decode_ipld(&cid, &data)?;
                 let refs = libipld::block::references(&ipld);
@@ -92,7 +91,7 @@ impl Storage {
                     let refer_key = Key::refer(cid);
                     let refer = tree
                         .get(refer_key.clone())?
-                        .map(|buf| decode_u32(buf))
+                        .map(decode_u32)
                         .unwrap_or_default();
                     tree.insert(refer_key, encode_u32(refer + 1))?;
                 }

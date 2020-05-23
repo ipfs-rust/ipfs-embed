@@ -2,8 +2,8 @@ use async_std::task;
 use ipfs_embed::{Config, Store};
 use ipld_collections::List;
 use model::*;
-use tempdir::TempDir;
 use std::time::Duration;
+use tempdir::TempDir;
 
 fn create_store() -> (Store, TempDir) {
     let tmp = TempDir::new("").unwrap();
