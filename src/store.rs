@@ -69,10 +69,6 @@ impl Store {
     pub fn get_local(&self, cid: &Cid) -> Result<Option<IVec>, Error> {
         self.storage.get_local(cid)
     }
-
-    pub fn unpin(&self, cid: &Cid) -> Result<(), Error> {
-        self.storage.unpin(cid)
-    }
 }
 
 impl ReadonlyStore for Store {

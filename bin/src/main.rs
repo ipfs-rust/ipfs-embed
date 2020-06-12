@@ -1,7 +1,7 @@
 use crate::command::*;
 use clap::Clap;
 use exitfailure::ExitDisplay;
-use ipfs_embed::{Cid, Config, Metadata, Store};
+use ipfs_embed::{Cid, Config, Metadata, Store, WritableStore};
 use libipld::block::decode_ipld;
 use libipld::codec::Codec;
 use libipld::json::DagJsonCodec;
@@ -45,7 +45,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         SubCommand::Unpin(UnpinCommand { cid }) => {
-            store.unpin(&cid)?;
+            async_std::task::block_on(store.unpin(&cid))?;
         }
     }
     Ok(())
