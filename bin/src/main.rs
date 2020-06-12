@@ -24,7 +24,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             dead,
             all,
         }) => {
-            println!("pins refs pub cid");
+            println!(
+                "{:10} {:10} {:10} {:10} cid",
+                "pins", "parents", "children", "public"
+            );
             for res in store.blocks() {
                 let cid = res?;
                 let metadata = store.metadata(&cid)?;
@@ -44,6 +47,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", std::str::from_utf8(&json)?);
             }
         }
+        SubCommand::Refs(RefsCommand { cid }) => {
+            let metadata = store.metadata(&cid)?;
+            for cid in metadata.refs {
+                println!("{}", cid.to_string());
+            }
+        }
         SubCommand::Unpin(UnpinCommand { cid }) => {
             async_std::task::block_on(store.unpin(&cid))?;
         }
@@ -52,12 +61,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn print_metadata(cid: &Cid, metadata: &Metadata) {
-    let public = if metadata.public { "pub" } else { "   " };
     println!(
-        "{:4} {:4} {} {}",
-        metadata.pins,
-        metadata.referers,
-        public,
+        "{:10} {:10} {:10} {:10} {}",
+        metadata.pins.to_string(),
+        metadata.referers.to_string(),
+        metadata.refs.len().to_string(),
+        metadata.public,
         cid.to_string()
     );
 }

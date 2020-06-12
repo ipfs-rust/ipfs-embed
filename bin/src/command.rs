@@ -14,6 +14,7 @@ pub struct Opts {
 pub enum SubCommand {
     Ls(LsCommand),
     Cat(CatCommand),
+    Refs(RefsCommand),
     Unpin(UnpinCommand),
 }
 
@@ -31,6 +32,11 @@ pub struct LsCommand {
 
 #[derive(Clone, Debug, Clap)]
 pub struct CatCommand {
+    pub cid: Cid,
+}
+
+#[derive(Clone, Debug, Clap)]
+pub struct RefsCommand {
     pub cid: Cid,
 }
 
