@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::error::Error;
 use crate::gc::GarbageCollector;
 use crate::network::Network;
-use crate::storage::Storage;
+use crate::storage::{Metadata, Storage};
 use async_std::future::timeout;
 use async_std::task;
 use libipld::block::Block;
@@ -10,6 +10,7 @@ use libipld::cid::Cid;
 use libipld::error::StoreError;
 use libipld::store::{AliasStore, ReadonlyStore, Store as WritableStore, StoreResult, Visibility};
 use libp2p::core::{Multiaddr, PeerId};
+use sled::IVec;
 use std::time::Duration;
 
 #[derive(Clone, Debug)]
@@ -55,6 +56,22 @@ impl Store {
 
     pub fn address(&self) -> &Multiaddr {
         &self.address
+    }
+
+    pub fn blocks(&self) -> impl Iterator<Item = Result<Cid, Error>> {
+        self.storage.blocks()
+    }
+
+    pub fn metadata(&self, cid: &Cid) -> Result<Metadata, Error> {
+        self.storage.metadata(cid)
+    }
+
+    pub fn get_local(&self, cid: &Cid) -> Result<Option<IVec>, Error> {
+        self.storage.get_local(cid)
+    }
+
+    pub fn unpin(&self, cid: &Cid) -> Result<(), Error> {
+        self.storage.unpin(cid)
     }
 }
 

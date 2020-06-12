@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::storage::key::Key;
+use crate::storage::key::{Key, Value};
 use core::convert::TryFrom;
 use core::future::Future;
 use core::pin::Pin;
@@ -45,7 +45,7 @@ impl Storage {
         if let Some(block) = self.tree.get(&key)? {
             return Ok(block);
         }
-        self.tree.insert(Key::want(cid), &[])?;
+        self.tree.insert(Key::want(cid), Value::from(true))?;
         log::trace!("watching block({}) with prefix {:?}", cid.to_string(), key);
         GetFuture {
             tree: self.tree.clone(),
@@ -72,7 +72,7 @@ impl Storage {
             .map(|(cid, data)| {
                 let ipld = libipld::block::decode_ipld(&cid, &data)?;
                 let refs = libipld::block::references(&ipld);
-                let encoded = encode_refs(&refs);
+                let encoded = Value::from(&refs);
                 Ok((cid, data, refs, encoded))
             })
             .collect();
@@ -89,16 +89,16 @@ impl Storage {
                 }
                 for cid in refs {
                     let refer_key = Key::refer(cid);
-                    let refer = tree
+                    let refer: u32 = tree
                         .get(refer_key.clone())?
-                        .map(decode_u32)
+                        .map(|b| Value::from(b).into())
                         .unwrap_or_default();
-                    tree.insert(refer_key, encode_u32(refer + 1))?;
+                    tree.insert(refer_key, Value::from(refer + 1))?;
                 }
                 tree.insert(Key::block(cid), data)?;
-                tree.insert(Key::refs(cid), encoded_refs)?;
+                tree.insert(Key::refs(cid), encoded_refs.clone())?;
                 if let Visibility::Public = visibility {
-                    tree.insert(Key::public(cid), &[])?;
+                    tree.insert(Key::public(cid), Value::from(true))?;
                 }
                 tree.remove(Key::want(cid))?;
             }
@@ -106,9 +106,9 @@ impl Storage {
             let pin_key = Key::pin(last_cid);
             if let Some(pin) = tree.get(&pin_key)? {
                 log::trace!("duplicate incrementing pin count");
-                tree.insert(pin_key, encode_u32(decode_u32(pin) + 1))?;
+                tree.insert(pin_key, Value::from(u32::from(Value::from(pin)) + 1))?;
             } else {
-                tree.insert(pin_key, encode_u32(1))?;
+                tree.insert(pin_key, Value::from(1))?;
             }
             Ok(())
         })?;
@@ -126,9 +126,9 @@ impl Storage {
         self.tree.transaction(|tree| {
             let pin_key = Key::pin(cid);
             if let Some(pin) = tree.remove(&pin_key)? {
-                let pin = decode_u32(pin);
+                let pin: u32 = Value::from(pin).into();
                 if pin > 1 {
-                    tree.insert(pin_key, encode_u32(pin - 1))?;
+                    tree.insert(pin_key, Value::from(pin - 1))?;
                 }
             }
             Ok(())
@@ -147,14 +147,13 @@ impl Storage {
             tree.remove(Key::block(cid))?;
             tree.remove(Key::public(cid))?;
             tree.remove(Key::want(cid))?;
-            let refs = tree.remove(Key::refs(cid))?.unwrap();
-            let refs = decode_refs(refs);
+            let refs: HashSet<Cid> = Value::from(tree.remove(Key::refs(cid))?.unwrap()).into();
             for cid in &refs {
                 let refer_key = Key::refer(cid);
                 if let Some(refer) = tree.remove(&refer_key)? {
-                    let refer = decode_u32(refer);
+                    let refer: u32 = Value::from(refer).into();
                     if refer > 1 {
-                        tree.insert(refer_key, encode_u32(refer - 1))?;
+                        tree.insert(refer_key, Value::from(refer - 1))?;
                     }
                 }
             }
@@ -178,6 +177,10 @@ impl Storage {
             .map(|result| Ok(Cid::try_from(&result?[1..])?))
     }
 
+    pub fn blocks(&self) -> impl Iterator<Item = Result<Cid, Error>> {
+        self.iter_prefix(Key::Block.prefix())
+    }
+
     pub fn public(&self) -> impl Iterator<Item = Result<Cid, Error>> {
         self.iter_prefix(Key::Public.prefix())
     }
@@ -193,52 +196,51 @@ impl Storage {
     }
 
     pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>, Error> {
-        let alias = self.tree.get(Key::alias(alias))?;
-        if let Some(bytes) = alias {
-            let cid = Cid::try_from(bytes.as_ref())?;
-            Ok(Some(cid))
-        } else {
-            Ok(None)
-        }
+        Ok(self
+            .tree
+            .get(Key::alias(alias))?
+            .map(|bytes| Value::from(bytes).into()))
+    }
+
+    pub fn metadata(&self, cid: &Cid) -> Result<Metadata, Error> {
+        Ok(self.tree.transaction(|tree| {
+            let pins = tree
+                .get(Key::pin(cid))?
+                .map(|b| Value::from(b).into())
+                .unwrap_or_default();
+            let public = tree
+                .get(Key::public(cid))?
+                .map(|b| Value::from(b).into())
+                .unwrap_or_default();
+            let want = tree
+                .get(Key::want(cid))?
+                .map(|b| Value::from(b).into())
+                .unwrap_or_default();
+            let refs = tree
+                .get(Key::refs(cid))?
+                .map(|b| Value::from(b).into())
+                .unwrap_or_default();
+            let referers = tree
+                .get(Key::refer(cid))?
+                .map(|b| Value::from(b).into())
+                .unwrap_or_default();
+            Ok(Metadata {
+                pins,
+                public,
+                want,
+                refs,
+                referers,
+            })
+        })?)
     }
 }
 
-fn encode_refs(refs: &HashSet<Cid>) -> IVec {
-    let mut buf = vec![];
-    buf.extend(&(refs.len() as u64).to_le_bytes());
-    for cid in refs.iter() {
-        let bytes = cid.to_bytes();
-        buf.extend(&[bytes.len() as u8]);
-        buf.extend(bytes);
-    }
-    buf.into()
-}
-
-fn decode_refs(buf: IVec) -> HashSet<Cid> {
-    let mut len_buf = [0u8; 8];
-    len_buf.copy_from_slice(&buf[..8]);
-    let len = u64::from_le_bytes(len_buf);
-    let mut refs = HashSet::with_capacity(len as _);
-    let mut pos = 8;
-    for _ in 0..len {
-        let len = buf[pos] as usize;
-        pos += 1;
-        let cid = Cid::try_from(&buf[pos..(pos + len)]).expect("valid refs");
-        pos += len;
-        refs.insert(cid);
-    }
-    refs
-}
-
-fn encode_u32(u: u32) -> IVec {
-    let bytes = u.to_le_bytes();
-    IVec::from(&bytes[..])
-}
-
-fn decode_u32(ivec: IVec) -> u32 {
-    let mut buf = [0u8; 4];
-    buf.copy_from_slice(&ivec);
-    u32::from_le_bytes(buf)
+pub struct Metadata {
+    pub pins: u32,
+    pub public: bool,
+    pub want: bool,
+    pub refs: HashSet<Cid>,
+    pub referers: u32,
 }
 
 pub struct GetFuture {
@@ -509,19 +511,5 @@ mod tests {
         tester.unpin();
         tester.assert_unpin();
         tester.assert_no_events();
-    }
-
-    #[test]
-    fn test_refs() {
-        let (cid1, _) = create_block(b"a");
-        let (cid2, _) = create_block(b"b");
-        let (cid3, _) = create_block(b"c");
-        let mut refs = HashSet::new();
-        refs.insert(cid1);
-        refs.insert(cid2);
-        refs.insert(cid3);
-        let bytes = encode_refs(&refs);
-        let refs2 = decode_refs(bytes);
-        assert_eq!(refs, refs2);
     }
 }

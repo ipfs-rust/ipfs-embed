@@ -1,3 +1,6 @@
+[workspace]
+members = ["bin"]
+
 [package]
 name = "ipfs-embed"
 version = "0.1.0"

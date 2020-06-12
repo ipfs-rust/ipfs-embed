@@ -16,5 +16,9 @@ mod store;
 
 pub use config::Config;
 pub use error::Error;
+pub use libipld::cid::Cid;
+pub use libipld::store::{AliasStore, ReadonlyStore, Store as WritableStore};
 pub use network::NetworkConfig;
+pub use sled::IVec;
+pub use storage::Metadata;
 pub use store::Store;
