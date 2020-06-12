@@ -100,15 +100,23 @@ List blocks in the store:
 
 ```sh
 ipfs-embed-cli --path ~/.config/cli-identity/db ls
-pins refs pub cid
-   1    0 pub bafy2bzaceantsvvwqnget77qyjkol62sacerqijmew2i6ertspavvvzopxffc
+pins       parents    children   public     cid
+1          1          0          true       bafy2bzaceantsvvwqnget77qyjkol62sacerqijmew2i6ertspavvvzopxffc
+1          0          1          true       bafy2bzacediktghcdd67en4ifqy3me75p6gavd75g4ixlat6cgy3i5ly772zs
 ```
 
-and read the content:
+read the content:
 
 ```sh
 ipfs-embed-cli --path ~/.config/cli-identity/db cat bafy2bzaceantsvvwqnget77qyjkol62sacerqijmew2i6ertspavvvzopxffc
 {"claim":{"block":[99,72,157,77,43,88,249,34,49,85,62,244,13,31,24,56,66,2,13,69,45,25,96,21,72,19,60,17,207,52,248,101],"body":{"Ownership":[{"Github":["dvc94ch"]}]},"ctime":1591965518393,"expire_in":18446744073709551615,"genesis":[3,246,228,41,120,121,231,179,151,127,140,158,252,115,44,84,36,88,59,133,147,67,230,114,157,39,199,218,182,118,223,46],"prev":null,"public":"5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY","seqno":1,"uid":0},"signature":[1,126,118,55,106,111,215,158,113,168,56,48,59,225,167,255,125,177,97,234,174,188,152,172,248,210,163,252,8,198,2,170,26,204,11,123,110,35,13,3,107,76,91,18,59,74,135,128,129,147,135,216,216,117,164,134,127,155,3,8,44,122,206,112,128]}
+```
+
+and list the references:
+
+```sh
+ipfs-embed-cli --path ~/.config/cli-identity/db refs bafy2bzacediktghcdd67en4ifqy3me75p6gavd75g4ixlat6cgy3i5ly772zs
+bafy2bzaceantsvvwqnget77qyjkol62sacerqijmew2i6ertspavvvzopxffc
 ```
 
 ## License
