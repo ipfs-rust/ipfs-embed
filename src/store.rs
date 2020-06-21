@@ -90,7 +90,7 @@ impl WritableStore for Store {
         data: Box<[u8]>,
         visibility: Visibility,
     ) -> StoreResult<'a, ()> {
-        Box::pin(async move { Ok(self.storage.insert(cid, data.into(), visibility)?) })
+        Box::pin(async move { Ok(self.storage.insert(cid, data.to_vec().into(), visibility)?) })
     }
 
     fn insert_batch<'a>(
@@ -100,7 +100,7 @@ impl WritableStore for Store {
     ) -> StoreResult<'a, Cid> {
         let batch = batch
             .into_iter()
-            .map(|Block { cid, data }| (cid, data.into()));
+            .map(|Block { cid, data }| (cid, data.to_vec().into()));
         Box::pin(async move { Ok(self.storage.insert_batch(batch, visibility)?) })
     }
 

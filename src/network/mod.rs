@@ -98,7 +98,10 @@ impl Future for Network {
             log::trace!("{:?}", event);
             match event {
                 NetworkEvent::ReceivedBlock(_, cid, data) => {
-                    if let Err(err) = self.storage.insert(&cid, data.into(), Visibility::Public) {
+                    if let Err(err) =
+                        self.storage
+                            .insert(&cid, data.to_vec().into(), Visibility::Public)
+                    {
                         log::error!("failed to insert received block {:?}", err);
                     }
                 }
