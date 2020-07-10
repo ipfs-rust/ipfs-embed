@@ -41,7 +41,7 @@ impl Network {
         let peer_id = config.peer_id();
         let behaviour = NetworkBackendBehaviour::new(config)?;
         let mut swarm = Swarm::new(transport, behaviour, peer_id);
-        Swarm::listen_on(&mut swarm, "/ip4/127.0.0.1/tcp/0".parse().unwrap())?;
+        Swarm::listen_on(&mut swarm, "/ip4/0.0.0.0/tcp/0".parse().unwrap())?;
         let addr = loop {
             match swarm.next_event().await {
                 SwarmEvent::NewListenAddr(addr) => break addr,
