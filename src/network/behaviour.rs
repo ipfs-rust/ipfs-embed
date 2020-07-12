@@ -1,6 +1,7 @@
 use crate::error::Error;
 use crate::network::NetworkConfig;
 use core::task::{Context, Poll};
+use ip_network::IpNetwork;
 use libipld::cid::Cid;
 use libp2p::core::PeerId;
 use libp2p::identify::{Identify, IdentifyEvent};
@@ -10,9 +11,12 @@ use libp2p::kad::{
     BootstrapError, BootstrapOk, GetProvidersOk, Kademlia, KademliaEvent, QueryId, QueryResult,
 };
 use libp2p::mdns::{Mdns, MdnsEvent};
+use libp2p::multiaddr::Protocol;
 use libp2p::ping::{Ping, PingEvent};
 use libp2p::swarm::toggle::Toggle;
-use libp2p::swarm::{NetworkBehaviourAction, NetworkBehaviourEventProcess, PollParameters};
+use libp2p::swarm::{
+    NetworkBehaviourAction, NetworkBehaviourEventProcess, PollParameters,
+};
 use libp2p::NetworkBehaviour;
 use libp2p_bitswap::{Bitswap, BitswapEvent, Priority};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -30,6 +34,8 @@ pub enum NetworkEvent {
 #[derive(NetworkBehaviour)]
 #[behaviour(poll_method = "custom_poll", out_event = "NetworkEvent")]
 pub struct NetworkBackendBehaviour {
+    #[behaviour(ignore)]
+    peer_id: PeerId,
     mdns: Toggle<Mdns>,
     kad: Kademlia<MemoryStore>,
     ping: Toggle<Ping>,
@@ -56,13 +62,15 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendBehaviour {
 
 impl NetworkBehaviourEventProcess<KademliaEvent> for NetworkBackendBehaviour {
     fn inject_event(&mut self, event: KademliaEvent) {
-        if let KademliaEvent::QueryResult { id, result, .. } = event {
-            match result {
+        match event {
+            KademliaEvent::QueryResult { id, result, .. } => match result {
                 QueryResult::GetProviders(Ok(GetProvidersOk { providers, .. })) => {
                     if let Some(cid) = self.queries.remove(&id) {
                         if providers.is_empty() {
+                            log::info!("no providers");
                             self.events.push_back(NetworkEvent::NoProviders(cid));
                         } else {
+                            log::info!("found provider");
                             self.events
                                 .push_back(NetworkEvent::Providers(cid, providers));
                         }
@@ -84,6 +92,18 @@ impl NetworkBehaviourEventProcess<KademliaEvent> for NetworkBackendBehaviour {
                     }
                 }
                 _ => {}
+            },
+            KademliaEvent::UnroutablePeer { peer } => {
+                log::error!("unroutable peer {}", peer);
+            }
+            KademliaEvent::RoutablePeer { peer, .. } => {
+                log::info!("routable peer {}", peer);
+            }
+            KademliaEvent::PendingRoutablePeer { peer, .. } => {
+                log::info!("pending routable peer {}", peer);
+            }
+            KademliaEvent::RoutingUpdated { peer, .. } => {
+                log::info!("routing updated peer {}", peer);
             }
         }
     }
@@ -102,9 +122,29 @@ impl NetworkBehaviourEventProcess<IdentifyEvent> for NetworkBackendBehaviour {
     fn inject_event(&mut self, event: IdentifyEvent) {
         // When a peer opens a connection we only have it's outgoing address. The identify
         // protocol sends the listening address which needs to be registered with kademlia.
-        if let IdentifyEvent::Received { peer_id, info, .. } = event {
+        if let IdentifyEvent::Received {
+            peer_id,
+            info,
+            observed_addr,
+        } = event
+        {
+            log::info!("injecting observed_address {}", observed_addr);
+            // handled by identify protocol.
+            // self.inject_new_external_addr(&observed_addr);
+            self.kad.add_address(&self.peer_id, observed_addr);
             for addr in info.listen_addrs {
-                self.kad.add_address(&peer_id, addr);
+                let global = match addr.iter().next() {
+                    Some(Protocol::Ip4(ip)) => IpNetwork::from(ip).is_global(),
+                    Some(Protocol::Ip6(ip)) => IpNetwork::from(ip).is_global(),
+                    Some(Protocol::Dns(_)) => true,
+                    Some(Protocol::Dns4(_)) => true,
+                    Some(Protocol::Dns6(_)) => true,
+                    _ => false,
+                };
+                if global {
+                    log::info!("adding kademlia address {} {}", peer_id, addr);
+                    self.kad.add_address(&peer_id, addr);
+                }
             }
         }
     }
@@ -163,6 +203,7 @@ impl NetworkBackendBehaviour {
         let bitswap = Bitswap::new();
 
         Ok(Self {
+            peer_id: config.peer_id(),
             mdns,
             kad,
             ping,

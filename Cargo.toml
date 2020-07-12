@@ -12,6 +12,7 @@ repository = "https://github.com/ipfs-rust/ipfs-embed"
 
 [dependencies]
 async-std = { version = "1.6.2", features = ["attributes"] }
+ip_network = "0.3.4"
 libipld = { version = "0.3.0", default-features = false }
 libp2p-bitswap = "0.5.0"
 log = "0.4.8"
