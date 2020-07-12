@@ -1050,7 +1050,7 @@ checksum = "5b141fdc7836c525d4d594027d318c84161ca17aaf8113ab1f81ab93ae897485"
 
 [[package]]
 name = "ipfs-embed"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-log",
  "async-std",
@@ -1071,7 +1071,7 @@ dependencies = [
 
 [[package]]
 name = "ipfs-embed-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-std",
  "clap 3.0.0-beta.1",
