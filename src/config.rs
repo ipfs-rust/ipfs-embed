@@ -4,7 +4,7 @@ use sled::{Error, Tree};
 use std::path::Path;
 use std::time::Duration;
 
-pub const TREE: &'static str = "ipfs_tree";
+pub const TREE: &str = "ipfs_tree";
 
 pub struct Config {
     pub tree: Tree,
