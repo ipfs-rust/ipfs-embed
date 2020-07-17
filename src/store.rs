@@ -28,6 +28,7 @@ impl Store {
             network,
             timeout,
         } = config;
+        let node_name = network.node_name.clone();
         let peer_id = network.peer_id();
         let storage = Storage::new(tree)?;
         let (network, address) = task::block_on(Network::new(network, storage.clone()))?;
@@ -36,7 +37,12 @@ impl Store {
         let peer_id_str = peer_id.to_base58();
         task::spawn(async move {
             // make sure async std logs the right task id
-            log::info!("Listening on {} as {}", address_str, peer_id_str);
+            log::info!(
+                "{}: listening on {} as {}",
+                node_name,
+                address_str,
+                peer_id_str
+            );
             network.await;
         });
 
@@ -146,9 +152,9 @@ mod tests {
 
     fn create_store(bootstrap: Vec<(Multiaddr, PeerId)>) -> (Store, TempDir) {
         let tmp = TempDir::new("").unwrap();
-        let mut config = Config::from_path(tmp.path()).unwrap();
+        let mut config = Config::from_path_local(tmp.path()).unwrap();
         config.network.enable_mdns = bootstrap.is_empty();
-        config.network.bootstrap_nodes = bootstrap;
+        config.network.boot_nodes = bootstrap;
         let store = Store::new(config).unwrap();
         (store, tmp)
     }

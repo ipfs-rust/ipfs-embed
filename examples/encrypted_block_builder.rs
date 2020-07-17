@@ -11,7 +11,7 @@ struct Identity {
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = Config::from_path("/tmp/db")?;
+    let config = Config::from_path_local("/tmp/db")?;
     let store = Store::new(config)?;
     let key = Key::from(b"private encryption key".to_vec());
     let codec = StrobeCodec::new(key);

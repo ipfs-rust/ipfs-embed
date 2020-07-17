@@ -7,9 +7,8 @@ use tempdir::TempDir;
 
 fn create_store() -> (Store, TempDir) {
     let tmp = TempDir::new("").unwrap();
-    let mut config = Config::from_path(tmp.path()).unwrap();
+    let mut config = Config::from_path_local(tmp.path()).unwrap();
     config.network.enable_mdns = false;
-    config.network.bootstrap_nodes = vec![];
     config.timeout = Duration::from_millis(100);
     let store = Store::new(config).unwrap();
     (store, tmp)

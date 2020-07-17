@@ -34,14 +34,20 @@ impl Network {
         let transport = TcpConfig::new()
             .nodelay(true)
             .upgrade(Version::V1)
-            .authenticate(SecioConfig::new(config.keypair.clone()))
+            .authenticate(SecioConfig::new(config.node_key.clone()))
             .multiplex(MplexConfig::new())
             .timeout(Duration::from_secs(20));
 
         let peer_id = config.peer_id();
-        let behaviour = NetworkBackendBehaviour::new(config)?;
+        let behaviour = NetworkBackendBehaviour::new(config.clone())?;
         let mut swarm = Swarm::new(transport, behaviour, peer_id);
-        Swarm::listen_on(&mut swarm, "/ip4/0.0.0.0/tcp/0".parse().unwrap())?;
+        for addr in config.listen_addresses {
+            Swarm::listen_on(&mut swarm, addr)?;
+        }
+        for addr in config.public_addresses {
+            Swarm::add_external_address(&mut swarm, addr);
+        }
+
         let addr = loop {
             match swarm.next_event().await {
                 SwarmEvent::NewListenAddr(addr) => break addr,

@@ -1,5 +1,4 @@
 use crate::network::NetworkConfig;
-use libp2p::identity::Keypair;
 use sled::{Error, Tree};
 use std::path::Path;
 use std::time::Duration;
@@ -13,21 +12,28 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn new(tree: Tree, keypair: Keypair) -> Self {
+    /// Creates a new config.
+    pub fn new(tree: Tree, network: NetworkConfig) -> Self {
         Self {
             tree,
             timeout: Duration::from_millis(20000),
-            network: NetworkConfig::new(keypair),
+            network,
         }
     }
 
-    pub fn from_tree(tree: Tree) -> Self {
-        Self::new(tree, Keypair::generate_ed25519())
-    }
-
+    /// Creates a default configuration.
     pub fn from_path<T: AsRef<Path>>(path: T) -> Result<Self, Error> {
         let db = sled::open(path)?;
         let tree = db.open_tree(TREE)?;
-        Ok(Self::from_tree(tree))
+        let network = NetworkConfig::new();
+        Ok(Self::new(tree, network))
+    }
+
+    /// Creates a default local network configuration.
+    pub fn from_path_local<T: AsRef<Path>>(path: T) -> Result<Self, Error> {
+        let db = sled::open(path)?;
+        let tree = db.open_tree(TREE)?;
+        let network = NetworkConfig::new_local();
+        Ok(Self::new(tree, network))
     }
 }
