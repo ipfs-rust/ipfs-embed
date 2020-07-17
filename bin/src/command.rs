@@ -8,6 +8,8 @@ pub struct Opts {
     pub cmd: SubCommand,
     #[clap(short = "p", long = "path")]
     pub path: PathBuf,
+    #[clap(short = "t", long = "tree")]
+    pub tree: Option<String>,
 }
 
 #[derive(Clone, Debug, Clap)]

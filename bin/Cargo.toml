@@ -14,3 +14,4 @@ env_logger = "0.7.1"
 exitfailure = "0.5.1"
 ipfs-embed = { version = "0.2.0", path = ".." }
 libipld = { version = "0.3.0", features = ["dag-cbor", "dag-json", "dag-pb"] }
+sled = "0.32.0"

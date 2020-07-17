@@ -15,7 +15,10 @@ fn main() -> Result<(), ExitDisplay<Box<dyn std::error::Error>>> {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let opts = Opts::parse();
-    let config = Config::from_path(opts.path)?;
+    let db = sled::open(opts.path)?;
+    let tree_name = opts.tree.unwrap_or_else(|| ipfs_embed::TREE.to_string());
+    let tree = db.open_tree(tree_name)?;
+    let config = Config::from_tree(tree);
     let store = Store::new(config)?;
     match opts.cmd {
         SubCommand::Ls(LsCommand {

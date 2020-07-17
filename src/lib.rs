@@ -14,7 +14,7 @@ mod network;
 mod storage;
 mod store;
 
-pub use config::Config;
+pub use config::{Config, TREE};
 pub use error::Error;
 pub use libipld::cid::Cid;
 pub use libipld::store::{AliasStore, ReadonlyStore, Store as WritableStore};

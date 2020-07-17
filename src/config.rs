@@ -4,6 +4,8 @@ use sled::{Error, Tree};
 use std::path::Path;
 use std::time::Duration;
 
+pub const TREE: &'static str = "ipfs_tree";
+
 pub struct Config {
     pub tree: Tree,
     pub timeout: Duration,
@@ -25,7 +27,7 @@ impl Config {
 
     pub fn from_path<T: AsRef<Path>>(path: T) -> Result<Self, Error> {
         let db = sled::open(path)?;
-        let tree = db.open_tree("ipfs_tree")?;
+        let tree = db.open_tree(TREE)?;
         Ok(Self::from_tree(tree))
     }
 }
