@@ -164,6 +164,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c17772156ef2829aadc587461c7753af20b7e8db1529bc66855add962a3b35d3"
 
 [[package]]
+name = "async-trait"
+version = "0.1.36"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a265e3abeffdce30b2e26b7a11b222fe37c6067404001b434101457d0385eb92"
+dependencies = [
+ "proc-macro2 1.0.18",
+ "quote 1.0.7",
+ "syn 1.0.33",
+]
+
+[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1049,6 +1060,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b141fdc7836c525d4d594027d318c84161ca17aaf8113ab1f81ab93ae897485"
 
 [[package]]
+name = "ip_network"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ee15951c035f79eddbef745611ec962f63f4558f1dadf98ab723cc603487c6f"
+
+[[package]]
 name = "ipfs-embed"
 version = "0.2.0"
 dependencies = [
@@ -1057,7 +1074,8 @@ dependencies = [
  "criterion",
  "env_logger",
  "futures",
- "ipld-block-builder",
+ "ip_network",
+ "ipld-block-builder 0.4.1",
  "ipld-collections",
  "libipld",
  "libp2p",
@@ -1091,6 +1109,18 @@ dependencies = [
  "async-std",
  "cached",
  "libipld",
+]
+
+[[package]]
+name = "ipld-block-builder"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e50bfca47d8dc7564000b7b0ba9c78e4c5f9dfa2d2cd6c97bf4ff3695e98139f"
+dependencies = [
+ "async-std",
+ "async-trait",
+ "cached",
+ "libipld",
  "rand 0.7.3",
  "secrecy",
  "strobe-rs",
@@ -1106,7 +1136,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bcc4f1c832caf29d78147a7ed87f3db6716f01a80d72d73b4f89b07e91e3c6b3"
 dependencies = [
  "async-std",
- "ipld-block-builder",
+ "ipld-block-builder 0.3.0",
  "libipld",
  "thiserror",
 ]
@@ -1263,9 +1293,9 @@ dependencies = [
 
 [[package]]
 name = "libp2p"
-version = "0.21.1"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d743d03fab397cde23925a17cb87b35b25994f44ab8c6a9e46a7e953ec739cd"
+checksum = "0306a49ee6a89468f96089906f36b0eef82c988dcfc8acf3e2dcd6ad1c859f85"
 dependencies = [
  "bytes",
  "futures",
@@ -1291,16 +1321,15 @@ dependencies = [
 
 [[package]]
 name = "libp2p-bitswap"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce12b84559642c3b8d9abafadd377044abe7309db67b9011b1c3ee5ef7e8f878"
+checksum = "c6fecd4a8c7c6e82d1cd49687f7057f52d78adb729888868d6dcb1e898ece44f"
 dependencies = [
  "async-std",
  "fnv",
  "futures",
  "libipld-core",
- "libp2p-core",
- "libp2p-swarm",
+ "libp2p",
  "log",
  "prost",
  "prost-build",
@@ -1558,9 +1587,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.8"
+version = "0.4.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14b6052be84e6b71ab17edffc2eeabf5c2c3ae1fdb464aae35ac50c67a44e1f7"
+checksum = "4fabed175da42fed1fa0746b0ea71f412aa9d35e76e95e59b192c64b9dc2bf8b"
 dependencies = [
  "cfg-if",
 ]
@@ -2437,12 +2466,11 @@ checksum = "c111b5bd5695e56cffe5129854aa230b39c93a305372fdbb2668ca2394eea9f8"
 
 [[package]]
 name = "sled"
-version = "0.32.1"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e3dbbb8ee10611bd1d020767c27599ccbbf8365f7e0ed7e54429cc8b9433ad8"
+checksum = "701fd6e07375a3ecff6f754e990862fc115e881f602b950518e18658005e262b"
 dependencies = [
  "array-init",
- "backtrace",
  "crc32fast",
  "crossbeam-epoch",
  "crossbeam-utils",
