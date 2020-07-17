@@ -21,6 +21,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_tree(tree);
     let store = Store::new(config)?;
     match opts.cmd {
+        SubCommand::Tree => {
+            for name in db.tree_names() {
+                println!("{}", std::str::from_utf8(&name).unwrap());
+            }
+        }
         SubCommand::Ls(LsCommand {
             pinned,
             live,

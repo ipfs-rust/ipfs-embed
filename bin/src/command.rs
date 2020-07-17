@@ -14,6 +14,7 @@ pub struct Opts {
 
 #[derive(Clone, Debug, Clap)]
 pub enum SubCommand {
+    Tree,
     Ls(LsCommand),
     Cat(CatCommand),
     Refs(RefsCommand),
