@@ -18,7 +18,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let db = sled::open(opts.path)?;
     let tree_name = opts.tree.unwrap_or_else(|| ipfs_embed::TREE.to_string());
     let tree = db.open_tree(tree_name)?;
-    let config = Config::from_tree(tree);
+    let config = Config::new(tree, Default::default());
     let store = Store::new(config)?;
     match opts.cmd {
         SubCommand::Tree => {

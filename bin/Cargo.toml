@@ -1,6 +1,6 @@
 [package]
 name = "ipfs-embed-cli"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["David Craven <david@craven.ch>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
@@ -12,6 +12,6 @@ async-std = "1.6.2"
 clap = "3.0.0-beta.1"
 env_logger = "0.7.1"
 exitfailure = "0.5.1"
-ipfs-embed = { version = "0.2.0", path = ".." }
+ipfs-embed = { version = "0.3.0", path = ".." }
 libipld = { version = "0.3.0", features = ["dag-cbor", "dag-json", "dag-pb"] }
-sled = "0.33.0"
+sled = "0.34.0"

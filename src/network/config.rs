@@ -57,3 +57,9 @@ impl NetworkConfig {
         self.node_key.public().into_peer_id()
     }
 }
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}

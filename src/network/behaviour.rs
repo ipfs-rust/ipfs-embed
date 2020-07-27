@@ -252,7 +252,7 @@ impl NetworkBackendBehaviour {
     fn peer_name(&self, peer_id: &PeerId) -> String {
         self.peers
             .get(peer_id)
-            .map(|node_name| node_name.clone())
+            .cloned()
             .unwrap_or_else(|| peer_id.to_string())
     }
 
