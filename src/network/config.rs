@@ -26,7 +26,7 @@ impl NetworkConfig {
     /// Creates a new network configuration.
     pub fn new() -> Self {
         Self {
-            listen_addresses: vec!["/ip4/0.0.0.0/tcp/31333".parse().unwrap()],
+            listen_addresses: vec!["/ip4/0.0.0.0/tcp/0".parse().unwrap()],
             public_addresses: vec![],
             boot_nodes: vec![],
             enable_mdns: true,
