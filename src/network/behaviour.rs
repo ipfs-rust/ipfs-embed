@@ -1,11 +1,12 @@
-use crate::error::Error;
 use crate::network::NetworkConfig;
 use core::task::{Context, Poll};
 use ip_network::IpNetwork;
 use libipld::cid::Cid;
+use libipld::error::Result;
+use libipld::multihash::MultihashDigest;
 use libp2p::core::PeerId;
 use libp2p::identify::{Identify, IdentifyEvent};
-use libp2p::kad::record::store::{Error as RecordError, MemoryStore};
+use libp2p::kad::record::store::MemoryStore;
 use libp2p::kad::record::Key;
 use libp2p::kad::{
     BootstrapError, BootstrapOk, GetProvidersOk, Kademlia, KademliaEvent, QueryId, QueryResult,
@@ -18,6 +19,7 @@ use libp2p::swarm::{NetworkBehaviourAction, NetworkBehaviourEventProcess, PollPa
 use libp2p::NetworkBehaviour;
 use libp2p_bitswap::{Bitswap, BitswapEvent, Priority};
 use std::collections::{HashMap, HashSet, VecDeque};
+use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NetworkEvent {
@@ -31,7 +33,7 @@ pub enum NetworkEvent {
 /// Behaviour type.
 #[derive(NetworkBehaviour)]
 #[behaviour(poll_method = "custom_poll", out_event = "NetworkEvent")]
-pub struct NetworkBackendBehaviour {
+pub struct NetworkBackendBehaviour<M: MultihashDigest> {
     #[behaviour(ignore)]
     node_name: String,
     #[behaviour(ignore)]
@@ -48,13 +50,13 @@ pub struct NetworkBackendBehaviour {
     mdns: Toggle<Mdns>,
     ping: Toggle<Ping>,
     identify: Identify,
-    bitswap: Bitswap,
+    bitswap: Bitswap<M>,
 
     #[behaviour(ignore)]
     events: VecDeque<NetworkEvent>,
 }
 
-impl NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendBehaviour {
+impl<M: MultihashDigest> NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendBehaviour<M> {
     fn inject_event(&mut self, event: MdnsEvent) {
         match event {
             MdnsEvent::Discovered(list) => {
@@ -67,7 +69,9 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendBehaviour {
     }
 }
 
-impl NetworkBehaviourEventProcess<KademliaEvent> for NetworkBackendBehaviour {
+impl<M: MultihashDigest> NetworkBehaviourEventProcess<KademliaEvent>
+    for NetworkBackendBehaviour<M>
+{
     fn inject_event(&mut self, event: KademliaEvent) {
         match event {
             KademliaEvent::QueryResult { id, result, .. } => match result {
@@ -130,7 +134,7 @@ impl NetworkBehaviourEventProcess<KademliaEvent> for NetworkBackendBehaviour {
     }
 }
 
-impl NetworkBehaviourEventProcess<PingEvent> for NetworkBackendBehaviour {
+impl<M: MultihashDigest> NetworkBehaviourEventProcess<PingEvent> for NetworkBackendBehaviour<M> {
     fn inject_event(&mut self, event: PingEvent) {
         // Don't really need to do anything here as ping handles disconnecting automatically.
         if let Err(err) = &event.result {
@@ -139,7 +143,9 @@ impl NetworkBehaviourEventProcess<PingEvent> for NetworkBackendBehaviour {
     }
 }
 
-impl NetworkBehaviourEventProcess<IdentifyEvent> for NetworkBackendBehaviour {
+impl<M: MultihashDigest> NetworkBehaviourEventProcess<IdentifyEvent>
+    for NetworkBackendBehaviour<M>
+{
     fn inject_event(&mut self, event: IdentifyEvent) {
         // When a peer opens a connection we only have it's outgoing address. The identify
         // protocol sends the listening address which needs to be registered with kademlia.
@@ -183,7 +189,7 @@ impl NetworkBehaviourEventProcess<IdentifyEvent> for NetworkBackendBehaviour {
     }
 }
 
-impl NetworkBehaviourEventProcess<BitswapEvent> for NetworkBackendBehaviour {
+impl<M: MultihashDigest> NetworkBehaviourEventProcess<BitswapEvent> for NetworkBackendBehaviour<M> {
     fn inject_event(&mut self, event: BitswapEvent) {
         // Propagate bitswap events to the swarm.
         let event = match event {
@@ -201,9 +207,13 @@ impl NetworkBehaviourEventProcess<BitswapEvent> for NetworkBackendBehaviour {
     }
 }
 
-impl NetworkBackendBehaviour {
+#[derive(Debug, Error)]
+#[error("{0:?}")]
+pub struct KadRecordError(pub libp2p::kad::record::store::Error);
+
+impl<M: MultihashDigest> NetworkBackendBehaviour<M> {
     /// Create a Kademlia behaviour with the IPFS bootstrap nodes.
-    pub fn new(config: NetworkConfig) -> Result<Self, Error> {
+    pub fn new(config: NetworkConfig) -> Result<Self> {
         let peer_id = config.peer_id();
 
         let mdns = if config.enable_mdns {
@@ -267,7 +277,7 @@ impl NetworkBackendBehaviour {
 
     pub fn want_block(&mut self, cid: Cid, priority: Priority) {
         log::debug!("want {}", cid.to_string());
-        let key = Key::new(&cid.hash().as_bytes());
+        let key = Key::new(&cid.hash().to_bytes());
         self.kad.get_providers(key);
         self.bitswap.want_block(cid, priority);
     }
@@ -277,14 +287,14 @@ impl NetworkBackendBehaviour {
         self.bitswap.cancel_block(cid);
     }
 
-    pub fn provide_block(&mut self, cid: &Cid) -> Result<(), RecordError> {
+    pub fn provide_block(&mut self, cid: &Cid) -> Result<()> {
         log::debug!("provide {}", cid.to_string());
-        let key = Key::new(&cid.hash().as_bytes());
-        self.kad.start_providing(key)?;
+        let key = Key::new(&cid.hash().to_bytes());
+        self.kad.start_providing(key).map_err(KadRecordError)?;
         Ok(())
     }
 
-    pub fn provide_and_send_block(&mut self, cid: &Cid, data: &[u8]) -> Result<(), RecordError> {
+    pub fn provide_and_send_block(&mut self, cid: &Cid, data: &[u8]) -> Result<()> {
         self.provide_block(&cid)?;
         self.bitswap.send_block_all(&cid, &data);
         Ok(())
@@ -292,7 +302,7 @@ impl NetworkBackendBehaviour {
 
     pub fn unprovide_block(&mut self, cid: &Cid) {
         log::debug!("unprovide {}", cid.to_string());
-        let key = Key::new(&cid.hash().as_bytes());
+        let key = Key::new(&cid.hash().to_bytes());
         self.kad.stop_providing(&key);
     }
 

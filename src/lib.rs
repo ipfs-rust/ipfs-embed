@@ -8,14 +8,12 @@
 //! # Ok(()) }
 //! ```
 mod config;
-mod error;
 mod gc;
 mod network;
 mod storage;
 mod store;
 
 pub use config::{Config, TREE};
-pub use error::Error;
 pub use libipld::cid::Cid;
 pub use libipld::store::{AliasStore, ReadonlyStore, Store as WritableStore};
 pub use libp2p::core::{Multiaddr, PeerId};

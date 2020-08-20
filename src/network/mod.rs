@@ -1,6 +1,11 @@
 use async_std::prelude::*;
 use async_std::task::{Context, Poll};
+use core::marker::PhantomData;
 use core::pin::Pin;
+use libipld::block::Block;
+use libipld::codec::Codec;
+use libipld::error::Result;
+use libipld::multihash::MultihashDigest;
 use libipld::store::Visibility;
 use libp2p::core::transport::upgrade::Version;
 use libp2p::core::transport::Transport;
@@ -15,7 +20,6 @@ use std::time::Duration;
 mod behaviour;
 mod config;
 
-use crate::error::Error;
 use crate::storage::{
     NetworkEvent as StorageEvent, NetworkSubscriber as StorageSubscriber, Storage,
 };
@@ -23,14 +27,15 @@ use behaviour::NetworkBackendBehaviour;
 pub use behaviour::NetworkEvent;
 pub use config::NetworkConfig;
 
-pub struct Network {
-    swarm: Swarm<NetworkBackendBehaviour>,
+pub struct Network<C: Codec, M: MultihashDigest> {
+    _marker: PhantomData<C>,
+    swarm: Swarm<NetworkBackendBehaviour<M>>,
     storage: Storage,
     subscriber: StorageSubscriber,
 }
 
-impl Network {
-    pub async fn new(config: NetworkConfig, storage: Storage) -> Result<(Self, Multiaddr), Error> {
+impl<C: Codec, M: MultihashDigest> Network<C, M> {
+    pub async fn new(config: NetworkConfig, storage: Storage) -> Result<(Self, Multiaddr)> {
         let transport = TcpConfig::new()
             .nodelay(true)
             .upgrade(Version::V1)
@@ -59,6 +64,7 @@ impl Network {
         let subscriber = storage.watch_network();
         Ok((
             Self {
+                _marker: PhantomData,
                 swarm,
                 storage,
                 subscriber,
@@ -68,7 +74,7 @@ impl Network {
     }
 }
 
-impl Future for Network {
+impl<C: Codec, M: MultihashDigest> Future for Network<C, M> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
@@ -104,10 +110,8 @@ impl Future for Network {
             log::trace!("{:?}", event);
             match event {
                 NetworkEvent::ReceivedBlock(_, cid, data) => {
-                    if let Err(err) =
-                        self.storage
-                            .insert(&cid, data.to_vec().into(), Visibility::Public)
-                    {
+                    let block = Block::<C, M>::new(cid, data);
+                    if let Err(err) = self.storage.insert(&block, Visibility::Public) {
                         log::error!("failed to insert received block {:?}", err);
                     }
                 }

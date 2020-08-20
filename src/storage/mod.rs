@@ -1,12 +1,15 @@
-use crate::error::Error;
 use crate::storage::key::{Key, Value};
 use core::convert::TryFrom;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
+use libipld::block::Block;
 use libipld::cid::Cid;
+use libipld::codec::Codec;
+use libipld::error::{EmptyBatch, Error, Result};
+use libipld::multihash::MultihashDigest;
 use libipld::store::Visibility;
-use sled::{Event, IVec, Subscriber, Tree};
+use sled::{transaction::TransactionError, Event, IVec, Subscriber, Tree};
 use std::collections::HashSet;
 
 mod gc;
@@ -22,7 +25,7 @@ pub struct Storage {
 }
 
 impl Storage {
-    pub fn new(tree: sled::Tree) -> Result<Self, Error> {
+    pub fn new(tree: sled::Tree) -> Result<Self> {
         // cleanup wanted on startup
         for key in tree.scan_prefix(Key::Want.prefix()).keys() {
             tree.remove(key?)?;
@@ -30,12 +33,12 @@ impl Storage {
         Ok(Self { tree })
     }
 
-    pub fn get_local(&self, cid: &Cid) -> Result<Option<IVec>, Error> {
+    pub fn get_local(&self, cid: &Cid) -> Result<Option<IVec>> {
         log::trace!("get_local {}", cid.to_string());
         Ok(self.tree.get(Key::block(cid))?)
     }
 
-    pub async fn get(&self, cid: &Cid) -> Result<IVec, Error> {
+    pub async fn get(&self, cid: &Cid) -> Result<IVec> {
         log::trace!("get {}", cid.to_string());
         let key = Key::block(cid);
         if let Some(block) = self.tree.get(&key)? {
@@ -56,112 +59,134 @@ impl Storage {
         .await
     }
 
-    pub fn insert(&self, cid: &Cid, data: IVec, visibility: Visibility) -> Result<(), Error> {
-        log::trace!("insert {}", cid.to_string());
-        self.insert_batch(std::iter::once((cid.clone(), data)), visibility)?;
+    pub fn insert<C: Codec, M: MultihashDigest>(
+        &self,
+        block: &Block<C, M>,
+        visibility: Visibility,
+    ) -> Result<()> {
+        log::trace!("insert {}", block.cid.to_string());
+        self.insert_batch(std::slice::from_ref(block), visibility)?;
         Ok(())
     }
 
-    pub fn insert_batch(
+    pub fn insert_batch<C: Codec, M: MultihashDigest>(
         &self,
-        batch: impl Iterator<Item = (Cid, IVec)>,
+        batch: &[Block<C, M>],
         visibility: Visibility,
-    ) -> Result<Cid, Error> {
+    ) -> Result<Cid> {
         log::trace!("insert_batch");
-        let blocks: Result<Vec<_>, Error> = batch
-            .map(|(cid, data)| {
-                let ipld = libipld::block::decode_ipld(&cid, &data)?;
-                let refs = libipld::block::references(&ipld);
+        let blocks: Result<Vec<_>> = batch
+            .iter()
+            .map(|block| {
+                let refs = block.decode_ipld()?.references();
                 let encoded = Value::from(&refs);
-                Ok((cid, data, refs, encoded))
+                Ok((&block.cid, &block.data, refs, encoded))
             })
             .collect();
         let blocks = blocks?;
         if blocks.is_empty() {
-            return Err(Error::EmptyBatch);
+            return Err(EmptyBatch.into());
         }
-        self.tree.transaction(|tree| {
-            let mut last_cid = None;
-            for (cid, data, refs, encoded_refs) in &blocks {
-                last_cid = Some(cid);
-                if tree.get(Key::block(cid))?.is_some() {
-                    continue;
+        let last_cid = self
+            .tree
+            .transaction::<_, _, Error>(|tree| {
+                let mut last_cid = None;
+                for (cid, data, refs, encoded_refs) in &blocks {
+                    last_cid = Some(cid);
+                    if tree.get(Key::block(cid))?.is_some() {
+                        continue;
+                    }
+                    for cid in refs {
+                        let refer_key = Key::refer(cid);
+                        let refer: u32 = tree
+                            .get(refer_key.clone())?
+                            .map(|b| Value::from(b).into())
+                            .unwrap_or_default();
+                        tree.insert(refer_key, Value::from(refer + 1))?;
+                    }
+                    tree.insert(Key::block(cid), &data[..])?;
+                    tree.insert(Key::refs(cid), encoded_refs.clone())?;
+                    if let Visibility::Public = visibility {
+                        tree.insert(Key::public(cid), Value::from(true))?;
+                    }
+                    tree.remove(Key::want(cid))?;
                 }
-                for cid in refs {
-                    let refer_key = Key::refer(cid);
-                    let refer: u32 = tree
-                        .get(refer_key.clone())?
-                        .map(|b| Value::from(b).into())
-                        .unwrap_or_default();
-                    tree.insert(refer_key, Value::from(refer + 1))?;
+                let last_cid = last_cid.unwrap();
+                let pin_key = Key::pin(last_cid);
+                if let Some(pin) = tree.get(&pin_key)? {
+                    log::trace!("duplicate incrementing pin count");
+                    tree.insert(pin_key, Value::from(u32::from(Value::from(pin)) + 1))?;
+                } else {
+                    tree.insert(pin_key, Value::from(1))?;
                 }
-                tree.insert(Key::block(cid), data)?;
-                tree.insert(Key::refs(cid), encoded_refs.clone())?;
-                if let Visibility::Public = visibility {
-                    tree.insert(Key::public(cid), Value::from(true))?;
-                }
-                tree.remove(Key::want(cid))?;
-            }
-            let last_cid = last_cid.unwrap();
-            let pin_key = Key::pin(last_cid);
-            if let Some(pin) = tree.get(&pin_key)? {
-                log::trace!("duplicate incrementing pin count");
-                tree.insert(pin_key, Value::from(u32::from(Value::from(pin)) + 1))?;
-            } else {
-                tree.insert(pin_key, Value::from(1))?;
-            }
-            Ok(())
-        })?;
-        Ok(blocks.into_iter().last().map(|(cid, _, _, _)| cid).unwrap())
+                Ok((*last_cid).clone())
+            })
+            .map_err(|e| match e {
+                TransactionError::Abort(e) => e,
+                TransactionError::Storage(e) => Error::from(e),
+            })?;
+        Ok(last_cid)
     }
 
-    pub async fn flush(&self) -> Result<(), Error> {
+    pub async fn flush(&self) -> Result<()> {
         log::trace!("flush");
         self.tree.flush_async().await?;
         Ok(())
     }
 
-    pub fn unpin(&self, cid: &Cid) -> Result<(), Error> {
+    pub fn unpin(&self, cid: &Cid) -> Result<()> {
         log::trace!("unpin {}", cid.to_string());
-        self.tree.transaction(|tree| {
-            let pin_key = Key::pin(cid);
-            if let Some(pin) = tree.remove(&pin_key)? {
-                let pin: u32 = Value::from(pin).into();
-                if pin > 1 {
-                    tree.insert(pin_key, Value::from(pin - 1))?;
+        self.tree
+            .transaction::<_, _, Error>(|tree| {
+                let pin_key = Key::pin(cid);
+                if let Some(pin) = tree.remove(&pin_key)? {
+                    let pin: u32 = Value::from(pin).into();
+                    if pin > 1 {
+                        tree.insert(pin_key, Value::from(pin - 1))?;
+                    }
                 }
-            }
-            Ok(())
-        })?;
+                Ok(())
+            })
+            .map_err(|e| match e {
+                TransactionError::Abort(e) => e,
+                TransactionError::Storage(e) => Error::from(e),
+            })?;
         Ok(())
     }
 
-    fn remove_one(&self, cid: &Cid) -> Result<Option<HashSet<Cid>>, Error> {
+    fn remove_one(&self, cid: &Cid) -> Result<Option<HashSet<Cid>>> {
         log::trace!("remove {}", cid.to_string());
-        Ok(self.tree.transaction(|tree| {
-            let pinned = tree.get(Key::pin(cid))?.is_some();
-            let referers = tree.get(Key::refer(cid))?.is_some();
-            if pinned || referers {
-                return Ok(None);
-            }
-            tree.remove(Key::block(cid))?;
-            tree.remove(Key::public(cid))?;
-            tree.remove(Key::want(cid))?;
-            let refs: HashSet<Cid> = Value::from(tree.remove(Key::refs(cid))?.unwrap()).into();
-            for cid in &refs {
-                let refer_key = Key::refer(cid);
-                if let Some(refer) = tree.remove(&refer_key)? {
-                    let refer: u32 = Value::from(refer).into();
-                    if refer > 1 {
-                        tree.insert(refer_key, Value::from(refer - 1))?;
+        let res = self
+            .tree
+            .transaction::<_, _, Error>(|tree| {
+                let pinned = tree.get(Key::pin(cid))?.is_some();
+                let referers = tree.get(Key::refer(cid))?.is_some();
+                if pinned || referers {
+                    return Ok(None);
+                }
+                tree.remove(Key::block(cid))?;
+                tree.remove(Key::public(cid))?;
+                tree.remove(Key::want(cid))?;
+                let refs: HashSet<Cid> = Value::from(tree.remove(Key::refs(cid))?.unwrap()).into();
+                for cid in &refs {
+                    let refer_key = Key::refer(cid);
+                    if let Some(refer) = tree.remove(&refer_key)? {
+                        let refer: u32 = Value::from(refer).into();
+                        if refer > 1 {
+                            tree.insert(refer_key, Value::from(refer - 1))?;
+                        }
                     }
                 }
-            }
-            Ok(Some(refs))
-        })?)
+                Ok(Some(refs))
+            })
+            .map_err(|e| match e {
+                TransactionError::Abort(e) => e,
+                TransactionError::Storage(e) => Error::from(e),
+            })?;
+        Ok(res)
     }
 
-    pub fn remove(&self, cid: &Cid) -> Result<(), Error> {
+    pub fn remove(&self, cid: &Cid) -> Result<()> {
         if let Some(refs) = self.remove_one(cid)? {
             for cid in refs {
                 self.remove(&cid)?;
@@ -170,68 +195,75 @@ impl Storage {
         Ok(())
     }
 
-    fn iter_prefix(&self, prefix: IVec) -> impl Iterator<Item = Result<Cid, Error>> {
+    fn iter_prefix(&self, prefix: IVec) -> impl Iterator<Item = Result<Cid>> {
         self.tree
             .scan_prefix(prefix)
             .keys()
             .map(|result| Ok(Cid::try_from(&result?[1..])?))
     }
 
-    pub fn blocks(&self) -> impl Iterator<Item = Result<Cid, Error>> {
+    pub fn blocks(&self) -> impl Iterator<Item = Result<Cid>> {
         self.iter_prefix(Key::Block.prefix())
     }
 
-    pub fn public(&self) -> impl Iterator<Item = Result<Cid, Error>> {
+    pub fn public(&self) -> impl Iterator<Item = Result<Cid>> {
         self.iter_prefix(Key::Public.prefix())
     }
 
-    pub fn alias(&self, alias: &[u8], cid: &Cid, _visibility: Visibility) -> Result<(), Error> {
+    pub fn alias(&self, alias: &[u8], cid: &Cid, _visibility: Visibility) -> Result<()> {
         self.tree.insert(Key::alias(alias), cid.to_bytes())?;
         Ok(())
     }
 
-    pub fn unalias(&self, alias: &[u8]) -> Result<(), Error> {
+    pub fn unalias(&self, alias: &[u8]) -> Result<()> {
         self.tree.remove(Key::alias(alias))?;
         Ok(())
     }
 
-    pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>, Error> {
+    pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>> {
         Ok(self
             .tree
             .get(Key::alias(alias))?
             .map(|bytes| Value::from(bytes).into()))
     }
 
-    pub fn metadata(&self, cid: &Cid) -> Result<Metadata, Error> {
-        Ok(self.tree.transaction(|tree| {
-            let pins = tree
-                .get(Key::pin(cid))?
-                .map(|b| Value::from(b).into())
-                .unwrap_or_default();
-            let public = tree
-                .get(Key::public(cid))?
-                .map(|b| Value::from(b).into())
-                .unwrap_or_default();
-            let want = tree
-                .get(Key::want(cid))?
-                .map(|b| Value::from(b).into())
-                .unwrap_or_default();
-            let refs = tree
-                .get(Key::refs(cid))?
-                .map(|b| Value::from(b).into())
-                .unwrap_or_default();
-            let referers = tree
-                .get(Key::refer(cid))?
-                .map(|b| Value::from(b).into())
-                .unwrap_or_default();
-            Ok(Metadata {
-                pins,
-                public,
-                want,
-                refs,
-                referers,
+    pub fn metadata(&self, cid: &Cid) -> Result<Metadata> {
+        let res = self
+            .tree
+            .transaction::<_, _, Error>(|tree| {
+                let pins = tree
+                    .get(Key::pin(cid))?
+                    .map(|b| Value::from(b).into())
+                    .unwrap_or_default();
+                let public = tree
+                    .get(Key::public(cid))?
+                    .map(|b| Value::from(b).into())
+                    .unwrap_or_default();
+                let want = tree
+                    .get(Key::want(cid))?
+                    .map(|b| Value::from(b).into())
+                    .unwrap_or_default();
+                let refs = tree
+                    .get(Key::refs(cid))?
+                    .map(|b| Value::from(b).into())
+                    .unwrap_or_default();
+                let referers = tree
+                    .get(Key::refer(cid))?
+                    .map(|b| Value::from(b).into())
+                    .unwrap_or_default();
+                Ok(Metadata {
+                    pins,
+                    public,
+                    want,
+                    refs,
+                    referers,
+                })
             })
-        })?)
+            .map_err(|e| match e {
+                TransactionError::Abort(e) => e,
+                TransactionError::Storage(e) => Error::from(e),
+            })?;
+        Ok(res)
     }
 }
 
@@ -251,7 +283,7 @@ pub struct GetFuture {
 }
 
 impl Future for GetFuture {
-    type Output = Result<IVec, Error>;
+    type Output = Result<IVec>;
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         log::trace!("poll get {}", self.cid.to_string());
