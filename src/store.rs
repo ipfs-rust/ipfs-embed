@@ -10,7 +10,7 @@ use libipld::cid::Cid;
 use libipld::codec::Codec;
 use libipld::error::{BlockNotFound, Result};
 use libipld::multihash::MultihashDigest;
-use libipld::store::{AliasStore, ReadonlyStore, Store as WritableStore, StoreResult, Visibility};
+use libipld::store::{AliasStore, ReadonlyStore, Store as WritableStore, StoreResult};
 use libp2p::core::{Multiaddr, PeerId};
 use sled::IVec;
 use std::time::Duration;
@@ -97,16 +97,12 @@ impl<C: Codec, M: MultihashDigest> ReadonlyStore for Store<C, M> {
 }
 
 impl<C: Codec, M: MultihashDigest> WritableStore for Store<C, M> {
-    fn insert<'a>(&'a self, block: &'a Block<C, M>, visibility: Visibility) -> StoreResult<'a, ()> {
-        Box::pin(async move { Ok(self.storage.insert(block, visibility)?) })
+    fn insert<'a>(&'a self, block: &'a Block<C, M>) -> StoreResult<'a, ()> {
+        Box::pin(async move { Ok(self.storage.insert(block)?) })
     }
 
-    fn insert_batch<'a>(
-        &'a self,
-        batch: &'a [Block<C, M>],
-        visibility: Visibility,
-    ) -> StoreResult<'a, Cid> {
-        Box::pin(async move { Ok(self.storage.insert_batch(batch, visibility)?) })
+    fn insert_batch<'a>(&'a self, batch: &'a [Block<C, M>]) -> StoreResult<'a, Cid> {
+        Box::pin(async move { Ok(self.storage.insert_batch(batch)?) })
     }
 
     fn flush(&self) -> StoreResult<'_, ()> {
@@ -119,37 +115,37 @@ impl<C: Codec, M: MultihashDigest> WritableStore for Store<C, M> {
 }
 
 impl<C: Codec, M: MultihashDigest> AliasStore for Store<C, M> {
-    fn alias<'a>(
-        &'a self,
-        alias: &'a [u8],
-        cid: &'a Cid,
-        visibility: Visibility,
-    ) -> StoreResult<'a, ()> {
-        Box::pin(async move { Ok(self.storage.alias(alias, cid, visibility)?) })
+    fn alias<'a>(&'a self, alias: &'a [u8], block: &'a Block<C, M>) -> StoreResult<'a, ()> {
+        Box::pin(async move { self.storage.alias(alias, block) })
     }
 
     fn unalias<'a>(&'a self, alias: &'a [u8]) -> StoreResult<'a, ()> {
-        Box::pin(async move { Ok(self.storage.unalias(alias)?) })
+        Box::pin(async move { self.storage.unalias(alias) })
     }
 
     fn resolve<'a>(&'a self, alias: &'a [u8]) -> StoreResult<'a, Option<Cid>> {
-        Box::pin(async move { Ok(self.storage.resolve(alias)?) })
+        Box::pin(async move { self.storage.resolve(alias) })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use libipld::block::{decode, encode, Block};
+    use libipld::block::{Block, Visibility};
     use libipld::cbor::DagCborCodec;
-    use libipld::cid::Codec;
+    use libipld::cid::DAG_CBOR;
+    use libipld::cid::RAW;
+    use libipld::codec_impl::Multicodec;
     use libipld::ipld;
     use libipld::ipld::Ipld;
-    use libipld::multihash::Sha2_256;
+    use libipld::multihash::{Multihash, MultihashDigest, SHA2_256};
+    use libipld::raw::RawCodec;
     use std::time::Duration;
     use tempdir::TempDir;
 
-    fn create_store(bootstrap: Vec<(Multiaddr, PeerId)>) -> (Store, TempDir) {
+    fn create_store(
+        bootstrap: Vec<(Multiaddr, PeerId)>,
+    ) -> (Store<Multicodec, Multihash>, TempDir) {
         let tmp = TempDir::new("").unwrap();
         let mut config = Config::from_path_local(tmp.path()).unwrap();
         config.network.enable_mdns = bootstrap.is_empty();
@@ -158,24 +154,22 @@ mod tests {
         (store, tmp)
     }
 
-    fn create_block(bytes: &[u8]) -> (Cid, Box<[u8]>) {
-        let hash = Sha2_256::digest(&bytes);
-        let cid = Cid::new_v1(Codec::Raw, hash);
-        let data = bytes.to_vec().into_boxed_slice();
-        (cid, data)
+    fn create_block(bytes: &[u8]) -> Block<Multicodec, Multihash> {
+        Block::<RawCodec, _>::encode(RAW, SHA2_256, bytes)
+            .unwrap()
+            .into_codec()
+            .unwrap()
     }
 
     #[async_std::test]
     async fn test_local_store() {
         env_logger::try_init().ok();
         let (store, _) = create_store(vec![]);
-        let (cid, data) = create_block(b"test_local_store");
-        store
-            .insert(&cid, data.clone(), Visibility::Private)
-            .await
-            .unwrap();
-        let data2 = store.get(&cid).await.unwrap();
-        assert_eq!(data, data2);
+        let mut block = create_block(b"test_local_store");
+        block.set_visibility(Visibility::Private);
+        store.insert(&block).await.unwrap();
+        let block2 = store.get(block.cid).await.unwrap();
+        assert_eq!(block.data, block2.data);
     }
 
     #[async_std::test]
@@ -184,13 +178,11 @@ mod tests {
         env_logger::try_init().ok();
         let (store1, _) = create_store(vec![]);
         let (store2, _) = create_store(vec![]);
-        let (cid, data) = create_block(b"test_exchange_mdns");
-        store1
-            .insert(&cid, data.clone(), Visibility::Private)
-            .await
-            .unwrap();
-        let data2 = store2.get(&cid).await.unwrap();
-        assert_eq!(data, data2);
+        let mut block = create_block(b"test_exchange_mdns");
+        block.set_visibility(Visibility::Private);
+        store1.insert(&block).await.unwrap();
+        let block2 = store2.get(block.cid).await.unwrap();
+        assert_eq!(block.data, block2.data);
     }
 
     #[async_std::test]
@@ -199,20 +191,17 @@ mod tests {
         env_logger::try_init().ok();
         let (store1, _) = create_store(vec![]);
         let (store2, _) = create_store(vec![]);
-        let (cid, data) = create_block(b"test_received_want_before_insert");
+        let block = create_block(b"test_received_want_before_insert");
 
-        let get_cid = cid.clone();
-        let get = task::spawn(async move { store2.get(&get_cid).await });
+        let get_cid = block.cid.clone();
+        let get = task::spawn(async move { store2.get(get_cid).await });
 
         task::sleep(Duration::from_millis(100)).await;
 
-        store1
-            .insert(&cid, data.clone(), Visibility::Public)
-            .await
-            .unwrap();
+        store1.insert(&block).await.unwrap();
 
-        let data2 = get.await.unwrap();
-        assert_eq!(data, data2);
+        let block2 = get.await.unwrap();
+        assert_eq!(block.data, block2.data);
     }
 
     #[async_std::test]
@@ -231,41 +220,42 @@ mod tests {
         let bootstrap = vec![(store.address().clone(), store.peer_id().clone())];
         let (store1, _) = create_store(bootstrap.clone());
         let (store2, _) = create_store(bootstrap);
-        let (cid, data) = create_block(b"test_exchange_kad");
-        store1
-            .insert(&cid, data.clone(), Visibility::Public)
-            .await
-            .unwrap();
+        let block = create_block(b"test_exchange_kad");
+        store1.insert(&block).await.unwrap();
         // make insert had enough time to propagate
         task::sleep(Duration::from_millis(500)).await;
-        let data2 = store2.get(&cid).await.unwrap();
-        assert_eq!(data, data2);
+        let block2 = store2.get(block.cid).await.unwrap();
+        assert_eq!(block.data, block2.data);
     }
 
     #[async_std::test]
     async fn test_provider_not_found() {
         env_logger::try_init().ok();
         let (store1, _) = create_store(vec![]);
-        let (cid, _) = create_block(b"test_provider_not_found");
-        if let Err(StoreError::BlockNotFound(cid2)) = store1.get(&cid).await {
-            assert_eq!(cid, cid2);
-        } else {
+        let block = create_block(b"test_provider_not_found");
+        if store1
+            .get(block.cid)
+            .await
+            .unwrap_err()
+            .downcast_ref::<BlockNotFound>()
+            .is_none()
+        {
             panic!("expected block not found error");
         }
     }
 
-    async fn get(store: &Store, cid: &Cid) -> Option<Ipld> {
+    async fn get<C: Codec, M: MultihashDigest>(store: &Store<C, M>, cid: &Cid) -> Option<Ipld> {
         store
             .storage
             .get_local(cid)
             .unwrap()
-            .map(|bytes| decode::<DagCborCodec, Ipld>(cid, &bytes).unwrap())
+            .map(|bytes| DagCborCodec.decode_ipld(&bytes).unwrap())
     }
 
-    async fn insert(store: &Store, ipld: &Ipld) -> Cid {
-        let Block { cid, data } = encode::<DagCborCodec, Sha2_256, Ipld>(ipld).unwrap();
-        store.insert(&cid, data, Visibility::Public).await.unwrap();
-        cid
+    async fn insert<C: Codec, M: MultihashDigest>(store: &Store<C, M>, ipld: &Ipld) -> Cid {
+        let block = Block::encode_ipld(DAG_CBOR, SHA2_256, ipld).unwrap();
+        store.insert(&block).await.unwrap();
+        block.cid
     }
 
     #[async_std::test]

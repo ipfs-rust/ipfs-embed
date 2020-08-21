@@ -3,12 +3,11 @@ use core::convert::TryFrom;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use libipld::block::Block;
+use libipld::block::{Block, Visibility};
 use libipld::cid::Cid;
 use libipld::codec::Codec;
 use libipld::error::{EmptyBatch, Error, Result};
 use libipld::multihash::MultihashDigest;
-use libipld::store::Visibility;
 use sled::{transaction::TransactionError, Event, IVec, Subscriber, Tree};
 use std::collections::HashSet;
 
@@ -59,28 +58,20 @@ impl Storage {
         .await
     }
 
-    pub fn insert<C: Codec, M: MultihashDigest>(
-        &self,
-        block: &Block<C, M>,
-        visibility: Visibility,
-    ) -> Result<()> {
+    pub fn insert<C: Codec, M: MultihashDigest>(&self, block: &Block<C, M>) -> Result<()> {
         log::trace!("insert {}", block.cid.to_string());
-        self.insert_batch(std::slice::from_ref(block), visibility)?;
+        self.insert_batch(std::slice::from_ref(block))?;
         Ok(())
     }
 
-    pub fn insert_batch<C: Codec, M: MultihashDigest>(
-        &self,
-        batch: &[Block<C, M>],
-        visibility: Visibility,
-    ) -> Result<Cid> {
+    pub fn insert_batch<C: Codec, M: MultihashDigest>(&self, batch: &[Block<C, M>]) -> Result<Cid> {
         log::trace!("insert_batch");
         let blocks: Result<Vec<_>> = batch
             .iter()
             .map(|block| {
                 let refs = block.decode_ipld()?.references();
                 let encoded = Value::from(&refs);
-                Ok((&block.cid, &block.data, refs, encoded))
+                Ok((&block.cid, &block.data, refs, encoded, block.visibility()))
             })
             .collect();
         let blocks = blocks?;
@@ -91,7 +82,7 @@ impl Storage {
             .tree
             .transaction::<_, _, Error>(|tree| {
                 let mut last_cid = None;
-                for (cid, data, refs, encoded_refs) in &blocks {
+                for (cid, data, refs, encoded_refs, visibility) in &blocks {
                     last_cid = Some(cid);
                     if tree.get(Key::block(cid))?.is_some() {
                         continue;
@@ -210,8 +201,12 @@ impl Storage {
         self.iter_prefix(Key::Public.prefix())
     }
 
-    pub fn alias(&self, alias: &[u8], cid: &Cid, _visibility: Visibility) -> Result<()> {
-        self.tree.insert(Key::alias(alias), cid.to_bytes())?;
+    pub fn alias<C: Codec, M: MultihashDigest>(
+        &self,
+        alias: &[u8],
+        block: &Block<C, M>,
+    ) -> Result<()> {
+        self.tree.insert(Key::alias(alias), block.cid.to_bytes())?;
         Ok(())
     }
 
@@ -318,8 +313,9 @@ mod tests {
     use async_std::prelude::*;
     use async_std::task;
     use futures::future::FutureExt;
-    use libipld::cid::Codec;
-    use libipld::multihash::Sha2_256;
+    use libipld::cid::RAW;
+    use libipld::codec_impl::Multicodec;
+    use libipld::multihash::{Multihash, MultihashDigest, SHA2_256};
     use tempdir::TempDir;
 
     fn create_store() -> (Storage, TempDir) {
@@ -331,8 +327,8 @@ mod tests {
     }
 
     fn create_block(bytes: &[u8]) -> (Cid, IVec) {
-        let hash = Sha2_256::digest(&bytes);
-        let cid = Cid::new_v1(Codec::Raw, hash);
+        let digest = Multihash::new(SHA2_256, bytes).unwrap().to_raw().unwrap();
+        let cid = Cid::new_v1(RAW, digest);
         (cid, bytes.into())
     }
 
@@ -370,6 +366,11 @@ mod tests {
             self.data.clone()
         }
 
+        fn block(&self) -> Block<Multicodec, Multihash> {
+            let data = self.data.to_vec().into_boxed_slice();
+            Block::<Multicodec, Multihash>::new(self.cid(), data)
+        }
+
         fn get_local(&self) -> Option<IVec> {
             self.store.get_local(&self.cid).unwrap()
         }
@@ -379,9 +380,9 @@ mod tests {
         }
 
         fn insert(&self, visibility: Visibility) {
-            self.store
-                .insert(&self.cid, self.data.clone(), visibility)
-                .unwrap();
+            let mut block = self.block();
+            block.set_visibility(visibility);
+            self.store.insert(&block).unwrap();
         }
 
         fn unpin(&self) {
@@ -393,9 +394,8 @@ mod tests {
         }
 
         fn alias(&self, alias: &[u8]) {
-            self.store
-                .alias(alias, &self.cid, Visibility::Private)
-                .unwrap();
+            let block = self.block();
+            self.store.alias(alias, &block).unwrap();
         }
 
         fn unalias(&self, alias: &[u8]) {
@@ -487,16 +487,15 @@ mod tests {
     async fn test_get() {
         let tester = Tester::setup();
 
-        let cid = tester.cid();
-        let data = tester.data();
+        let block = tester.block();
         let store = tester.store.clone();
         let mut net = store.watch_network();
         task::spawn(async move {
             assert_eq!(
                 (&mut net).next().await.unwrap(),
-                NetworkEvent::Want(cid.clone())
+                NetworkEvent::Want(block.cid.clone())
             );
-            store.insert(&cid, data, Visibility::Public).unwrap();
+            store.insert(&block).unwrap();
         });
 
         assert_eq!(tester.data(), tester.get());

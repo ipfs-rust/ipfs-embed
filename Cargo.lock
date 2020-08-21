@@ -438,9 +438,9 @@ checksum = "631ae5198c9be5e753e5cc215e1bd73c2b466a3565173db433f52bb9d3e66dba"
 
 [[package]]
 name = "cached"
-version = "0.12.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "083dc50149e37dfaab1ffe2c3af03576b79550f1e419a5091b28a7191db1c45b"
+checksum = "6aaf9983f274431ca66cd5a3b19952c774384f28ff42442afeb034bfc99ac994"
 dependencies = [
  "once_cell",
 ]
@@ -807,37 +807,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f14646a9e0430150a87951622ba9675472b68e384b7701b8423b30560805c7a"
 
 [[package]]
-name = "exitfailure"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ff5bd832af37f366c6c194d813a11cd90ac484f124f079294f28e357ae40515"
-dependencies = [
- "failure",
-]
-
-[[package]]
-name = "failure"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d32e9bd16cc02eae7db7ef620b392808b89f6a5e16bb3497d159c6b92a0f4f86"
-dependencies = [
- "backtrace",
- "failure_derive",
-]
-
-[[package]]
-name = "failure_derive"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa4da3c766cd7a0db8242e326e9e4e081edd567072893ed320008189715366a4"
-dependencies = [
- "proc-macro2 1.0.19",
- "quote 1.0.7",
- "syn 1.0.38",
- "synstructure",
-]
-
-[[package]]
 name = "fake-simd"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1185,8 +1154,6 @@ dependencies = [
  "env_logger",
  "futures",
  "ip_network",
- "ipld-block-builder 0.4.1",
- "ipld-collections",
  "libipld",
  "libp2p",
  "libp2p-bitswap",
@@ -1205,51 +1172,9 @@ dependencies = [
  "async-std",
  "clap 3.0.0-beta.1",
  "env_logger",
- "exitfailure",
  "ipfs-embed",
  "libipld",
  "sled",
-]
-
-[[package]]
-name = "ipld-block-builder"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7bcc5d297e6bad03888889aab3661cb9860a5203a0d7303a0bf13e81a135d00"
-dependencies = [
- "async-std",
- "cached",
- "libipld",
-]
-
-[[package]]
-name = "ipld-block-builder"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e50bfca47d8dc7564000b7b0ba9c78e4c5f9dfa2d2cd6c97bf4ff3695e98139f"
-dependencies = [
- "async-std",
- "async-trait",
- "cached",
- "libipld",
- "rand 0.7.3",
- "secrecy",
- "strobe-rs",
- "thiserror",
- "unsigned-varint 0.4.0",
- "zeroize",
-]
-
-[[package]]
-name = "ipld-collections"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bcc4f1c832caf29d78147a7ed87f3db6716f01a80d72d73b4f89b07e91e3c6b3"
-dependencies = [
- "async-std",
- "ipld-block-builder 0.3.0",
- "libipld",
- "thiserror",
 ]
 
 [[package]]
@@ -1323,6 +1248,8 @@ name = "libipld"
 version = "0.3.1"
 dependencies = [
  "async-std",
+ "async-trait",
+ "cached",
  "libipld-cbor",
  "libipld-cbor-derive",
  "libipld-core",
@@ -2519,15 +2446,6 @@ name = "scopeguard"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d29ab0c6d3fc0ee92fe66e2d99f700eab17a8d57d1c1d3b748380fb20baa78cd"
-
-[[package]]
-name = "secrecy"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9182278ed645df3477a9c27bfee0621c621aa16f6972635f7f795dae3d81070f"
-dependencies = [
- "zeroize",
-]
 
 [[package]]
 name = "semver"

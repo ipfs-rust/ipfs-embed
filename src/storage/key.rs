@@ -153,12 +153,12 @@ impl From<Value> for HashSet<Cid> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use libipld::cid::Codec;
-    use libipld::multihash::Sha2_256;
+    use libipld::cid::RAW;
+    use libipld::multihash::{Multihash, MultihashDigest, SHA2_256};
 
     fn create_block(bytes: &[u8]) -> (Cid, IVec) {
-        let hash = Sha2_256::digest(&bytes);
-        let cid = Cid::new_v1(Codec::Raw, hash);
+        let digest = Multihash::new(SHA2_256, bytes).unwrap().to_raw().unwrap();
+        let cid = Cid::new_v1(RAW, digest);
         (cid, bytes.into())
     }
 

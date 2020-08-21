@@ -6,7 +6,6 @@ use libipld::block::Block;
 use libipld::codec::Codec;
 use libipld::error::Result;
 use libipld::multihash::MultihashDigest;
-use libipld::store::Visibility;
 use libp2p::core::transport::upgrade::Version;
 use libp2p::core::transport::Transport;
 use libp2p::core::Multiaddr;
@@ -111,7 +110,7 @@ impl<C: Codec, M: MultihashDigest> Future for Network<C, M> {
             match event {
                 NetworkEvent::ReceivedBlock(_, cid, data) => {
                     let block = Block::<C, M>::new(cid, data);
-                    if let Err(err) = self.storage.insert(&block, Visibility::Public) {
+                    if let Err(err) = self.storage.insert(&block) {
                         log::error!("failed to insert received block {:?}", err);
                     }
                 }
