@@ -6,7 +6,7 @@ use core::task::{Context, Poll};
 use libipld::block::{Block, Visibility};
 use libipld::cid::Cid;
 use libipld::codec::Codec;
-use libipld::error::{EmptyBatch, Error, Result};
+use libipld::error::{BlockTooLarge, EmptyBatch, Error, Result};
 use libipld::multihash::MultihashDigest;
 use sled::{transaction::TransactionError, Event, IVec, Subscriber, Tree};
 use std::collections::HashSet;
@@ -69,6 +69,9 @@ impl Storage {
         let blocks: Result<Vec<_>> = batch
             .iter()
             .map(|block| {
+                if block.data.len() > crate::MAX_BLOCK_SIZE {
+                    return Err(BlockTooLarge(block.data.len()).into());
+                }
                 let refs = block.decode_ipld()?.references();
                 let encoded = Value::from(&refs);
                 Ok((&block.cid, &block.data, refs, encoded, block.visibility()))

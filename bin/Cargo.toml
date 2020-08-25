@@ -12,5 +12,5 @@ async-std = "1.6.3"
 clap = "3.0.0-beta.1"
 env_logger = "0.7.1"
 ipfs-embed = { version = "0.3.0", path = ".." }
-libipld = { version = "0.3.1", features = ["dag-cbor", "dag-json", "dag-pb"] }
-sled = "0.34.2"
+libipld = { version = "0.4.0", features = ["dag-cbor", "dag-json", "dag-pb"] }
+sled = "0.34.3"

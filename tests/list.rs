@@ -1,11 +1,14 @@
 use async_std::task;
 use ipfs_embed::{Config, Store};
 use ipld_collections::List;
+use libipld::cache::CacheConfig;
+use libipld::cbor::DagCborCodec;
+use libipld::{Multicodec, Multihash};
 use model::*;
 use std::time::Duration;
 use tempdir::TempDir;
 
-fn create_store() -> (Store, TempDir) {
+fn create_store() -> (Store<Multicodec, Multihash>, TempDir) {
     let tmp = TempDir::new("").unwrap();
     let mut config = Config::from_path_local(tmp.path()).unwrap();
     config.network.enable_mdns = false;
@@ -22,7 +25,9 @@ fn list_eqv() {
         Model => let mut vec = Vec::new(),
         Implementation => let mut list = {
             let (store, _) = create_store();
-            let fut = List::new(store, LEN, 3);
+            let mut config = CacheConfig::new(store, DagCborCodec);
+            config.size = LEN;
+            let fut = List::new(config, 3);
             task::block_on(fut).unwrap()
         },
         Push(usize)(i in 0..LEN) => {

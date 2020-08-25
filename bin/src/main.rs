@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(bytes) = store.get_local(&cid)? {
                 let data = bytes.to_vec().into_boxed_slice();
                 let block = Block::<Multicodec, Multihash>::new(cid, data);
-                let json = DagJsonCodec.encode_ipld(&block.decode_ipld()?)?;
+                let json = DagJsonCodec.encode(&block.decode_ipld()?)?;
                 println!("{}", std::str::from_utf8(&json)?);
             }
         }

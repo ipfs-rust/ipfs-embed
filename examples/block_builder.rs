@@ -1,6 +1,7 @@
 use ipfs_embed::{Config, Store};
-use ipld_block_builder::{BlockBuilder, Codec};
-use libipld::DagCbor;
+use libipld::cache::{Cache, CacheConfig, IpldCache, ReadonlyCache};
+use libipld::cbor::DagCborCodec;
+use libipld::{DagCbor, Multicodec, Multihash};
 
 #[derive(Clone, DagCbor, Debug, Eq, PartialEq)]
 struct Identity {
@@ -12,17 +13,17 @@ struct Identity {
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_path_local("/tmp/db")?;
-    let store = Store::new(config)?;
-    let codec = Codec::new();
-    let builder = BlockBuilder::new(store, codec);
+    let store = Store::<Multicodec, Multihash>::new(config)?;
+    let config = CacheConfig::new(store, DagCborCodec);
+    let cache = IpldCache::new(config);
 
     let identity = Identity {
         id: 0,
         name: "David Craven".into(),
         age: 26,
     };
-    let cid = builder.insert(&identity).await?;
-    let identity2 = builder.get(&cid).await?;
+    let cid = cache.insert(identity.clone()).await?;
+    let identity2 = cache.get(&cid).await?;
     assert_eq!(identity, identity2);
     println!("identity cid is {}", cid);
     Ok(())

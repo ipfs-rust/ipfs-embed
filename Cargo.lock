@@ -1154,6 +1154,7 @@ dependencies = [
  "env_logger",
  "futures",
  "ip_network",
+ "ipld-collections",
  "libipld",
  "libp2p",
  "libp2p-bitswap",
@@ -1175,6 +1176,15 @@ dependencies = [
  "ipfs-embed",
  "libipld",
  "sled",
+]
+
+[[package]]
+name = "ipld-collections"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe451814e84f2bad0f75ead05782b5f38f70b57f4b83442c2de241a86831a4b"
+dependencies = [
+ "libipld",
 ]
 
 [[package]]
@@ -1245,7 +1255,9 @@ checksum = "755456fae044e6fa1ebbbd1b3e902ae19e73097ed4ed87bb79934a867c007bc3"
 
 [[package]]
 name = "libipld"
-version = "0.3.1"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dcfef06ff1af915d35b840c64986ae0c83a064fdcd34e4c506e980436e1c0aab"
 dependencies = [
  "async-std",
  "async-trait",
@@ -1261,7 +1273,9 @@ dependencies = [
 
 [[package]]
 name = "libipld-cbor"
-version = "0.3.0"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "025039273c91b943ff9c0e5818e43b13bd8eddcbd71d50ad3b5c4f3a001c7062"
 dependencies = [
  "byteorder",
  "libipld-core",
@@ -1270,7 +1284,9 @@ dependencies = [
 
 [[package]]
 name = "libipld-cbor-derive"
-version = "0.3.0"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63c482f222852993f971370c4a452b9460ba848ae0757c414993e825e05e6b36"
 dependencies = [
  "proc-macro2 1.0.19",
  "quote 1.0.7",
@@ -1280,7 +1296,9 @@ dependencies = [
 
 [[package]]
 name = "libipld-core"
-version = "0.3.0"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef7d2c3293102e8e25230c6e00f25c84067f9a56f033e6ff18ad1ea5473a28f2"
 dependencies = [
  "anyhow",
  "multibase",
@@ -1291,7 +1309,9 @@ dependencies = [
 
 [[package]]
 name = "libipld-json"
-version = "0.3.0"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73fa78242b6e9fb8d17e5ba73c7554add83543f6fa07f6f26db8a93d4b94dec4"
 dependencies = [
  "base64",
  "libipld-core",
@@ -1301,14 +1321,18 @@ dependencies = [
 
 [[package]]
 name = "libipld-macro"
-version = "0.3.0"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e06b4b9e648e7b9089e794511eb902fa515ba8fbc8ea3377225e654272e6840"
 dependencies = [
  "libipld-core",
 ]
 
 [[package]]
 name = "libipld-pb"
-version = "0.3.0"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "feb620478c1158bd4fb862dac9f80df4c34ba315e1055b76c52ca221b1bad1e1"
 dependencies = [
  "libipld-core",
  "prost",
@@ -1347,9 +1371,9 @@ dependencies = [
 
 [[package]]
 name = "libp2p-bitswap"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54bbf7cb3765dff4350f5b73ada9e2441fd0775f72b1ba016022f0ab0cdf249b"
+checksum = "c62ec0af0cf8e8bb1cf125bc35155696a3d174c54a88426b759206954d8f4f80"
 dependencies = [
  "async-std",
  "fnv",
@@ -2598,9 +2622,9 @@ checksum = "c111b5bd5695e56cffe5129854aa230b39c93a305372fdbb2668ca2394eea9f8"
 
 [[package]]
 name = "sled"
-version = "0.34.2"
+version = "0.34.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e6a1b592011d7eb727a261d2f80608db11d7f02972c7016e8d4e74e67fe0daf"
+checksum = "fcbf56c35b0c3f9bc208fab35e45c3bc03137d3c1a4a85bdf0b8db69aecffb45"
 dependencies = [
  "crc32fast",
  "crossbeam-epoch",
@@ -2808,9 +2832,9 @@ dependencies = [
 
 [[package]]
 name = "tiny-cid"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a31818c2b5d7a20fa9e05bdf1a414c24e969ce5f338cce3bed266f23d108ec40"
+checksum = "723e2743581983ed9b7e5bda9a90908a892eb9e90504d04c996c850c81a375b2"
 dependencies = [
  "multibase",
  "tiny-multihash",
@@ -2828,9 +2852,9 @@ dependencies = [
 
 [[package]]
 name = "tiny-multihash"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6bfece37e24447c212bccb8583243e5010d3ddf65ab697281adf1536f759c12"
+checksum = "3eee5dddb519f1c08904f2bfb00a906f999ad8c21b4b63e52cf0b0b7df2f22cc"
 dependencies = [
  "blake2b_simd",
  "blake2s_simd",

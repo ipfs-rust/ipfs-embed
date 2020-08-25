@@ -84,6 +84,7 @@ impl<C: Codec, M: MultihashDigest> Store<C, M> {
 impl<C: Codec, M: MultihashDigest> ReadonlyStore for Store<C, M> {
     type Codec = C;
     type Multihash = M;
+    const MAX_BLOCK_SIZE: usize = crate::MAX_BLOCK_SIZE;
 
     fn get<'a>(&'a self, cid: Cid) -> StoreResult<'a, Block<C, M>> {
         Box::pin(async move {
@@ -133,8 +134,6 @@ mod tests {
     use super::*;
     use libipld::block::{Block, Visibility};
     use libipld::cbor::DagCborCodec;
-    use libipld::cid::DAG_CBOR;
-    use libipld::cid::RAW;
     use libipld::codec_impl::Multicodec;
     use libipld::ipld;
     use libipld::ipld::Ipld;
@@ -155,10 +154,7 @@ mod tests {
     }
 
     fn create_block(bytes: &[u8]) -> Block<Multicodec, Multihash> {
-        Block::<RawCodec, _>::encode(RAW, SHA2_256, bytes)
-            .unwrap()
-            .into_codec()
-            .unwrap()
+        Block::encode(RawCodec, SHA2_256, bytes).unwrap()
     }
 
     #[async_std::test]
@@ -252,8 +248,11 @@ mod tests {
             .map(|bytes| DagCborCodec.decode_ipld(&bytes).unwrap())
     }
 
-    async fn insert<C: Codec, M: MultihashDigest>(store: &Store<C, M>, ipld: &Ipld) -> Cid {
-        let block = Block::encode_ipld(DAG_CBOR, SHA2_256, ipld).unwrap();
+    async fn insert<C: Codec + From<DagCborCodec>, M: MultihashDigest>(
+        store: &Store<C, M>,
+        ipld: &Ipld,
+    ) -> Cid {
+        let block = Block::encode(DagCborCodec, SHA2_256, ipld).unwrap();
         store.insert(&block).await.unwrap();
         block.cid
     }
