@@ -94,7 +94,10 @@ impl<M: MultihashDigest> NetworkBehaviourEventProcess<KademliaEvent>
                     match num_remaining {
                         Some(0) => self.events.push_back(NetworkEvent::BootstrapComplete),
                         None => {
-                            log::error!("bootstrap timeout before self lookup completed");
+                            log::error!(
+                                "{}: bootstrap timeout before self lookup completed",
+                                self.node_name
+                            );
                             self.kad.bootstrap().ok();
                         }
                         _ => {}
@@ -138,7 +141,12 @@ impl<M: MultihashDigest> NetworkBehaviourEventProcess<PingEvent> for NetworkBack
     fn inject_event(&mut self, event: PingEvent) {
         // Don't really need to do anything here as ping handles disconnecting automatically.
         if let Err(err) = &event.result {
-            log::debug!("ping: {} {:?}", event.peer.to_base58(), err);
+            log::debug!(
+                "{}: ping: {} {:?}",
+                self.node_name,
+                event.peer.to_base58(),
+                err
+            );
         }
     }
 }
@@ -194,11 +202,11 @@ impl<M: MultihashDigest> NetworkBehaviourEventProcess<BitswapEvent> for NetworkB
         // Propagate bitswap events to the swarm.
         let event = match event {
             BitswapEvent::ReceivedBlock(peer_id, cid, data) => {
-                log::debug!("received block {}", cid.to_string());
+                log::debug!("{}: received block {}", self.node_name, cid.to_string());
                 NetworkEvent::ReceivedBlock(peer_id, cid, data)
             }
             BitswapEvent::ReceivedWant(peer_id, cid, _) => {
-                log::debug!("received want {}", cid.to_string());
+                log::debug!("{}: received want {}", self.node_name, cid.to_string());
                 NetworkEvent::ReceivedWant(peer_id, cid)
             }
             BitswapEvent::ReceivedCancel(_, _) => return,
@@ -259,6 +267,10 @@ impl<M: MultihashDigest> NetworkBackendBehaviour<M> {
         })
     }
 
+    pub fn node_name(&self) -> &str {
+        &self.node_name
+    }
+
     fn peer_name(&self, peer_id: &PeerId) -> String {
         self.peers
             .get(peer_id)
@@ -271,24 +283,24 @@ impl<M: MultihashDigest> NetworkBackendBehaviour<M> {
     }
 
     pub fn send_block(&mut self, peer_id: &PeerId, cid: Cid, data: Box<[u8]>) {
-        log::debug!("send {}", cid.to_string());
+        log::debug!("{}: send {}", self.node_name, cid.to_string());
         self.bitswap.send_block(peer_id, cid, data);
     }
 
     pub fn want_block(&mut self, cid: Cid, priority: Priority) {
-        log::debug!("want {}", cid.to_string());
+        log::debug!("{}: want {}", self.node_name, cid.to_string());
         let key = Key::new(&cid.hash().to_bytes());
         self.kad.get_providers(key);
         self.bitswap.want_block(cid, priority);
     }
 
     pub fn cancel_block(&mut self, cid: &Cid) {
-        log::debug!("cancel {}", cid.to_string());
+        log::debug!("{}: cancel {}", self.node_name, cid.to_string());
         self.bitswap.cancel_block(cid);
     }
 
     pub fn provide_block(&mut self, cid: &Cid) -> Result<()> {
-        log::debug!("provide {}", cid.to_string());
+        log::debug!("{}: provide {}", self.node_name, cid.to_string());
         let key = Key::new(&cid.hash().to_bytes());
         self.kad.start_providing(key).map_err(KadRecordError)?;
         Ok(())
@@ -301,7 +313,7 @@ impl<M: MultihashDigest> NetworkBackendBehaviour<M> {
     }
 
     pub fn unprovide_block(&mut self, cid: &Cid) {
-        log::debug!("unprovide {}", cid.to_string());
+        log::debug!("{}: unprovide {}", self.node_name, cid.to_string());
         let key = Key::new(&cid.hash().to_bytes());
         self.kad.stop_providing(&key);
     }

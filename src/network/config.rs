@@ -1,5 +1,6 @@
 use libp2p::core::{Multiaddr, PeerId};
 use libp2p::identity::{Keypair, PublicKey};
+use std::time::Duration;
 
 /// Network configuration.
 #[derive(Clone)]
@@ -20,6 +21,8 @@ pub struct NetworkConfig {
     pub enable_ping: bool,
     /// Should we insert non-global addresses into the DHT?
     pub allow_non_globals_in_dht: bool,
+    /// Block fetch timeout.
+    pub timeout: Duration,
 }
 
 impl NetworkConfig {
@@ -36,6 +39,7 @@ impl NetworkConfig {
             node_name: names::Generator::with_naming(names::Name::Numbered)
                 .next()
                 .unwrap(),
+            timeout: Duration::from_secs(20),
         }
     }
 
