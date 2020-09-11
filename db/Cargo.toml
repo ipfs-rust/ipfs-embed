@@ -1,0 +1,25 @@
+[package]
+name = "ipfs-embed-db"
+version = "0.5.0"
+authors = ["David Craven <david@craven.ch>"]
+edition = "2018"
+license = "MIT OR Apache-2.0"
+description = "small embeddable ipfs implementation"
+repository = "https://github.com/ipfs-rust/ipfs-embed"
+
+[dependencies]
+anyhow = "1.0.32"
+futures = "0.3.5"
+libipld = { version = "0.5.1", default-features = false }
+log = "0.4.11"
+parity-db = { git = "https://github.com/dvc94ch/parity-db", branch = "column-options" }
+parity-scale-codec = "1.3.5"
+serde = { version = "1.0.115", features = ["derive"] }
+sled = "0.34.4"
+thiserror = "1.0.20"
+tiny-cid = { version = "0.2.5", features = ["scale-codec"] }
+
+[dev-dependencies]
+env_logger = "0.7.1"
+libipld = { version = "0.5.1", features = ["dag-cbor"], default-features = false }
+tempdir = "0.3.7"
