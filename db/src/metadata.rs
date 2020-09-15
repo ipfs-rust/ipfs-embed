@@ -1,6 +1,7 @@
 use anyhow::Result;
 use futures::future::Future;
 use futures::stream::Stream;
+use ipfs_embed_core::StorageEvent;
 use libipld::cid::Cid;
 use sled::IVec;
 use std::borrow::Cow;
@@ -168,25 +169,19 @@ impl Metadata {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Event {
-    Insert(Cid),
-    Remove(Cid),
-}
-
 pub struct Subscription {
     keys: Option<sled::Iter>,
     subscriber: sled::Subscriber,
 }
 
 impl Stream for Subscription {
-    type Item = Event;
+    type Item = StorageEvent;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         if let Some(keys) = self.keys.as_mut() {
             if let Some(Ok((key, _))) = keys.next() {
                 let cid = Cid::try_from(&key[1..]).unwrap();
-                let entry = Event::Insert(cid);
+                let entry = StorageEvent::Insert(cid);
                 return Poll::Ready(Some(entry));
             }
         }
@@ -194,12 +189,12 @@ impl Stream for Subscription {
         match Pin::new(&mut self.subscriber).poll(cx) {
             Poll::Ready(Some(sled::Event::Insert { key, .. })) => {
                 let cid = Cid::try_from(&key[1..]).unwrap();
-                let entry = Event::Insert(cid);
+                let entry = StorageEvent::Insert(cid);
                 Poll::Ready(Some(entry))
             }
             Poll::Ready(Some(sled::Event::Remove { key })) => {
                 let cid = Cid::try_from(&key[1..]).unwrap();
-                let entry = Event::Remove(cid);
+                let entry = StorageEvent::Remove(cid);
                 Poll::Ready(Some(entry))
             }
             Poll::Pending => Poll::Pending,

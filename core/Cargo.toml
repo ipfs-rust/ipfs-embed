@@ -1,0 +1,11 @@
+[package]
+name = "ipfs-embed-core"
+version = "0.1.0"
+authors = ["David Craven <david@craven.ch>"]
+edition = "2018"
+
+[dependencies]
+anyhow = "1.0.32"
+futures = "0.3.5"
+libipld = { version = "0.5.1", default-features = false }
+libp2p-core = "0.22.1"

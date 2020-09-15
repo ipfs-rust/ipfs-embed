@@ -2,11 +2,10 @@ mod metadata;
 mod tx;
 mod wal;
 
-use crate::metadata::Metadata;
-pub use crate::metadata::{Event, Subscription};
+use crate::metadata::{Metadata, Subscription};
 use crate::tx::StateBuilder;
 use crate::wal::Wal;
-use anyhow::Result;
+use ipfs_embed_core::{Result, Storage};
 use libipld::cid::Cid;
 use libipld::codec::Decode as IpldDecode;
 use libipld::ipld::Ipld;
@@ -14,6 +13,7 @@ use libipld::store::{Op, StoreParams, Transaction};
 use parity_db::Db;
 use parity_scale_codec::{Decode, Encode};
 use std::collections::HashSet;
+use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::Mutex;
 use thiserror::Error;
@@ -38,13 +38,14 @@ fn cid_to_key(cid: &Cid) -> [u8; 32] {
     buf
 }
 
-pub struct BlockStore {
+pub struct BlockStore<S: StoreParams> {
+    _marker: PhantomData<S>,
     wal: Mutex<Wal<StoreOp>>,
     blocks: Db,
     metadata: Metadata,
 }
 
-impl BlockStore {
+impl<S: StoreParams + 'static> BlockStore<S> {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let wal = Wal::open(path.as_ref().join("wal"))?;
         let options = parity_db::Options {
@@ -72,6 +73,7 @@ impl BlockStore {
         let metadata = Metadata::new(tree);
 
         let me = Self {
+            _marker: PhantomData,
             wal: Mutex::new(wal),
             metadata,
             blocks,
@@ -86,7 +88,7 @@ impl BlockStore {
         Ok(self.blocks.get(0, &key[..]).map_err(ParityDbError)?)
     }
 
-    pub fn commit<S: StoreParams>(&self, tx: Transaction<S>) -> Result<()>
+    pub fn commit(&self, tx: Transaction<S>) -> Result<()>
     where
         Ipld: IpldDecode<S::Codecs>,
     {
@@ -176,10 +178,6 @@ impl BlockStore {
 
     pub fn contains(&self, cid: &Cid) -> Result<bool> {
         Ok(self.metadata.id(cid)?.is_some())
-    }
-
-    pub fn subscribe(&self) -> Subscription {
-        self.metadata.subscribe()
     }
 
     fn execute<'a, I>(&self, ops: I) -> Result<()>
@@ -281,6 +279,41 @@ impl BlockStore {
             }
         }
         Ok(blocks)
+    }
+}
+
+impl<S: StoreParams + Unpin + 'static> Storage<S> for BlockStore<S>
+where
+    Ipld: IpldDecode<S::Codecs>,
+{
+    type Subscription = Subscription;
+
+    fn get(&self, cid: &Cid) -> Result<Option<Vec<u8>>> {
+        self.get(cid)
+    }
+
+    fn commit(&self, tx: Transaction<S>) -> Result<()> {
+        self.commit(tx)
+    }
+
+    fn contains(&self, cid: &Cid) -> Result<bool> {
+        self.contains(cid)
+    }
+
+    fn blocks(&self) -> Result<Vec<(u64, Cid, u64)>> {
+        self.blocks()
+    }
+
+    fn references(&self, id: u64) -> Result<Vec<(u64, Cid)>> {
+        self.references(id)
+    }
+
+    fn referrers(&self, id: u64) -> Result<Vec<(u64, Cid)>> {
+        self.referrers(id)
+    }
+
+    fn subscribe(&self) -> Self::Subscription {
+        self.metadata.subscribe()
     }
 }
 

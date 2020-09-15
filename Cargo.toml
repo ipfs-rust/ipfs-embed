@@ -1,5 +1,5 @@
 [workspace]
-members = ["bin", "db"]
+members = ["bin", "core", "db", "net", "substrate"]
 
 [package]
 name = "ipfs-embed"
@@ -11,29 +11,21 @@ description = "small embeddable ipfs implementation"
 repository = "https://github.com/ipfs-rust/ipfs-embed"
 
 [dependencies]
-async-std = { version = "1.6.3", features = ["attributes", "unstable"] }
+async-std = "1.6.3"
 async-trait = "0.1.40"
 futures = "0.3.5"
-ip_network = "0.3.4"
+ipfs-embed-core = { path = "core" }
 ipfs-embed-db = { version = "0.5.0", path = "db" }
+ipfs-embed-net = { path = "net" }
+ipfs-embed-substrate = { path = "substrate" }
 libipld = { version = "0.5.1", default-features = false }
-libp2p-bitswap = "0.7.0"
 log = "0.4.11"
-names = "0.11.0"
-thiserror = "1.0.20"
-
-[dependencies.libp2p]
-version = "0.28.1"
-default-features = false
-features = ["identify", "kad", "mdns-async-std", "mplex", "noise", "ping", "tcp-async-std", "yamux"]
 
 [dev-dependencies]
 async-log = "2.0.0"
 criterion = "0.3.3"
 env_logger = "0.7.1"
-futures = "0.3.5"
 #ipld-collections = "0.2.0"
-libipld = "0.5.1"
 model = "0.1.2"
 tempdir = "0.3.7"
 
@@ -43,3 +35,7 @@ debug = true
 [[bench]]
 name = "list"
 harness = false
+
+[patch.crates-io]
+sc-network = { path = "../substrate/client/network" }
+sp-runtime = { path = "../substrate/primitives/runtime" }
