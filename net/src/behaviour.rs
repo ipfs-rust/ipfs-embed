@@ -4,7 +4,9 @@ use ipfs_embed_core::{Cid, MultihashDigest, NetworkEvent, Result};
 use libp2p::core::PeerId;
 use libp2p::identify::{Identify, IdentifyEvent};
 use libp2p::kad::record::store::MemoryStore;
-use libp2p::kad::{GetProvidersOk, Kademlia, KademliaEvent, QueryResult};
+use libp2p::kad::{
+    BootstrapError, BootstrapOk, GetProvidersOk, Kademlia, KademliaEvent, QueryResult,
+};
 use libp2p::mdns::{Mdns, MdnsEvent};
 use libp2p::multiaddr::Protocol;
 use libp2p::ping::{Ping, PingEvent};
@@ -71,11 +73,24 @@ impl<M: MultihashDigest> NetworkBehaviourEventProcess<KademliaEvent>
                         self.events.push_back(NetworkEvent::GetProvidersFailed(cid));
                     }
                 }
-                QueryResult::Bootstrap(Ok(_)) => {
-                    log::info!("{}: bootstrap complete", self.node_name);
+                QueryResult::Bootstrap(Ok(BootstrapOk { num_remaining, .. })) => {
+                    if num_remaining == 0 {
+                        log::info!("{}: bootstrap complete", self.node_name);
+                        self.events.push_back(NetworkEvent::BootstrapComplete);
+                    }
                 }
-                QueryResult::Bootstrap(Err(err)) => {
-                    log::info!("{}: bootstrap error {:?}", self.node_name, err);
+                QueryResult::Bootstrap(Err(BootstrapError::Timeout { num_remaining, .. })) => {
+                    match num_remaining {
+                        Some(0) => {
+                            log::info!("{}: bootstrap complete", self.node_name);
+                            self.events.push_back(NetworkEvent::BootstrapComplete);
+                        }
+                        None => {
+                            log::info!("{}: bootstrap timed out, retrying", self.node_name);
+                            self.kad.bootstrap().ok();
+                        }
+                        _ => {}
+                    }
                 }
                 _ => {}
             },

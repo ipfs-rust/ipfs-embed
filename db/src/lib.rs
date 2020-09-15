@@ -38,14 +38,14 @@ fn cid_to_key(cid: &Cid) -> [u8; 32] {
     buf
 }
 
-pub struct BlockStore<S: StoreParams> {
+pub struct StorageService<S: StoreParams> {
     _marker: PhantomData<S>,
     wal: Mutex<Wal<StoreOp>>,
     blocks: Db,
     metadata: Metadata,
 }
 
-impl<S: StoreParams + 'static> BlockStore<S> {
+impl<S: StoreParams + 'static> StorageService<S> {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let wal = Wal::open(path.as_ref().join("wal"))?;
         let options = parity_db::Options {
@@ -282,7 +282,7 @@ impl<S: StoreParams + 'static> BlockStore<S> {
     }
 }
 
-impl<S: StoreParams + Unpin + 'static> Storage<S> for BlockStore<S>
+impl<S: StoreParams + Unpin + 'static> Storage<S> for StorageService<S>
 where
     Ipld: IpldDecode<S::Codecs>,
 {
@@ -343,7 +343,7 @@ mod tests {
     fn test_gc() -> Result<()> {
         env_logger::try_init().ok();
         let tmp = TempDir::new("db").unwrap();
-        let store = BlockStore::open(tmp.path()).unwrap();
+        let store = StorageService::open(tmp.path()).unwrap();
         let a = create_block(&ipld!({ "a": [] }));
         let b = create_block(&ipld!({ "b": [a.cid()] }));
         let c = create_block(&ipld!({ "c": [a.cid()] }));
@@ -380,7 +380,7 @@ mod tests {
     fn test_gc_2() -> Result<()> {
         env_logger::try_init().ok();
         let tmp = TempDir::new("db").unwrap();
-        let store = BlockStore::open(tmp.path()).unwrap();
+        let store = StorageService::open(tmp.path()).unwrap();
         let a = create_block(&ipld!({ "a": [] }));
         let b = create_block(&ipld!({ "b": [a.cid()] }));
         let c = b.clone();

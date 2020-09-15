@@ -1,5 +1,5 @@
 use clap::Clap;
-use ipfs_embed_db::BlockStore;
+use ipfs_embed_db::StorageService;
 use libipld::block::Block;
 use libipld::cid::Cid;
 use libipld::codec::Codec;
@@ -38,7 +38,7 @@ pub struct IdCommand {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let opts = Opts::parse();
-    let store = BlockStore::open(&opts.path)?;
+    let store = StorageService::<DefaultStoreParams>::open(&opts.path)?;
     match opts.cmd {
         SubCommand::Ls => {
             for (id, cid, pin) in store.blocks()? {

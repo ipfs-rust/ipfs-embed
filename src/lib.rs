@@ -15,7 +15,8 @@ use futures::future::Future;
 use futures::sink::SinkExt;
 use futures::stream::Stream;
 use ipfs_embed_core::{
-    Block, Cid, Network, NetworkEvent, Result, Storage, StorageEvent, StoreParams, Transaction,
+    Block, Cid, Multiaddr, Network, NetworkEvent, PeerId, Result, Storage, StorageEvent,
+    StoreParams, Transaction,
 };
 use libipld::codec::Decode;
 use libipld::error::BlockNotFound;
@@ -63,6 +64,14 @@ where
             network,
             tx,
         }
+    }
+
+    pub fn local_peer_id(&self) -> &PeerId {
+        self.network.local_peer_id()
+    }
+
+    pub fn external_addresses(&self) -> Vec<Multiaddr> {
+        self.network.external_addresses()
     }
 }
 
@@ -132,6 +141,7 @@ struct IpfsTask<P: StoreParams, S: Storage<P>, N: Network<P>> {
     wanted: HashMap<Cid, Wanted<P>>,
     interval: Interval,
     timeout: Duration,
+    bootstrap_complete: bool,
 }
 
 impl<P, S, N> IpfsTask<P, S, N>
@@ -159,6 +169,7 @@ where
             wanted: Default::default(),
             timeout,
             interval: interval(timeout),
+            bootstrap_complete: false,
         }
     }
 }
@@ -178,6 +189,7 @@ where
                 Poll::Ready(Some((cid, tx))) => {
                     let entry = self.wanted.entry(cid.clone()).or_default();
                     entry.add_receiver(tx);
+                    self.network.providers(&cid);
                     self.network.want(cid, 1000);
                 }
                 Poll::Ready(None) => return Poll::Ready(()),
@@ -191,19 +203,24 @@ where
                 Poll::Ready(None) => return Poll::Ready(()),
                 Poll::Pending => break,
             };
+            log::trace!("{:?}", event);
             match event {
                 NetworkEvent::Providers(_cid, providers) => {
-                    let _peer_id = providers.into_iter().next().unwrap();
-                    // TODO
-                    //self.network.connect(peer_id);
+                    // TODO: smarter querying
+                    let peer_id = providers.into_iter().next().unwrap();
+                    self.network.connect(peer_id);
                 }
                 NetworkEvent::GetProvidersFailed(cid) => {
                     if let Some(_wanted) = self.wanted.remove(&cid) {
                         self.network.cancel(cid);
                     }
                 }
-                NetworkEvent::Providing(_cid) => {}
-                NetworkEvent::StartProvidingFailed(_cid) => {}
+                NetworkEvent::Providing(cid) => {
+                    log::trace!("providing {}", cid.to_string());
+                }
+                NetworkEvent::StartProvidingFailed(cid) => {
+                    log::trace!("providing {} failed", cid.to_string());
+                }
                 NetworkEvent::ReceivedBlock(_, cid, data) => {
                     let block = Block::new_unchecked(cid, data.to_vec());
                     if let Some(wanted) = self.wanted.remove(block.cid()) {
@@ -215,10 +232,11 @@ where
                     Ok(None) => log::trace!("don't have local block {}", cid.to_string()),
                     Err(err) => log::error!("failed to get local block {:?}", err),
                 },
+                NetworkEvent::BootstrapComplete => self.bootstrap_complete = true,
             }
         }
 
-        loop {
+        while self.bootstrap_complete {
             let event = match Pin::new(&mut self.storage_events).poll_next(ctx) {
                 Poll::Ready(Some(event)) => event,
                 Poll::Ready(None) => return Poll::Ready(()),
@@ -268,23 +286,31 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ipfs_embed_db::StorageService;
+    use ipfs_embed_net::{NetworkConfig, NetworkService};
     use libipld::block::Block;
-    use libipld::codec_impl::Multicodec;
-    use libipld::multihash::{Multihash, SHA2_256};
+    use libipld::multihash::SHA2_256;
     use libipld::raw::RawCodec;
+    use libipld::store::DefaultStoreParams;
     use std::time::Duration;
     use tempdir::TempDir;
 
-    fn create_store(bootstrap: Vec<(Multiaddr, PeerId)>) -> (Ipfs<Multicodec, Multihash>, TempDir) {
+    type Storage = StorageService<DefaultStoreParams>;
+    type Network = NetworkService<DefaultStoreParams>;
+    type DefaultIpfs = Ipfs<DefaultStoreParams, Storage, Network>;
+
+    fn create_store(bootstrap: Vec<(Multiaddr, PeerId)>) -> (DefaultIpfs, TempDir) {
         let tmp = TempDir::new("").unwrap();
         let mut config = NetworkConfig::new();
         config.enable_mdns = bootstrap.is_empty();
         config.boot_nodes = bootstrap;
-        let ipfs = Ipfs::new(tmp.path(), config).unwrap();
+        let storage = Arc::new(StorageService::open(tmp.path()).unwrap());
+        let network = Arc::new(NetworkService::new(config).unwrap());
+        let ipfs = Ipfs::new(storage, network, Duration::from_secs(5));
         (ipfs, tmp)
     }
 
-    fn create_block(bytes: &[u8]) -> Block<Ipfs<Multicodec, Multihash>> {
+    fn create_block(bytes: &[u8]) -> Block<DefaultStoreParams> {
         Block::encode(RawCodec, SHA2_256, bytes).unwrap()
     }
 
@@ -342,7 +368,10 @@ mod tests {
         let (store, _) = create_store(vec![]);
         // make sure bootstrap node has started
         task::sleep(Duration::from_millis(1000)).await;
-        let bootstrap = vec![(store.address().clone(), store.peer_id().clone())];
+        let bootstrap = vec![(
+            store.external_addresses()[0].clone(),
+            store.local_peer_id().clone(),
+        )];
         let (store1, _) = create_store(bootstrap.clone());
         let (store2, _) = create_store(bootstrap);
         let block = create_block(b"test_exchange_kad");

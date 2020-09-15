@@ -49,6 +49,10 @@ impl<B: Block + 'static, H: ExHashT, S: StoreParams + Unpin + 'static> Network<S
         self.net.providers(key);
     }
 
+    fn connect(&self, _peer_id: PeerId) {
+        // TODO
+    }
+
     fn want(&self, cid: Cid, priority: i32) {
         self.net.bitswap_want_block(cid, priority)
     }

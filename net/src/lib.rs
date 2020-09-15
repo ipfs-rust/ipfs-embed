@@ -1,6 +1,6 @@
 use async_std::task;
 use futures::channel::mpsc;
-use futures::future::Future;
+use futures::future::{Future, FutureExt};
 use futures::stream::Stream;
 use ipfs_embed_core::{Cid, MultihashDigest, Network, NetworkEvent, PeerId, Result, StoreParams};
 use libp2p::core::transport::upgrade::Version;
@@ -52,6 +52,14 @@ impl<S: StoreParams> NetworkService<S> {
             Swarm::add_external_address(&mut swarm, addr);
         }
 
+        let addr = loop {
+            match swarm.next_event().now_or_never() {
+                Some(SwarmEvent::NewListenAddr(addr)) => break addr,
+                Some(SwarmEvent::ListenerClosed { reason, .. }) => reason?,
+                _ => {}
+            }
+        };
+
         let (tx, rx) = mpsc::unbounded();
 
         task::spawn(NetworkWorker {
@@ -64,7 +72,7 @@ impl<S: StoreParams> NetworkService<S> {
             _marker: PhantomData,
             tx,
             local_peer_id: peer_id,
-            external_addresses: Default::default(),
+            external_addresses: vec![addr],
         })
     }
 }
@@ -73,6 +81,7 @@ enum SwarmMsg {
     Provide(Key),
     Unprovide(Key),
     Providers(Key),
+    Connect(PeerId),
     Want(Cid, i32),
     Cancel(Cid),
     SendTo(PeerId, Cid, Vec<u8>),
@@ -106,6 +115,10 @@ impl<S: StoreParams + 'static> Network<S> for NetworkService<S> {
         self.tx.unbounded_send(SwarmMsg::Providers(key)).ok();
     }
 
+    fn connect(&self, peer_id: PeerId) {
+        self.tx.unbounded_send(SwarmMsg::Connect(peer_id)).ok();
+    }
+
     fn want(&self, cid: Cid, priority: i32) {
         self.tx.unbounded_send(SwarmMsg::Want(cid, priority)).ok();
     }
@@ -115,7 +128,9 @@ impl<S: StoreParams + 'static> Network<S> for NetworkService<S> {
     }
 
     fn send_to(&self, peer_id: PeerId, cid: Cid, data: Vec<u8>) {
-        self.tx.unbounded_send(SwarmMsg::SendTo(peer_id, cid, data)).ok();
+        self.tx
+            .unbounded_send(SwarmMsg::SendTo(peer_id, cid, data))
+            .ok();
     }
 
     fn send(&self, cid: Cid, data: Vec<u8>) {
@@ -153,6 +168,7 @@ impl<M: MultihashDigest> Future for NetworkWorker<M> {
                 SwarmMsg::Providers(cid) => {
                     let _ = self.swarm.kad().get_providers(cid);
                 }
+                SwarmMsg::Connect(peer_id) => self.swarm.bitswap().connect(peer_id),
                 SwarmMsg::Want(cid, priority) => self.swarm.bitswap().want_block(cid, priority),
                 SwarmMsg::Cancel(cid) => self.swarm.bitswap().cancel_block(&cid),
                 SwarmMsg::SendTo(peer_id, cid, data) => {
@@ -170,9 +186,8 @@ impl<M: MultihashDigest> Future for NetworkWorker<M> {
                 Poll::Pending => break,
                 Poll::Ready(None) => return Poll::Ready(()),
             };
-            self.subscriptions.retain(|s| {
-                s.unbounded_send(ev.clone()).is_ok()
-            })
+            self.subscriptions
+                .retain(|s| s.unbounded_send(ev.clone()).is_ok())
         }
         Poll::Pending
     }

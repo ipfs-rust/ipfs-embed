@@ -9,6 +9,7 @@ use std::collections::HashSet;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NetworkEvent {
+    BootstrapComplete,
     Providers(Cid, HashSet<PeerId>),
     GetProvidersFailed(Cid),
     Providing(Cid),
@@ -24,6 +25,7 @@ pub trait Network<S: StoreParams>: Send + Sync + 'static {
     fn providers(&self, cid: &Cid);
     fn provide(&self, cid: &Cid);
     fn unprovide(&self, cid: &Cid);
+    fn connect(&self, peer_id: PeerId);
     fn want(&self, cid: Cid, priority: i32);
     fn cancel(&self, cid: Cid);
     fn send_to(&self, peer_id: PeerId, cid: Cid, data: Vec<u8>);
