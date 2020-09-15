@@ -10,14 +10,20 @@ license = "MIT OR Apache-2.0"
 description = "small embeddable ipfs implementation"
 repository = "https://github.com/ipfs-rust/ipfs-embed"
 
+[features]
+default = ["db", "net"]
+db = ["ipfs-embed-db"]
+net = ["ipfs-embed-net"]
+substrate = ["ipfs-embed-substrate"]
+
 [dependencies]
-async-std = "1.6.3"
+async-std = { version = "1.6.3", features = ["unstable"] }
 async-trait = "0.1.40"
 futures = "0.3.5"
 ipfs-embed-core = { path = "core" }
-ipfs-embed-db = { version = "0.5.0", path = "db" }
-ipfs-embed-net = { path = "net" }
-ipfs-embed-substrate = { path = "substrate" }
+ipfs-embed-db = { version = "0.5.0", path = "db", optional = true }
+ipfs-embed-net = { path = "net", optional = true }
+ipfs-embed-substrate = { path = "substrate", optional = true }
 libipld = { version = "0.5.1", default-features = false }
 log = "0.4.11"
 

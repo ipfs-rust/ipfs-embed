@@ -2,9 +2,16 @@
 //!
 //! ```
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! use ipfs_embed::{Config, Store, Multicodec, Multihash};
-//! let config = Config::from_path_local("/tmp/db")?;
-//! let store = Store::<Multicodec, Multihash>::new(config)?;
+//! use ipfs_embed::Ipfs;
+//! use ipfs_embed::db::StorageService;
+//! use ipfs_embed::net::{NetworkConfig, NetworkService};
+//! use libipld::DefaultStoreParams;
+//! use std::sync::Arc;
+//! use std::time::Duration;
+//! let config = NetworkConfig::new();
+//! let storage = Arc::new(StorageService::open("/tmp/ipfs-embed").unwrap());
+//! let network = Arc::new(NetworkService::new(config).unwrap());
+//! let ipfs = Ipfs::<DefaultStoreParams, _, _>::new(storage, network, Duration::from_secs(5));
 //! # Ok(()) }
 //! ```
 use async_std::stream::{interval, Interval};
@@ -29,6 +36,14 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use std::time::Instant;
+
+pub use ipfs_embed_core as core;
+#[cfg(feature = "db")]
+pub use ipfs_embed_db as db;
+#[cfg(feature = "net")]
+pub use ipfs_embed_net as net;
+#[cfg(feature = "substrate")]
+pub use ipfs_embed_substrate as substrate;
 
 pub struct Ipfs<P, S, N> {
     _marker: PhantomData<P>,
@@ -207,13 +222,12 @@ where
             match event {
                 NetworkEvent::Providers(_cid, providers) => {
                     // TODO: smarter querying
-                    let peer_id = providers.into_iter().next().unwrap();
-                    self.network.connect(peer_id);
+                    if let Some(peer_id) = providers.into_iter().next() {
+                        self.network.connect(peer_id);
+                    }
                 }
                 NetworkEvent::GetProvidersFailed(cid) => {
-                    if let Some(_wanted) = self.wanted.remove(&cid) {
-                        self.network.cancel(cid);
-                    }
+                    log::trace!("get providers for {} failed", cid.to_string());
                 }
                 NetworkEvent::Providing(cid) => {
                     log::trace!("providing {}", cid.to_string());
@@ -304,6 +318,7 @@ mod tests {
         let mut config = NetworkConfig::new();
         config.enable_mdns = bootstrap.is_empty();
         config.boot_nodes = bootstrap;
+        config.allow_non_globals_in_dht = true;
         let storage = Arc::new(StorageService::open(tmp.path()).unwrap());
         let network = Arc::new(NetworkService::new(config).unwrap());
         let ipfs = Ipfs::new(storage, network, Duration::from_secs(5));
