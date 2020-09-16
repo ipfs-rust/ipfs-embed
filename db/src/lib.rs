@@ -48,25 +48,20 @@ pub struct StorageService<S: StoreParams> {
 impl<S: StoreParams + 'static> StorageService<S> {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let wal = Wal::open(path.as_ref().join("wal"))?;
-        let options = parity_db::Options {
+        let mut options = parity_db::Options {
             path: path.as_ref().join("blocks"),
-            columns: vec![parity_db::ColumnOptions {
-                // the key is the hash of the value
-                preimage: true,
-                // and has an uniform distribution
-                uniform: true,
-                // table value sizes (maximum size supported by parity_db is 65533)
-                sizes: [
-                    96, 128, 192, 256, 320, 512, 768, 1024, 1536, 2048, 3072, 4096, 8192, 16384,
-                    32768,
-                ],
-                // we do our own refcounting
-                ref_counted: false,
-            }],
+            columns: vec![Default::default()],
             // we do our own durability
             sync: false,
             stats: false,
         };
+        // the key is the hash of the value
+        options.columns[0].preimage = true;
+        // and has an uniform distribution
+        options.columns[0].uniform = true;
+        // we do our own refcounting
+        options.columns[0].ref_counted = false;
+
         let blocks = Db::open(&options).map_err(ParityDbError)?;
         let db = sled::open(path.as_ref().join("metadata"))?;
         let tree = db.open_tree("metadata")?;

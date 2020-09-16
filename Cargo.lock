@@ -2003,7 +2003,8 @@ checksum = "2ac6fe3538f701e339953a3ebbe4f39941aababa8a3f6964635b24ab526daeac"
 [[package]]
 name = "parity-db"
 version = "0.1.2"
-source = "git+https://github.com/dvc94ch/parity-db?branch=column-options#f5876b7911dd8240e77d39545829d4ec333a6ec3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00d595e372d119261593297debbe4193811a4dc811d2a1ccbb8caaa6666ad7ab"
 dependencies = [
  "blake2-rfc",
  "crc32fast",
