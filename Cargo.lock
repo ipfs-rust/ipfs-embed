@@ -1276,7 +1276,7 @@ checksum = "2ee15951c035f79eddbef745611ec962f63f4558f1dadf98ab723cc603487c6f"
 
 [[package]]
 name = "ipfs-embed"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-log",
  "async-std",
@@ -1295,7 +1295,7 @@ dependencies = [
 
 [[package]]
 name = "ipfs-embed-cli"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-std",
  "clap 3.0.0-beta.1",
@@ -1306,7 +1306,7 @@ dependencies = [
 
 [[package]]
 name = "ipfs-embed-core"
-version = "0.1.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -1316,7 +1316,7 @@ dependencies = [
 
 [[package]]
 name = "ipfs-embed-db"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -1335,7 +1335,7 @@ dependencies = [
 
 [[package]]
 name = "ipfs-embed-net"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-std",
  "futures",

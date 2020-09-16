@@ -1,6 +1,6 @@
 [package]
 name = "ipfs-embed-cli"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["David Craven <david@craven.ch>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
@@ -11,5 +11,5 @@ repository = "https://github.com/ipfs-rust/ipfs-embed"
 async-std = "1.6.3"
 clap = "3.0.0-beta.1"
 env_logger = "0.7.1"
-ipfs-embed-db = { version = "0.5.0", path = "../db" }
+ipfs-embed-db = { version = "0.6.0", path = "../db" }
 libipld = { version = "0.5.1", features = ["dag-cbor", "dag-json", "dag-pb"] }

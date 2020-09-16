@@ -1,8 +1,11 @@
 [package]
 name = "ipfs-embed-core"
-version = "0.1.0"
+version = "0.6.0"
 authors = ["David Craven <david@craven.ch>"]
 edition = "2018"
+license = "MIT OR Apache-2.0"
+description = "small embeddable ipfs implementation"
+repository = "https://github.com/ipfs-rust/ipfs-embed"
 
 [dependencies]
 anyhow = "1.0.32"

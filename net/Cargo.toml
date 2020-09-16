@@ -1,6 +1,6 @@
 [package]
 name = "ipfs-embed-net"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["David Craven <david@craven.ch>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
@@ -11,7 +11,7 @@ repository = "https://github.com/ipfs-rust/ipfs-embed"
 async-std = "1.6.3"
 futures = "0.3.5"
 ip_network = "0.3.4"
-ipfs-embed-core = { path = "../core" }
+ipfs-embed-core = { version = "0.6.0", path = "../core" }
 libp2p-bitswap = "0.7.0"
 log = "0.4.11"
 names = "0.11.0"
