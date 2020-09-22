@@ -3,7 +3,7 @@ pub use futures::stream::Stream;
 pub use libipld::block::Block;
 pub use libipld::cid::Cid;
 pub use libipld::multihash::MultihashDigest;
-pub use libipld::store::{Store, StoreParams, Transaction};
+pub use libipld::store::{Store, StoreParams};
 pub use libp2p_core::{Multiaddr, PeerId};
 use std::collections::HashSet;
 
@@ -42,10 +42,9 @@ pub enum StorageEvent {
 pub trait Storage<S: StoreParams>: Send + Sync + 'static {
     type Subscription: Stream<Item = StorageEvent> + Send + Unpin;
     fn get(&self, cid: &Cid) -> Result<Option<Vec<u8>>>;
-    fn commit(&self, tx: Transaction<S>) -> Result<()>;
-    fn contains(&self, cid: &Cid) -> Result<bool>;
-    fn blocks(&self) -> Result<Vec<(u64, Cid, u64)>>;
-    fn references(&self, id: u64) -> Result<Vec<(u64, Cid)>>;
-    fn referrers(&self, id: u64) -> Result<Vec<(u64, Cid)>>;
+    fn insert(&self, block: &Block<S>) -> Result<()>;
+    fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()>;
+    fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>>;
+    fn status(&self, cid: &Cid) -> Result<Option<bool>>;
     fn subscribe(&self) -> Self::Subscription;
 }
