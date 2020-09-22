@@ -23,7 +23,7 @@ use futures::sink::SinkExt;
 use futures::stream::Stream;
 use ipfs_embed_core::{
     Block, Cid, Multiaddr, Network, NetworkEvent, PeerId, Result, Storage, StorageEvent,
-    StoreParams, Transaction,
+    StoreParams,
 };
 use libipld::codec::Decode;
 use libipld::error::BlockNotFound;
@@ -42,8 +42,6 @@ pub use ipfs_embed_core as core;
 pub use ipfs_embed_db as db;
 #[cfg(feature = "net")]
 pub use ipfs_embed_net as net;
-#[cfg(feature = "substrate")]
-pub use ipfs_embed_substrate as substrate;
 
 pub struct Ipfs<P, S, N> {
     _marker: PhantomData<P>,
@@ -106,16 +104,25 @@ where
             return Ok(block);
         }
         let (tx, rx) = oneshot::channel();
-        self.tx.clone().send((cid.clone(), tx)).await?;
+        self.tx.clone().send((*cid, tx)).await?;
         if let Ok(block) = rx.await {
             return Ok(block);
         }
-        Err(BlockNotFound(cid.to_string()).into())
+        Err(BlockNotFound(*cid).into())
     }
 
-    async fn commit(&self, tx: Transaction<P>) -> Result<()> {
-        self.storage.commit(tx)?;
+    async fn insert(&self, block: &Block<P>) -> Result<()> {
+        self.storage.insert(block)?;
         Ok(())
+    }
+
+    async fn alias<T: AsRef<[u8]> + Send + Sync>(&self, alias: T, cid: Option<&Cid>) -> Result<()> {
+        self.storage.alias(alias.as_ref(), cid)?;
+        Ok(())
+    }
+
+    async fn resolve<T: AsRef<[u8]> + Send + Sync>(&self, alias: T) -> Result<Option<Cid>> {
+        self.storage.resolve(alias.as_ref())
     }
 }
 
@@ -334,7 +341,7 @@ mod tests {
         env_logger::try_init().ok();
         let (store, _) = create_store(vec![]);
         let block = create_block(b"test_local_store");
-        store.insert(block.clone()).await.unwrap();
+        store.insert(&block).await.unwrap();
         let block2 = store.get(block.cid()).await.unwrap();
         assert_eq!(block.data(), block2.data());
     }
@@ -346,7 +353,7 @@ mod tests {
         let (store1, _) = create_store(vec![]);
         let (store2, _) = create_store(vec![]);
         let block = create_block(b"test_exchange_mdns");
-        store1.insert(block.clone()).await.unwrap();
+        store1.insert(&block).await.unwrap();
         let block2 = store2.get(block.cid()).await.unwrap();
         assert_eq!(block.data(), block2.data());
     }
@@ -364,7 +371,7 @@ mod tests {
 
         task::sleep(Duration::from_millis(100)).await;
 
-        store1.insert(block.clone()).await.unwrap();
+        store1.insert(&block).await.unwrap();
 
         let block2 = get.await.unwrap();
         assert_eq!(block.data(), block2.data());
@@ -390,7 +397,7 @@ mod tests {
         let (store1, _) = create_store(bootstrap.clone());
         let (store2, _) = create_store(bootstrap);
         let block = create_block(b"test_exchange_kad");
-        store1.insert(block.clone()).await.unwrap();
+        store1.insert(&block).await.unwrap();
         // wait for entry to propagate
         task::sleep(Duration::from_millis(1000)).await;
         let block2 = store2.get(block.cid()).await.unwrap();

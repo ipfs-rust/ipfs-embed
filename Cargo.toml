@@ -16,7 +16,7 @@ db = ["ipfs-embed-db"]
 net = ["ipfs-embed-net"]
 
 [dependencies]
-async-std = { version = "1.6.3", features = ["unstable"] }
+async-std = { version = "1.6.4", features = ["unstable"] }
 async-trait = "0.1.40"
 futures = "0.3.5"
 ipfs-embed-core = { version = "0.6.0", path = "core" }
@@ -39,3 +39,6 @@ debug = true
 [[bench]]
 name = "list"
 harness = false
+
+[patch.crates-io]
+libipld = { path = "../rust-ipld" }

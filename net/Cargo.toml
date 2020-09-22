@@ -8,11 +8,11 @@ description = "small embeddable ipfs implementation"
 repository = "https://github.com/ipfs-rust/ipfs-embed"
 
 [dependencies]
-async-std = "1.6.3"
+async-std = "1.6.4"
 futures = "0.3.5"
 ip_network = "0.3.4"
 ipfs-embed-core = { version = "0.6.0", path = "../core" }
-libp2p-bitswap = "0.7.0"
+libp2p-bitswap = "0.7.1"
 log = "0.4.11"
 names = "0.11.0"
 thiserror = "1.0.20"
