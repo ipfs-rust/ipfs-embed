@@ -1,6 +1,6 @@
 [package]
 name = "ipfs-embed-db"
-version = "0.6.0"
+version = "0.7.0"
 authors = ["David Craven <david@craven.ch>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
@@ -13,7 +13,7 @@ async-std = { version = "1.6.4", features = ["unstable"] }
 cuckoofilter = "0.5.0"
 fnv = "1.0.7"
 futures = "0.3.5"
-ipfs-embed-core = { version = "0.6.0", path = "../core" }
+ipfs-embed-core = { version = "0.7.0", path = "../core" }
 libipld = { version = "0.6.0", default-features = false }
 log = "0.4.11"
 sled = "0.34.4"
