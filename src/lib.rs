@@ -8,10 +8,14 @@
 //! use libipld::DefaultStoreParams;
 //! use std::sync::Arc;
 //! use std::time::Duration;
-//! let config = NetworkConfig::new();
-//! let storage = Arc::new(StorageService::open("/tmp/ipfs-embed").unwrap());
-//! let network = Arc::new(NetworkService::new(config).unwrap());
-//! let ipfs = Ipfs::<DefaultStoreParams, _, _>::new(storage, network, Duration::from_secs(5));
+//! let sled_config = sled::Config::new().temporary(true);
+//! let cache_size = 10;
+//! let sweep_interval = Duration::from_millis(10000);
+//! let network_timeout = Duration::from_secs(5);
+//! let net_config = NetworkConfig::new();
+//! let storage = Arc::new(StorageService::open(&sled_config, cache_size, sweep_interval).unwrap());
+//! let network = Arc::new(NetworkService::new(net_config).unwrap());
+//! let ipfs = Ipfs::<DefaultStoreParams, _, _>::new(storage, network, network_timeout);
 //! # Ok(()) }
 //! ```
 use async_std::stream::{interval, Interval};
@@ -86,6 +90,10 @@ where
     pub fn external_addresses(&self) -> Vec<Multiaddr> {
         self.network.external_addresses()
     }
+
+    pub async fn pinned(&self, cid: &Cid) -> Result<Option<bool>> {
+        self.storage.pinned(cid).await
+    }
 }
 
 #[async_trait]
@@ -100,12 +108,13 @@ where
 
     async fn get(&self, cid: &Cid) -> Result<Block<P>> {
         if let Some(data) = self.storage.get(cid)? {
-            let block = Block::new_unchecked(cid.clone(), data);
+            let block = Block::new_unchecked(*cid, data);
             return Ok(block);
         }
         let (tx, rx) = oneshot::channel();
         self.tx.clone().send((*cid, tx)).await?;
         if let Ok(block) = rx.await {
+            self.storage.insert(&block)?;
             return Ok(block);
         }
         Err(BlockNotFound(*cid).into())
@@ -117,8 +126,15 @@ where
     }
 
     async fn alias<T: AsRef<[u8]> + Send + Sync>(&self, alias: T, cid: Option<&Cid>) -> Result<()> {
-        self.storage.alias(alias.as_ref(), cid)?;
-        Ok(())
+        loop {
+            if let Err(err) = self.storage.alias(alias.as_ref(), cid).await {
+                if let Some(BlockNotFound(cid)) = err.downcast_ref::<BlockNotFound>() {
+                    self.get(cid).await?;
+                }
+            } else {
+                return Ok(());
+            }
+        }
     }
 
     async fn resolve<T: AsRef<[u8]> + Send + Sync>(&self, alias: T) -> Result<Option<Cid>> {
@@ -191,7 +207,7 @@ where
             wanted: Default::default(),
             timeout,
             interval: interval(timeout),
-            bootstrap_complete: false,
+            bootstrap_complete: true,
         }
     }
 }
@@ -209,7 +225,7 @@ where
         loop {
             match Pin::new(&mut self.rx).poll_next(ctx) {
                 Poll::Ready(Some((cid, tx))) => {
-                    let entry = self.wanted.entry(cid.clone()).or_default();
+                    let entry = self.wanted.entry(cid).or_default();
                     entry.add_receiver(tx);
                     self.network.providers(&cid);
                     self.network.want(cid, 1000);
@@ -293,7 +309,7 @@ where
                 if wanted.timestamp > timedout {
                     true
                 } else {
-                    self.network.cancel(cid.clone());
+                    self.network.cancel(*cid);
                     false
                 }
             });
@@ -310,26 +326,32 @@ mod tests {
     use ipfs_embed_db::StorageService;
     use ipfs_embed_net::{NetworkConfig, NetworkService};
     use libipld::block::Block;
+    use libipld::cbor::DagCborCodec;
     use libipld::multihash::SHA2_256;
     use libipld::raw::RawCodec;
     use libipld::store::DefaultStoreParams;
+    use libipld::{alias, ipld};
     use std::time::Duration;
-    use tempdir::TempDir;
 
     type Storage = StorageService<DefaultStoreParams>;
     type Network = NetworkService<DefaultStoreParams>;
     type DefaultIpfs = Ipfs<DefaultStoreParams, Storage, Network>;
 
-    fn create_store(bootstrap: Vec<(Multiaddr, PeerId)>) -> (DefaultIpfs, TempDir) {
-        let tmp = TempDir::new("").unwrap();
-        let mut config = NetworkConfig::new();
-        config.enable_mdns = bootstrap.is_empty();
-        config.boot_nodes = bootstrap;
-        config.allow_non_globals_in_dht = true;
-        let storage = Arc::new(StorageService::open(tmp.path()).unwrap());
-        let network = Arc::new(NetworkService::new(config).unwrap());
-        let ipfs = Ipfs::new(storage, network, Duration::from_secs(5));
-        (ipfs, tmp)
+    fn create_store(bootstrap: Vec<(Multiaddr, PeerId)>) -> DefaultIpfs {
+        let sled_config = sled::Config::new().temporary(true);
+        let cache_size = 10;
+        let sweep_interval = Duration::from_millis(10000);
+        let network_timeout = Duration::from_secs(5);
+
+        let mut net_config = NetworkConfig::new();
+        net_config.enable_mdns = bootstrap.is_empty();
+        net_config.boot_nodes = bootstrap;
+        net_config.allow_non_globals_in_dht = true;
+
+        let storage =
+            Arc::new(StorageService::open(&sled_config, cache_size, sweep_interval).unwrap());
+        let network = Arc::new(NetworkService::new(net_config).unwrap());
+        Ipfs::new(storage, network, network_timeout)
     }
 
     fn create_block(bytes: &[u8]) -> Block<DefaultStoreParams> {
@@ -339,7 +361,7 @@ mod tests {
     #[async_std::test]
     async fn test_local_store() {
         env_logger::try_init().ok();
-        let (store, _) = create_store(vec![]);
+        let store = create_store(vec![]);
         let block = create_block(b"test_local_store");
         store.insert(&block).await.unwrap();
         let block2 = store.get(block.cid()).await.unwrap();
@@ -350,8 +372,8 @@ mod tests {
     #[cfg(not(target_os = "macos"))] // mdns doesn't work on macos in github actions
     async fn test_exchange_mdns() {
         env_logger::try_init().ok();
-        let (store1, _) = create_store(vec![]);
-        let (store2, _) = create_store(vec![]);
+        let store1 = create_store(vec![]);
+        let store2 = create_store(vec![]);
         let block = create_block(b"test_exchange_mdns");
         store1.insert(&block).await.unwrap();
         let block2 = store2.get(block.cid()).await.unwrap();
@@ -362,11 +384,11 @@ mod tests {
     #[cfg(not(target_os = "macos"))] // mdns doesn't work on macos in github action
     async fn test_received_want_before_insert() {
         env_logger::try_init().ok();
-        let (store1, _) = create_store(vec![]);
-        let (store2, _) = create_store(vec![]);
+        let store1 = create_store(vec![]);
+        let store2 = create_store(vec![]);
         let block = create_block(b"test_received_want_before_insert");
 
-        let get_cid = block.cid().clone();
+        let get_cid = *block.cid();
         let get = task::spawn(async move { store2.get(&get_cid).await });
 
         task::sleep(Duration::from_millis(100)).await;
@@ -387,15 +409,15 @@ mod tests {
         .start(log::LevelFilter::Trace)
         .ok();
 
-        let (store, _) = create_store(vec![]);
+        let store = create_store(vec![]);
         // make sure bootstrap node has started
         task::sleep(Duration::from_millis(1000)).await;
         let bootstrap = vec![(
             store.external_addresses()[0].clone(),
             store.local_peer_id().clone(),
         )];
-        let (store1, _) = create_store(bootstrap.clone());
-        let (store2, _) = create_store(bootstrap);
+        let store1 = create_store(bootstrap.clone());
+        let store2 = create_store(bootstrap);
         let block = create_block(b"test_exchange_kad");
         store1.insert(&block).await.unwrap();
         // wait for entry to propagate
@@ -407,7 +429,7 @@ mod tests {
     #[async_std::test]
     async fn test_provider_not_found() {
         env_logger::try_init().ok();
-        let (store1, _) = create_store(vec![]);
+        let store1 = create_store(vec![]);
         let block = create_block(b"test_provider_not_found");
         if store1
             .get(block.cid())
@@ -418,5 +440,77 @@ mod tests {
         {
             panic!("expected block not found error");
         }
+    }
+
+    macro_rules! assert_pinned {
+        ($store:expr, $block:expr) => {
+            assert_eq!($store.pinned($block.cid()).await.unwrap(), Some(true));
+        };
+    }
+
+    macro_rules! assert_unpinned {
+        ($store:expr, $block:expr) => {
+            assert_eq!($store.pinned($block.cid()).await.unwrap(), Some(false));
+        };
+    }
+
+    fn create_ipld_block(ipld: &Ipld) -> Block<DefaultStoreParams> {
+        Block::encode(DagCborCodec, SHA2_256, ipld).unwrap()
+    }
+
+    #[async_std::test]
+    async fn test_sync() {
+        env_logger::try_init().ok();
+        let local1 = create_store(vec![]);
+        let local2 = create_store(vec![]);
+        let a1 = create_ipld_block(&ipld!({ "a": 0 }));
+        let b1 = create_ipld_block(&ipld!({ "b": 0 }));
+        let c1 = create_ipld_block(&ipld!({ "c": [a1.cid(), b1.cid()] }));
+        let b2 = create_ipld_block(&ipld!({ "b": 1 }));
+        let c2 = create_ipld_block(&ipld!({ "c": [a1.cid(), b2.cid()] }));
+        let x = alias!(x);
+
+        local1.insert(&a1).await.unwrap();
+        local1.insert(&b1).await.unwrap();
+        local1.insert(&c1).await.unwrap();
+        local1.alias(x, Some(c1.cid())).await.unwrap();
+        assert_pinned!(&local1, &a1);
+        assert_pinned!(&local1, &b1);
+        assert_pinned!(&local1, &c1);
+
+        local2.alias(x, Some(c1.cid())).await.unwrap();
+        assert_pinned!(&local2, &a1);
+        assert_pinned!(&local2, &b1);
+        assert_pinned!(&local2, &c1);
+
+        local2.insert(&b2).await.unwrap();
+        local2.insert(&c2).await.unwrap();
+        local2.alias(x, Some(c2.cid())).await.unwrap();
+        assert_pinned!(&local2, &a1);
+        assert_unpinned!(&local2, &b1);
+        assert_unpinned!(&local2, &c1);
+        assert_pinned!(&local2, &b2);
+        assert_pinned!(&local2, &c2);
+
+        local1.alias(x, Some(c2.cid())).await.unwrap();
+        assert_pinned!(&local1, &a1);
+        assert_unpinned!(&local1, &b1);
+        assert_unpinned!(&local1, &c1);
+        assert_pinned!(&local1, &b2);
+        assert_pinned!(&local1, &c2);
+
+        local2.alias(x, None).await.unwrap();
+        assert_unpinned!(&local2, &a1);
+        assert_unpinned!(&local2, &b1);
+        assert_unpinned!(&local2, &c1);
+        assert_unpinned!(&local2, &b2);
+        assert_unpinned!(&local2, &c2);
+
+        local1.alias(x, None).await.unwrap();
+        assert_unpinned!(&local1, &a1);
+        assert_unpinned!(&local1, &b1);
+        assert_unpinned!(&local1, &c1);
+        assert_unpinned!(&local1, &b2);
+        assert_unpinned!(&local1, &c2);
     }
 }

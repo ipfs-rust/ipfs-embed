@@ -1,5 +1,5 @@
 [workspace]
-members = ["bin", "core", "db", "net"]
+members = ["core", "db", "net"]
 
 [package]
 name = "ipfs-embed"
@@ -30,7 +30,9 @@ async-log = "2.0.0"
 criterion = "0.3.3"
 env_logger = "0.7.1"
 #ipld-collections = "0.2.0"
+libipld = { version = "0.5.1", features = ["dag-cbor"] }
 model = "0.1.2"
+sled = "0.34.4"
 tempdir = "0.3.7"
 
 [profile.release]
