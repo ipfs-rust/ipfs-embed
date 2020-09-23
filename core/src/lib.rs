@@ -1,4 +1,5 @@
-pub use anyhow::Result;
+pub use anyhow::{Error, Result};
+pub use async_trait::async_trait;
 pub use futures::stream::Stream;
 pub use libipld::block::Block;
 pub use libipld::cid::Cid;
@@ -39,12 +40,13 @@ pub enum StorageEvent {
     Remove(Cid),
 }
 
+#[async_trait]
 pub trait Storage<S: StoreParams>: Send + Sync + 'static {
     type Subscription: Stream<Item = StorageEvent> + Send + Unpin;
     fn get(&self, cid: &Cid) -> Result<Option<Vec<u8>>>;
     fn insert(&self, block: &Block<S>) -> Result<()>;
-    fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()>;
-    fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>>;
-    fn status(&self, cid: &Cid) -> Result<Option<bool>>;
+    async fn alias<T: AsRef<[u8]> + Send + Sync>(&self, alias: T, cid: Option<&Cid>) -> Result<()>;
+    fn resolve<T: AsRef<[u8]> + Send + Sync>(&self, alias: T) -> Result<Option<Cid>>;
+    async fn pinned(&self, cid: &Cid) -> Result<Option<bool>>;
     fn subscribe(&self) -> Self::Subscription;
 }
