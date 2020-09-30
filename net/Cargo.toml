@@ -8,7 +8,8 @@ description = "small embeddable ipfs implementation"
 repository = "https://github.com/ipfs-rust/ipfs-embed"
 
 [dependencies]
-async-std = "1.6.4"
+async-std = "1.6.5"
+fnv = "1.0.7"
 futures = "0.3.5"
 ip_network = "0.3.4"
 ipfs-embed-core = { version = "0.7.0", path = "../core" }
@@ -20,4 +21,12 @@ thiserror = "1.0.20"
 [dependencies.libp2p]
 version = "0.28.1"
 default-features = false
-features = ["identify", "kad", "mdns-async-std", "mplex", "noise", "ping", "tcp-async-std", "yamux"]
+features = [
+    "dns",
+    "identify",
+    "kad",
+    "mdns-async-std",
+    "ping",
+    # "quic",
+    "mplex", "noise", "tcp-async-std", "yamux",
+]

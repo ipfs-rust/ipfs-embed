@@ -3,34 +3,32 @@ pub use async_trait::async_trait;
 pub use futures::stream::Stream;
 pub use libipld::block::Block;
 pub use libipld::cid::Cid;
+pub use libipld::error::BlockNotFound;
 pub use libipld::multihash::MultihashDigest;
 pub use libipld::store::{Store, StoreParams};
 pub use libp2p_core::{Multiaddr, PeerId};
-use std::collections::HashSet;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum NetworkEvent {
-    BootstrapComplete,
-    Providers(Cid, HashSet<PeerId>),
-    GetProvidersFailed(Cid),
-    Providing(Cid),
-    StartProvidingFailed(Cid),
-    ReceivedBlock(PeerId, Cid, Vec<u8>),
-    ReceivedWant(PeerId, Cid, i32),
+#[derive(Clone, Debug)]
+pub enum NetworkEvent<QueryId> {
+    Listeners(Vec<Multiaddr>),
+    ExternalAddresses(Vec<Multiaddr>),
+    Request(PeerId, Cid),
+    Response(QueryId, Cid, Vec<u8>),
+    QueryResult(QueryId, std::result::Result<(), BlockNotFound>),
 }
 
 pub trait Network<S: StoreParams>: Send + Sync + 'static {
-    type Subscription: Stream<Item = NetworkEvent> + Send + Unpin;
+    type QueryId: Copy;
+    type Subscription: Stream<Item = NetworkEvent<Self::QueryId>> + Send + Unpin;
     fn local_peer_id(&self) -> &PeerId;
-    fn external_addresses(&self) -> Vec<Multiaddr>;
-    fn providers(&self, cid: &Cid);
-    fn provide(&self, cid: &Cid);
-    fn unprovide(&self, cid: &Cid);
-    fn connect(&self, peer_id: PeerId);
-    fn want(&self, cid: Cid, priority: i32);
-    fn cancel(&self, cid: Cid);
-    fn send_to(&self, peer_id: PeerId, cid: Cid, data: Vec<u8>);
-    fn send(&self, cid: Cid, data: Vec<u8>);
+    fn listeners(&self);
+    fn external_addresses(&self);
+    fn get(&self, cid: Cid) -> Self::QueryId;
+    fn sync(&self, cid: Cid) -> Self::QueryId;
+    fn cancel(&self, query_id: Self::QueryId);
+    fn provide(&self, cid: Cid);
+    fn unprovide(&self, cid: Cid);
+    fn send(&self, peer_id: PeerId, cid: Cid, data: Vec<u8>);
     fn subscribe(&self) -> Self::Subscription;
 }
 
