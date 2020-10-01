@@ -16,24 +16,24 @@ db = ["ipfs-embed-db"]
 net = ["ipfs-embed-net"]
 
 [dependencies]
-async-std = { version = "1.6.5", features = ["unstable"] }
-async-trait = "0.1.40"
+async-std = "1.6.5"
+async-trait = "0.1.41"
 futures = "0.3.5"
 ipfs-embed-core = { version = "0.7.0", path = "core" }
 ipfs-embed-db = { version = "0.7.0", path = "db", optional = true }
 ipfs-embed-net = { version = "0.7.0", path = "net", optional = true }
-libipld = { version = "0.6.1", default-features = false }
+libipld = { version = "0.7.0", default-features = false }
 log = "0.4.11"
 
 [dev-dependencies]
-async-log = "2.0.0"
-criterion = "0.3.3"
+#async-log = "2.0.0"
+#criterion = "0.3.3"
 env_logger = "0.7.1"
 #ipld-collections = "0.2.0"
-libipld = { version = "0.6.1", features = ["dag-cbor"] }
-model = "0.1.2"
+libipld = { version = "0.7.0", features = ["dag-cbor"] }
+#model = "0.1.2"
 sled = "0.34.4"
-tempdir = "0.3.7"
+#tempdir = "0.3.7"
 
 [profile.release]
 debug = true
@@ -44,4 +44,3 @@ harness = false
 
 [patch.crates-io]
 libp2p-bitswap = { path = "../libp2p-bitswap" }
-libipld = { path = "../rust-ipld" }

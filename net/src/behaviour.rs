@@ -1,20 +1,20 @@
 use crate::config::NetworkConfig;
-use crate::query::{QueryEvent, QueryManager, QueryManagerEvent};
-use crate::QueryId;
+use crate::query::{QueryEvent, QueryManager};
+use futures::channel::oneshot;
 use ip_network::IpNetwork;
-use ipfs_embed_core::{Cid, NetworkEvent, Result, StoreParams};
+use ipfs_embed_core::{Cid, NetworkEvent, QueryResult, Result, StoreParams};
 use libp2p::core::PeerId;
 use libp2p::identify::{Identify, IdentifyEvent};
 use libp2p::kad::record::store::MemoryStore;
 use libp2p::kad::record::Key;
 use libp2p::kad::{
-    BootstrapError, BootstrapOk, GetProvidersOk, Kademlia, KademliaEvent, QueryResult,
+    BootstrapError, BootstrapOk, GetProvidersOk, Kademlia, KademliaEvent, QueryResult as KademliaQueryResult,
 };
 use libp2p::mdns::{Mdns, MdnsEvent};
 use libp2p::multiaddr::Protocol;
 use libp2p::ping::{Ping, PingEvent};
 use libp2p::swarm::toggle::Toggle;
-use libp2p::swarm::{NetworkBehaviourAction, NetworkBehaviourEventProcess, PollParameters};
+use libp2p::swarm::{DialPeerCondition, NetworkBehaviourAction, NetworkBehaviourEventProcess, PollParameters};
 use libp2p::NetworkBehaviour;
 use libp2p_bitswap::{Bitswap, BitswapConfig, BitswapEvent};
 use std::collections::VecDeque;
@@ -24,7 +24,7 @@ use thiserror::Error;
 
 /// Behaviour type.
 #[derive(NetworkBehaviour)]
-#[behaviour(poll_method = "custom_poll", out_event = "NetworkEvent<QueryId>")]
+#[behaviour(poll_method = "custom_poll", out_event = "NetworkEvent")]
 pub struct NetworkBackendBehaviour<S: StoreParams> {
     #[behaviour(ignore)]
     peer_id: PeerId,
@@ -43,7 +43,9 @@ pub struct NetworkBackendBehaviour<S: StoreParams> {
     #[behaviour(ignore)]
     provided_before_bootstrap: Option<Vec<Key>>,
     #[behaviour(ignore)]
-    events: VecDeque<NetworkEvent<QueryId>>,
+    events: VecDeque<NetworkEvent>,
+    #[behaviour(ignore)]
+    dial: VecDeque<PeerId>,
 }
 
 impl<S: StoreParams> NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendBehaviour<S> {
@@ -51,7 +53,9 @@ impl<S: StoreParams> NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendB
         match event {
             MdnsEvent::Discovered(list) => {
                 for (peer_id, _) in list {
-                    self.queries.discover_mdns(peer_id);
+                    if self.queries.discover_mdns(peer_id.clone()) {
+                        self.dial.push_back(peer_id);
+                    }
                 }
             }
             MdnsEvent::Expired(list) => {
@@ -67,23 +71,23 @@ impl<S: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBack
     fn inject_event(&mut self, event: KademliaEvent) {
         match event {
             KademliaEvent::QueryResult { result, .. } => match result {
-                QueryResult::GetProviders(Ok(GetProvidersOk { key, providers, .. })) => {
+                KademliaQueryResult::GetProviders(Ok(GetProvidersOk { key, providers, .. })) => {
                     if let Ok(cid) = Cid::try_from(key.as_ref()) {
                         self.queries
                             .complete_get_providers(cid, providers.into_iter().collect());
                     }
                 }
-                QueryResult::GetProviders(Err(err)) => {
+                KademliaQueryResult::GetProviders(Err(err)) => {
                     if let Ok(cid) = Cid::try_from(err.into_key().as_ref()) {
                         self.queries.complete_get_providers(cid, Default::default());
                     }
                 }
-                QueryResult::Bootstrap(Ok(BootstrapOk { num_remaining, .. })) => {
+                KademliaQueryResult::Bootstrap(Ok(BootstrapOk { num_remaining, .. })) => {
                     if num_remaining == 0 {
                         self.bootstrap_complete();
                     }
                 }
-                QueryResult::Bootstrap(Err(BootstrapError::Timeout { num_remaining, .. })) => {
+                KademliaQueryResult::Bootstrap(Err(BootstrapError::Timeout { num_remaining, .. })) => {
                     match num_remaining {
                         Some(0) => {
                             self.bootstrap_complete();
@@ -108,10 +112,8 @@ impl<S: StoreParams> NetworkBehaviourEventProcess<BitswapEvent> for NetworkBacke
                 self.queries.complete_have_query(cid, peer_id, have);
             }
             BitswapEvent::Block { peer_id, cid, data } => {
-                for id in self.queries.complete_want_query(cid, peer_id) {
-                    self.events
-                        .push_back(NetworkEvent::Response(id, cid, data.clone()));
-                }
+                self.queries.complete_want_query(cid, peer_id);
+                self.events.push_back(NetworkEvent::Response(cid, data));
             }
             BitswapEvent::Want { peer_id, cid } => {
                 self.events.push_back(NetworkEvent::Request(peer_id, cid));
@@ -210,23 +212,18 @@ impl<S: StoreParams> NetworkBackendBehaviour<S> {
             identify,
             bitswap,
             events: Default::default(),
+            dial: Default::default(),
             queries: Default::default(),
             provided_before_bootstrap: Some(Default::default()),
         })
     }
 
-    pub fn get(&mut self, cid: Cid, query_id: QueryId) {
-        self.queries.get(cid, query_id);
+    pub fn get(&mut self, cid: Cid, tx: oneshot::Sender<QueryResult>) {
+        self.queries.get(cid, tx);
     }
 
-    pub fn sync(&mut self, _cid: Cid, _query_id: QueryId) {
-        // TODO sync
-        unimplemented!()
-    }
-
-    pub fn cancel(&mut self, _query_id: QueryId) {
-        // TODO cancel
-        unimplemented!()
+    pub fn sync(&mut self, cid: Cid, tx: oneshot::Sender<QueryResult>) {
+        self.queries.sync(cid, tx);
     }
 
     pub fn provide(&mut self, cid: Cid) {
@@ -249,7 +246,7 @@ impl<S: StoreParams> NetworkBackendBehaviour<S> {
         self.kad.stop_providing(&key);
     }
 
-    pub fn send(&mut self, peer_id: PeerId, cid: Cid, data: Vec<u8>) {
+    pub fn send(&mut self, peer_id: PeerId, cid: Cid, data: Option<Vec<u8>>) {
         self.bitswap.send_block(peer_id, cid, data);
     }
 
@@ -268,29 +265,33 @@ impl<S: StoreParams> NetworkBackendBehaviour<S> {
         &mut self,
         _: &mut Context,
         _: &mut impl PollParameters,
-    ) -> Poll<NetworkBehaviourAction<T, NetworkEvent<QueryId>>> {
+    ) -> Poll<NetworkBehaviourAction<T, NetworkEvent>> {
         while let Some(event) = self.queries.next() {
             match event {
-                QueryManagerEvent::Query(QueryEvent::GetProviders(cid)) => {
+                QueryEvent::GetProviders(cid) => {
+                    log::debug!("query providers {}", cid);
                     let key = Key::new(&cid.to_bytes());
                     self.kad.get_providers(key);
                 }
-                QueryManagerEvent::Query(QueryEvent::Have(peer_id, cid)) => {
+                QueryEvent::Have(peer_id, cid) => {
+                    log::debug!("query have {} {}", peer_id, cid);
                     self.bitswap.has_block(peer_id, cid);
                 }
-                QueryManagerEvent::Query(QueryEvent::Want(peer_id, cid)) => {
+                QueryEvent::Want(peer_id, cid) => {
+                    log::debug!("query want {} {}", peer_id, cid);
                     self.bitswap.want_block(peer_id, cid);
-                }
-                QueryManagerEvent::Complete(query_id, res) => {
-                    self.events
-                        .push_back(NetworkEvent::QueryResult(query_id, res));
                 }
             }
         }
         if let Some(event) = self.events.pop_front() {
-            Poll::Ready(NetworkBehaviourAction::GenerateEvent(event))
-        } else {
-            Poll::Pending
+            return Poll::Ready(NetworkBehaviourAction::GenerateEvent(event));
         }
+        if let Some(peer_id) = self.dial.pop_front() {
+            return Poll::Ready(NetworkBehaviourAction::DialPeer {
+                peer_id,
+                condition: DialPeerCondition::NotDialing,
+            });
+        }
+        Poll::Pending
     }
 }

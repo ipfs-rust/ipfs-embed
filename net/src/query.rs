@@ -1,6 +1,6 @@
-use crate::QueryId;
 use fnv::{FnvHashMap, FnvHashSet};
-use ipfs_embed_core::{BlockNotFound, Cid, PeerId};
+use futures::channel::oneshot;
+use ipfs_embed_core::{BlockNotFound, Cid, PeerId, QueryResult};
 use std::collections::VecDeque;
 
 #[derive(Debug)]
@@ -20,6 +20,26 @@ struct CidQuery {
     want_query: Option<PeerId>,
     events: VecDeque<CidQueryEvent>,
 }
+
+impl std::borrow::Borrow<Cid> for CidQuery {
+    fn borrow(&self) -> &Cid {
+        &self.cid
+    }
+}
+
+impl std::hash::Hash for CidQuery {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        std::hash::Hash::hash(&self.cid, h);
+    }
+}
+
+impl PartialEq for CidQuery {
+    fn eq(&self, other: &Self) -> bool {
+        self.cid == other.cid
+    }
+}
+
+impl Eq for CidQuery {}
 
 #[derive(Debug)]
 pub enum QueryEvent {
@@ -92,6 +112,7 @@ impl CidQuery {
 
     pub fn complete_want_query(&mut self, peer_id: PeerId) {
         self.state = CidQueryState::Complete;
+        self.have_queries.remove(&peer_id);
         self.have_block.as_mut().unwrap().insert(peer_id);
     }
 
@@ -121,88 +142,99 @@ impl CidQuery {
 
 #[derive(Debug, Default)]
 pub struct QueryManager {
-    queries: FnvHashMap<QueryId, CidQuery>,
-    progress: FnvHashSet<QueryId>,
+    queries: FnvHashSet<CidQuery>,
+    progress: FnvHashSet<Cid>,
     mdns_peers: FnvHashSet<PeerId>,
+    notify: FnvHashMap<Cid, Vec<oneshot::Sender<QueryResult>>>,
 }
 
 impl QueryManager {
-    pub fn get(&mut self, cid: Cid, query_id: QueryId) {
-        let query = CidQuery::new(cid, self.mdns_peers.clone());
-        self.queries.insert(query_id, query);
-        self.progress.insert(query_id);
+    pub fn get(&mut self, cid: Cid, tx: oneshot::Sender<QueryResult>) {
+        if !self.queries.contains(&cid) {
+            let query = CidQuery::new(cid, self.mdns_peers.clone());
+            self.queries.insert(query);
+            self.progress.insert(cid);
+        }
+        self.notify.entry(cid).or_default().push(tx);
     }
 
-    pub fn discover_mdns(&mut self, peer_id: PeerId) {
-        self.mdns_peers.insert(peer_id);
+    pub fn sync(&mut self, _cid: Cid, _tx: oneshot::Sender<QueryResult>) {
+        todo!();
+    }
+
+    pub fn discover_mdns(&mut self, peer_id: PeerId) -> bool {
+        if !self.mdns_peers.contains(&peer_id) {
+            log::debug!("discovered {}", peer_id);
+        }
+        self.mdns_peers.insert(peer_id)
     }
 
     pub fn expired_mdns(&mut self, peer_id: &PeerId) {
-        self.mdns_peers.remove(peer_id);
+        if self.mdns_peers.remove(peer_id) {
+            log::debug!("expired {}", peer_id);
+        }
     }
 
     pub fn complete_get_providers(&mut self, cid: Cid, providers: FnvHashSet<PeerId>) {
-        for (id, query) in &mut self.queries {
-            if query.cid == cid {
-                query.complete_get_providers(providers.clone());
-                self.progress.insert(*id);
-            }
+        if let Some(mut query) = self.queries.take(&cid) {
+            query.complete_get_providers(providers);
+            self.queries.insert(query);
+            self.progress.insert(cid);
         }
     }
 
     pub fn complete_have_query(&mut self, cid: Cid, peer_id: PeerId, have: bool) {
-        for (id, query) in &mut self.queries {
-            if query.cid == cid {
-                query.complete_have_query(peer_id.clone(), have);
-                self.progress.insert(*id);
-            }
+        if let Some(mut query) = self.queries.take(&cid) {
+            query.complete_have_query(peer_id.clone(), have);
+            self.queries.insert(query);
+            self.progress.insert(cid);
         }
     }
 
-    pub fn complete_want_query(&mut self, cid: Cid, peer_id: PeerId) -> Vec<QueryId> {
-        let mut ids = vec![];
-        for (id, query) in &mut self.queries {
-            if query.cid == cid {
-                query.complete_want_query(peer_id.clone());
-                self.progress.insert(*id);
-                ids.push(*id);
-            }
+    pub fn complete_want_query(&mut self, cid: Cid, peer_id: PeerId) {
+        if let Some(mut query) = self.queries.take(&cid) {
+            query.complete_want_query(peer_id);
+            self.queries.insert(query);
+            self.progress.insert(cid);
         }
-        ids
     }
 
-    pub fn next(&mut self) -> Option<QueryManagerEvent> {
+    pub fn next(&mut self) -> Option<QueryEvent> {
         loop {
-            if let Some(id) = self.progress.iter().next().cloned() {
-                match self.queries.get_mut(&id).unwrap().next() {
-                    Some(CidQueryEvent::Query(query)) => {
-                        return Some(QueryManagerEvent::Query(query));
-                    }
-                    Some(CidQueryEvent::Complete(Ok(_have))) => {
-                        self.queries.remove(&id);
-                        self.progress.remove(&id);
-                        return Some(QueryManagerEvent::Complete(id, Ok(())));
-                    }
-                    Some(CidQueryEvent::Complete(Err(err))) => {
-                        self.queries.remove(&id);
-                        self.progress.remove(&id);
-                        return Some(QueryManagerEvent::Complete(id, Err(err)));
-                    }
-                    None => {
-                        self.progress.remove(&id);
+            if let Some(cid) = self.progress.iter().next().cloned() {
+                if let Some(mut query) = self.queries.take(&cid) {
+                    match query.next() {
+                        Some(CidQueryEvent::Query(q)) => {
+                            self.queries.insert(query);
+                            return Some(q);
+                        }
+                        Some(CidQueryEvent::Complete(Ok(_have))) => {
+                            log::debug!("get ok {}", cid);
+                            if let Some(txs) = self.notify.remove(&cid) {
+                                for tx in txs {
+                                    tx.send(Ok(())).ok();
+                                }
+                            }
+                        }
+                        Some(CidQueryEvent::Complete(Err(err))) => {
+                            log::debug!("get error {}", cid);
+                            if let Some(txs) = self.notify.remove(&cid) {
+                                for tx in txs {
+                                    tx.send(Err(err)).ok();
+                                }
+                            }
+                        }
+                        None => {
+                            self.queries.insert(query);
+                        }
                     }
                 }
+                self.progress.remove(&cid);
             } else {
                 return None;
             }
         }
     }
-}
-
-#[derive(Debug)]
-pub enum QueryManagerEvent {
-    Query(QueryEvent),
-    Complete(QueryId, Result<(), BlockNotFound>),
 }
 
 #[cfg(test)]

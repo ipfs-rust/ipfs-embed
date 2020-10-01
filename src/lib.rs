@@ -18,12 +18,10 @@
 //! let ipfs = Ipfs::<DefaultStoreParams, _, _>::new(storage, network, network_timeout);
 //! # Ok(()) }
 //! ```
-use async_std::stream::{interval, Interval};
 use async_std::task;
 use async_trait::async_trait;
-use futures::channel::{mpsc, oneshot};
+use futures::channel::oneshot;
 use futures::future::Future;
-use futures::sink::SinkExt;
 use futures::stream::Stream;
 use ipfs_embed_core::{
     Block, Cid, Multiaddr, Network, NetworkEvent, PeerId, Result, Storage, StorageEvent,
@@ -33,13 +31,10 @@ use libipld::codec::Decode;
 use libipld::error::BlockNotFound;
 use libipld::ipld::Ipld;
 use libipld::store::Store;
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Duration;
-use std::time::Instant;
 
 pub use ipfs_embed_core as core;
 #[cfg(feature = "db")]
@@ -51,7 +46,6 @@ pub struct Ipfs<P, S, N> {
     _marker: PhantomData<P>,
     storage: Arc<S>,
     network: Arc<N>,
-    tx: mpsc::Sender<(Cid, oneshot::Sender<Block<P>>)>,
 }
 
 impl<P, S, N> Clone for Ipfs<P, S, N> {
@@ -60,7 +54,6 @@ impl<P, S, N> Clone for Ipfs<P, S, N> {
             _marker: self._marker,
             storage: self.storage.clone(),
             network: self.network.clone(),
-            tx: self.tx.clone(),
         }
     }
 }
@@ -72,14 +65,12 @@ where
     N: Network<P>,
     Ipld: Decode<P::Codecs>,
 {
-    pub fn new(storage: Arc<S>, network: Arc<N>, timeout: Duration) -> Self {
-        let (tx, rx) = mpsc::channel(0);
-        task::spawn(IpfsTask::new(storage.clone(), network.clone(), rx, timeout));
+    pub fn new(storage: Arc<S>, network: Arc<N>) -> Self {
+        task::spawn(IpfsTask::new(storage.clone(), network.clone()));
         Self {
             _marker: PhantomData,
             storage,
             network,
-            tx,
         }
     }
 
@@ -87,8 +78,16 @@ where
         self.network.local_peer_id()
     }
 
-    pub fn external_addresses(&self) -> Vec<Multiaddr> {
-        self.network.external_addresses()
+    pub async fn listeners(&self) -> Vec<Multiaddr> {
+        let (tx, rx) = oneshot::channel();
+        self.network.listeners(tx);
+        rx.await.unwrap()
+    }
+
+    pub async fn external_addresses(&self) -> Vec<Multiaddr> {
+        let (tx, rx) = oneshot::channel();
+        self.network.external_addresses(tx);
+        rx.await.unwrap()
     }
 
     pub async fn pinned(&self, cid: &Cid) -> Result<Option<bool>> {
@@ -112,11 +111,13 @@ where
             return Ok(block);
         }
         let (tx, rx) = oneshot::channel();
-        self.tx.clone().send((*cid, tx)).await?;
-        if let Ok(block) = rx.await {
-            self.storage.insert(&block)?;
+        self.network.get(*cid, tx);
+        rx.await??;
+        if let Some(data) = self.storage.get(cid)? {
+            let block = Block::new_unchecked(*cid, data);
             return Ok(block);
         }
+        log::error!("block evicted too soon");
         Err(BlockNotFound(*cid).into())
     }
 
@@ -126,46 +127,17 @@ where
     }
 
     async fn alias<T: AsRef<[u8]> + Send + Sync>(&self, alias: T, cid: Option<&Cid>) -> Result<()> {
-        loop {
-            if let Err(err) = self.storage.alias(alias.as_ref(), cid).await {
-                if let Some(BlockNotFound(cid)) = err.downcast_ref::<BlockNotFound>() {
-                    self.get(cid).await?;
-                }
-            } else {
-                return Ok(());
-            }
+        if let Some(cid) = cid {
+            let (tx, rx) = oneshot::channel();
+            self.network.sync(*cid, tx);
+            rx.await??;
         }
+        self.storage.alias(alias.as_ref(), cid).await?;
+        Ok(())
     }
 
     async fn resolve<T: AsRef<[u8]> + Send + Sync>(&self, alias: T) -> Result<Option<Cid>> {
         self.storage.resolve(alias.as_ref())
-    }
-}
-
-struct Wanted<P: StoreParams> {
-    ch: Vec<oneshot::Sender<Block<P>>>,
-    timestamp: Instant,
-}
-
-impl<P: StoreParams> Default for Wanted<P> {
-    fn default() -> Self {
-        Self {
-            ch: Default::default(),
-            timestamp: Instant::now(),
-        }
-    }
-}
-
-impl<S: StoreParams> Wanted<S> {
-    fn add_receiver(&mut self, ch: oneshot::Sender<Block<S>>) {
-        self.ch.push(ch);
-    }
-
-    fn received(self, block: &Block<S>) {
-        log::info!("received block");
-        for tx in self.ch {
-            tx.send(block.clone()).ok();
-        }
     }
 }
 
@@ -175,11 +147,6 @@ struct IpfsTask<P: StoreParams, S: Storage<P>, N: Network<P>> {
     storage_events: S::Subscription,
     network: Arc<N>,
     network_events: N::Subscription,
-    rx: mpsc::Receiver<(Cid, oneshot::Sender<Block<P>>)>,
-    wanted: HashMap<Cid, Wanted<P>>,
-    interval: Interval,
-    timeout: Duration,
-    bootstrap_complete: bool,
 }
 
 impl<P, S, N> IpfsTask<P, S, N>
@@ -192,8 +159,6 @@ where
     pub fn new(
         storage: Arc<S>,
         network: Arc<N>,
-        rx: mpsc::Receiver<(Cid, oneshot::Sender<Block<P>>)>,
-        timeout: Duration,
     ) -> Self {
         let storage_events = storage.subscribe();
         let network_events = network.subscribe();
@@ -203,11 +168,6 @@ where
             network,
             storage_events,
             network_events,
-            rx,
-            wanted: Default::default(),
-            timeout,
-            interval: interval(timeout),
-            bootstrap_complete: true,
         }
     }
 }
@@ -223,97 +183,35 @@ where
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         loop {
-            match Pin::new(&mut self.rx).poll_next(ctx) {
-                Poll::Ready(Some((cid, tx))) => {
-                    let entry = self.wanted.entry(cid).or_default();
-                    entry.add_receiver(tx);
-                    self.network.providers(&cid);
-                    self.network.want(cid, 1000);
-                }
-                Poll::Ready(None) => return Poll::Ready(()),
-                Poll::Pending => break,
-            }
-        }
-
-        loop {
             let event = match Pin::new(&mut self.network_events).poll_next(ctx) {
                 Poll::Ready(Some(event)) => event,
                 Poll::Ready(None) => return Poll::Ready(()),
                 Poll::Pending => break,
             };
-            log::trace!("{:?}", event);
             match event {
-                NetworkEvent::Providers(_cid, providers) => {
-                    // TODO: smarter querying
-                    if let Some(peer_id) = providers.into_iter().next() {
-                        self.network.connect(peer_id);
-                    }
-                }
-                NetworkEvent::GetProvidersFailed(cid) => {
-                    log::trace!("get providers for {} failed", cid.to_string());
-                }
-                NetworkEvent::Providing(cid) => {
-                    log::trace!("providing {}", cid.to_string());
-                }
-                NetworkEvent::StartProvidingFailed(cid) => {
-                    log::trace!("providing {} failed", cid.to_string());
-                }
-                NetworkEvent::ReceivedBlock(_, cid, data) => {
+                NetworkEvent::Response(cid, data) => {
                     let block = Block::new_unchecked(cid, data.to_vec());
-                    if let Some(wanted) = self.wanted.remove(block.cid()) {
-                        wanted.received(&block);
+                    if let Err(err) = self.storage.insert(&block) {
+                        log::error!("insert: {:?}", err);
                     }
                 }
-                NetworkEvent::ReceivedWant(peer_id, cid, _) => match self.storage.get(&cid) {
-                    Ok(Some(data)) => self.network.send_to(peer_id, cid, data),
-                    Ok(None) => log::trace!("don't have local block {}", cid.to_string()),
-                    Err(err) => log::error!("failed to get local block {:?}", err),
-                },
-                NetworkEvent::BootstrapComplete => self.bootstrap_complete = true,
+                NetworkEvent::Request(peer_id, cid) => match self.storage.get(&cid) {
+                    Ok(data) => self.network.send(peer_id, cid, data),
+                    Err(err) => log::error!("get: {:?}", err),
+                }
             }
         }
 
-        while self.bootstrap_complete {
+        loop {
             let event = match Pin::new(&mut self.storage_events).poll_next(ctx) {
                 Poll::Ready(Some(event)) => event,
                 Poll::Ready(None) => return Poll::Ready(()),
                 Poll::Pending => break,
             };
-            log::trace!("{:?}", event);
             match event {
-                StorageEvent::Insert(cid) => match self.storage.get(&cid) {
-                    Ok(Some(data)) => {
-                        self.network.provide(&cid);
-                        self.network.send(cid, data);
-                    }
-                    Ok(None) => {
-                        log::warn!("block {} not in store", cid.to_string());
-                    }
-                    Err(e) => {
-                        log::warn!("error {:?} retrieving block {}", e, cid.to_string());
-                    }
-                },
-                StorageEvent::Remove(cid) => self.network.unprovide(&cid),
+                StorageEvent::Insert(cid) => self.network.provide(cid),
+                StorageEvent::Remove(cid) => self.network.unprovide(cid),
             }
-        }
-
-        loop {
-            match Pin::new(&mut self.interval).poll_next(ctx) {
-                Poll::Ready(Some(())) => {}
-                Poll::Ready(None) => return Poll::Ready(()),
-                Poll::Pending => break,
-            }
-            let timedout = Instant::now() - self.timeout;
-            let mut wanted = std::mem::replace(&mut self.wanted, HashMap::with_capacity(0));
-            wanted.retain(|cid, wanted| {
-                if wanted.timestamp > timedout {
-                    true
-                } else {
-                    self.network.cancel(*cid);
-                    false
-                }
-            });
-            let _ = std::mem::replace(&mut self.wanted, wanted);
         }
 
         Poll::Pending
@@ -327,21 +225,20 @@ mod tests {
     use ipfs_embed_net::{NetworkConfig, NetworkService};
     use libipld::block::Block;
     use libipld::cbor::DagCborCodec;
-    use libipld::multihash::SHA2_256;
+    use libipld::multihash::Code;
     use libipld::raw::RawCodec;
-    use libipld::store::DefaultStoreParams;
+    use libipld::store::DefaultParams;
     use libipld::{alias, ipld};
     use std::time::Duration;
 
-    type Storage = StorageService<DefaultStoreParams>;
-    type Network = NetworkService<DefaultStoreParams>;
-    type DefaultIpfs = Ipfs<DefaultStoreParams, Storage, Network>;
+    type Storage = StorageService<DefaultParams>;
+    type Network = NetworkService<DefaultParams>;
+    type DefaultIpfs = Ipfs<DefaultParams, Storage, Network>;
 
     fn create_store(bootstrap: Vec<(Multiaddr, PeerId)>) -> DefaultIpfs {
         let sled_config = sled::Config::new().temporary(true);
         let cache_size = 10;
         let sweep_interval = Duration::from_millis(10000);
-        let network_timeout = Duration::from_secs(5);
 
         let mut net_config = NetworkConfig::new();
         net_config.enable_mdns = bootstrap.is_empty();
@@ -351,11 +248,11 @@ mod tests {
         let storage =
             Arc::new(StorageService::open(&sled_config, cache_size, sweep_interval).unwrap());
         let network = Arc::new(NetworkService::new(net_config).unwrap());
-        Ipfs::new(storage, network, network_timeout)
+        Ipfs::new(storage, network)
     }
 
-    fn create_block(bytes: &[u8]) -> Block<DefaultStoreParams> {
-        Block::encode(RawCodec, SHA2_256, bytes).unwrap()
+    fn create_block(bytes: &[u8]) -> Block<DefaultParams> {
+        Block::encode(RawCodec, Code::Blake3_256, bytes).unwrap()
     }
 
     #[async_std::test]
@@ -376,44 +273,19 @@ mod tests {
         let store2 = create_store(vec![]);
         let block = create_block(b"test_exchange_mdns");
         store1.insert(&block).await.unwrap();
+        task::sleep(Duration::from_millis(1000)).await;
         let block2 = store2.get(block.cid()).await.unwrap();
         assert_eq!(block.data(), block2.data());
     }
 
     #[async_std::test]
-    #[cfg(not(target_os = "macos"))] // mdns doesn't work on macos in github action
-    async fn test_received_want_before_insert() {
-        env_logger::try_init().ok();
-        let store1 = create_store(vec![]);
-        let store2 = create_store(vec![]);
-        let block = create_block(b"test_received_want_before_insert");
-
-        let get_cid = *block.cid();
-        let get = task::spawn(async move { store2.get(&get_cid).await });
-
-        task::sleep(Duration::from_millis(100)).await;
-
-        store1.insert(&block).await.unwrap();
-
-        let block2 = get.await.unwrap();
-        assert_eq!(block.data(), block2.data());
-    }
-
-    #[async_std::test]
     async fn test_exchange_kad() {
-        let logger = env_logger::Builder::from_default_env().build();
-        async_log::Logger::wrap(logger, || {
-            let task_id = async_std::task::current().id();
-            format!("{}", task_id).parse().unwrap()
-        })
-        .start(log::LevelFilter::Trace)
-        .ok();
-
+        env_logger::try_init().ok();
         let store = create_store(vec![]);
         // make sure bootstrap node has started
         task::sleep(Duration::from_millis(1000)).await;
         let bootstrap = vec![(
-            store.external_addresses()[0].clone(),
+            store.listeners().await[0].clone(),
             store.local_peer_id().clone(),
         )];
         let store1 = create_store(bootstrap.clone());
@@ -454,11 +326,12 @@ mod tests {
         };
     }
 
-    fn create_ipld_block(ipld: &Ipld) -> Block<DefaultStoreParams> {
-        Block::encode(DagCborCodec, SHA2_256, ipld).unwrap()
+    fn create_ipld_block(ipld: &Ipld) -> Block<DefaultParams> {
+        Block::encode(DagCborCodec, Code::Blake3_256, ipld).unwrap()
     }
 
     #[async_std::test]
+    #[ignore]
     async fn test_sync() {
         env_logger::try_init().ok();
         let local1 = create_store(vec![]);

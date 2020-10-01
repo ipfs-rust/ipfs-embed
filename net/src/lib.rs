@@ -1,8 +1,8 @@
 use async_std::task;
-use futures::channel::mpsc;
+use futures::channel::{mpsc, oneshot};
 use futures::future::Future;
 use futures::stream::Stream;
-use ipfs_embed_core::{Cid, Network, NetworkEvent, PeerId, Result, StoreParams};
+use ipfs_embed_core::{Cid, Multiaddr, Network, NetworkEvent, PeerId, QueryResult, Result, StoreParams};
 use libp2p::core::transport::upgrade::Version;
 use libp2p::core::transport::Transport;
 use libp2p::dns::DnsConfig;
@@ -13,7 +13,6 @@ use libp2p::tcp::TcpConfig;
 //use libp2p::yamux::Config as YamuxConfig;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -27,7 +26,6 @@ pub use config::NetworkConfig;
 pub struct NetworkService<S: StoreParams> {
     _marker: PhantomData<S>,
     tx: mpsc::UnboundedSender<SwarmMsg>,
-    query_id: AtomicU64,
     local_peer_id: PeerId,
 }
 
@@ -65,67 +63,59 @@ impl<S: StoreParams> NetworkService<S> {
         Ok(Self {
             _marker: PhantomData,
             tx,
-            query_id: Default::default(),
             local_peer_id: peer_id,
         })
     }
 }
 
-type QueryId = u64;
-
 enum SwarmMsg {
-    Get(Cid, QueryId),
-    Sync(Cid, QueryId),
-    Cancel(QueryId),
+    Get(Cid, oneshot::Sender<QueryResult>),
+    Sync(Cid, oneshot::Sender<QueryResult>),
     Provide(Cid),
     Unprovide(Cid),
-    Send(PeerId, Cid, Vec<u8>),
-    Listeners,
-    ExternalAddresses,
-    Subscribe(mpsc::UnboundedSender<NetworkEvent<QueryId>>),
+    Send(PeerId, Cid, Option<Vec<u8>>),
+    Listeners(oneshot::Sender<Vec<Multiaddr>>),
+    ExternalAddresses(oneshot::Sender<Vec<Multiaddr>>),
+    Subscribe(mpsc::UnboundedSender<NetworkEvent>),
 }
 
 impl<S: StoreParams + 'static> Network<S> for NetworkService<S> {
-    type QueryId = QueryId;
-    type Subscription = mpsc::UnboundedReceiver<NetworkEvent<Self::QueryId>>;
+    type Subscription = mpsc::UnboundedReceiver<NetworkEvent>;
 
     fn local_peer_id(&self) -> &PeerId {
         &self.local_peer_id
     }
 
-    fn listeners(&self) {
-        self.tx.unbounded_send(SwarmMsg::Listeners).ok();
+    fn listeners(&self, tx: oneshot::Sender<Vec<Multiaddr>>) {
+        self.tx.unbounded_send(SwarmMsg::Listeners(tx)).ok();
     }
 
-    fn external_addresses(&self) {
-        self.tx.unbounded_send(SwarmMsg::ExternalAddresses).ok();
+    fn external_addresses(&self, tx: oneshot::Sender<Vec<Multiaddr>>) {
+        self.tx.unbounded_send(SwarmMsg::ExternalAddresses(tx)).ok();
     }
 
-    fn get(&self, cid: Cid) -> Self::QueryId {
-        let query_id = self.query_id.fetch_add(1, Ordering::SeqCst);
-        self.tx.unbounded_send(SwarmMsg::Get(cid, query_id)).ok();
-        query_id
+    fn get(&self, cid: Cid, tx: oneshot::Sender<QueryResult>) {
+        log::debug!("get {}", cid.to_string());
+        self.tx.unbounded_send(SwarmMsg::Get(cid, tx)).ok();
     }
 
-    fn sync(&self, cid: Cid) -> Self::QueryId {
-        let query_id = self.query_id.fetch_add(1, Ordering::SeqCst);
-        self.tx.unbounded_send(SwarmMsg::Sync(cid, query_id)).ok();
-        query_id
-    }
-
-    fn cancel(&self, query_id: Self::QueryId) {
-        self.tx.unbounded_send(SwarmMsg::Cancel(query_id)).ok();
+    fn sync(&self, cid: Cid, tx: oneshot::Sender<QueryResult>) {
+        log::debug!("sync {}", cid.to_string());
+        self.tx.unbounded_send(SwarmMsg::Sync(cid, tx)).ok();
     }
 
     fn provide(&self, cid: Cid) {
+        log::debug!("provide {}", cid.to_string());
         self.tx.unbounded_send(SwarmMsg::Provide(cid)).ok();
     }
 
     fn unprovide(&self, cid: Cid) {
+        log::debug!("unprovide {}", cid.to_string());
         self.tx.unbounded_send(SwarmMsg::Unprovide(cid)).ok();
     }
 
-    fn send(&self, peer_id: PeerId, cid: Cid, data: Vec<u8>) {
+    fn send(&self, peer_id: PeerId, cid: Cid, data: Option<Vec<u8>>) {
+        log::debug!("send {}", cid.to_string());
         self.tx
             .unbounded_send(SwarmMsg::Send(peer_id, cid, data))
             .ok();
@@ -141,11 +131,11 @@ impl<S: StoreParams + 'static> Network<S> for NetworkService<S> {
 struct NetworkWorker<S: StoreParams> {
     swarm: Swarm<NetworkBackendBehaviour<S>>,
     rx: mpsc::UnboundedReceiver<SwarmMsg>,
-    subscriptions: Vec<mpsc::UnboundedSender<NetworkEvent<QueryId>>>,
+    subscriptions: Vec<mpsc::UnboundedSender<NetworkEvent>>,
 }
 
 impl<S: StoreParams> NetworkWorker<S> {
-    fn send_event(&mut self, ev: NetworkEvent<QueryId>) {
+    fn send_event(&mut self, ev: NetworkEvent) {
         self.subscriptions
             .retain(|s| s.unbounded_send(ev.clone()).is_ok())
     }
@@ -162,21 +152,20 @@ impl<S: StoreParams> Future for NetworkWorker<S> {
                 Poll::Ready(None) => return Poll::Ready(()),
             };
             match cmd {
-                SwarmMsg::Get(cid, query_id) => self.swarm.get(cid, query_id),
-                SwarmMsg::Sync(cid, query_id) => self.swarm.sync(cid, query_id),
-                SwarmMsg::Cancel(query_id) => self.swarm.cancel(query_id),
+                SwarmMsg::Get(cid, tx) => self.swarm.get(cid, tx),
+                SwarmMsg::Sync(cid, tx) => self.swarm.sync(cid, tx),
                 SwarmMsg::Provide(cid) => self.swarm.provide(cid),
                 SwarmMsg::Unprovide(cid) => self.swarm.unprovide(cid),
                 SwarmMsg::Send(peer_id, cid, data) => self.swarm.send(peer_id, cid, data),
-                SwarmMsg::Listeners => {
+                SwarmMsg::Listeners(tx) => {
                     let listeners = Swarm::listeners(&mut self.swarm).cloned().collect();
-                    self.send_event(NetworkEvent::Listeners(listeners));
+                    tx.send(listeners).ok();
                 }
-                SwarmMsg::ExternalAddresses => {
+                SwarmMsg::ExternalAddresses(tx) => {
                     let external_addresses = Swarm::external_addresses(&mut self.swarm)
                         .cloned()
                         .collect();
-                    self.send_event(NetworkEvent::ExternalAddresses(external_addresses));
+                    tx.send(external_addresses).ok();
                 }
                 SwarmMsg::Subscribe(tx) => self.subscriptions.push(tx),
             }
