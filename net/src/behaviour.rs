@@ -1,26 +1,33 @@
 use crate::config::NetworkConfig;
 use crate::query::{QueryEvent, QueryManager};
-use futures::channel::oneshot;
 use ip_network::IpNetwork;
-use ipfs_embed_core::{Cid, NetworkEvent, QueryResult, Result, StoreParams};
+use ipfs_embed_core::{Cid, NetworkEvent, Query, Result, StoreParams};
 use libp2p::core::PeerId;
 use libp2p::identify::{Identify, IdentifyEvent};
 use libp2p::kad::record::store::MemoryStore;
 use libp2p::kad::record::Key;
 use libp2p::kad::{
-    BootstrapError, BootstrapOk, GetProvidersOk, Kademlia, KademliaEvent, QueryResult as KademliaQueryResult,
+    BootstrapError, BootstrapOk, GetProvidersOk, Kademlia, KademliaEvent,
+    QueryResult as KademliaQueryResult,
 };
 use libp2p::mdns::{Mdns, MdnsEvent};
 use libp2p::multiaddr::Protocol;
 use libp2p::ping::{Ping, PingEvent};
 use libp2p::swarm::toggle::Toggle;
-use libp2p::swarm::{DialPeerCondition, NetworkBehaviourAction, NetworkBehaviourEventProcess, PollParameters};
+use libp2p::swarm::{
+    DialPeerCondition, NetworkBehaviourAction, NetworkBehaviourEventProcess, PollParameters,
+};
 use libp2p::NetworkBehaviour;
 use libp2p_bitswap::{Bitswap, BitswapConfig, BitswapEvent};
 use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::task::{Context, Poll};
 use thiserror::Error;
+
+enum Event {
+    Generate(NetworkEvent),
+    Dial(PeerId),
+}
 
 /// Behaviour type.
 #[derive(NetworkBehaviour)]
@@ -43,9 +50,7 @@ pub struct NetworkBackendBehaviour<S: StoreParams> {
     #[behaviour(ignore)]
     provided_before_bootstrap: Option<Vec<Key>>,
     #[behaviour(ignore)]
-    events: VecDeque<NetworkEvent>,
-    #[behaviour(ignore)]
-    dial: VecDeque<PeerId>,
+    events: VecDeque<Event>,
 }
 
 impl<S: StoreParams> NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendBehaviour<S> {
@@ -54,7 +59,7 @@ impl<S: StoreParams> NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendB
             MdnsEvent::Discovered(list) => {
                 for (peer_id, _) in list {
                     if self.queries.discover_mdns(peer_id.clone()) {
-                        self.dial.push_back(peer_id);
+                        self.events.push_back(Event::Dial(peer_id));
                     }
                 }
             }
@@ -71,7 +76,9 @@ impl<S: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBack
     fn inject_event(&mut self, event: KademliaEvent) {
         match event {
             KademliaEvent::QueryResult { result, .. } => match result {
-                KademliaQueryResult::GetProviders(Ok(GetProvidersOk { key, providers, .. })) => {
+                KademliaQueryResult::GetProviders(Ok(GetProvidersOk {
+                    key, providers, ..
+                })) => {
                     if let Ok(cid) = Cid::try_from(key.as_ref()) {
                         self.queries
                             .complete_get_providers(cid, providers.into_iter().collect());
@@ -87,17 +94,18 @@ impl<S: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBack
                         self.bootstrap_complete();
                     }
                 }
-                KademliaQueryResult::Bootstrap(Err(BootstrapError::Timeout { num_remaining, .. })) => {
-                    match num_remaining {
-                        Some(0) => {
-                            self.bootstrap_complete();
-                        }
-                        None => {
-                            self.kad.bootstrap().ok();
-                        }
-                        _ => {}
+                KademliaQueryResult::Bootstrap(Err(BootstrapError::Timeout {
+                    num_remaining,
+                    ..
+                })) => match num_remaining {
+                    Some(0) => {
+                        self.bootstrap_complete();
                     }
-                }
+                    None => {
+                        self.kad.bootstrap().ok();
+                    }
+                    _ => {}
+                },
                 _ => {}
             },
             _ => {}
@@ -112,11 +120,13 @@ impl<S: StoreParams> NetworkBehaviourEventProcess<BitswapEvent> for NetworkBacke
                 self.queries.complete_have_query(cid, peer_id, have);
             }
             BitswapEvent::Block { peer_id, cid, data } => {
+                self.events
+                    .push_back(Event::Generate(NetworkEvent::Response(cid, data)));
                 self.queries.complete_want_query(cid, peer_id);
-                self.events.push_back(NetworkEvent::Response(cid, data));
             }
             BitswapEvent::Want { peer_id, cid } => {
-                self.events.push_back(NetworkEvent::Request(peer_id, cid));
+                self.events
+                    .push_back(Event::Generate(NetworkEvent::Request(peer_id, cid)));
             }
         }
     }
@@ -212,18 +222,13 @@ impl<S: StoreParams> NetworkBackendBehaviour<S> {
             identify,
             bitswap,
             events: Default::default(),
-            dial: Default::default(),
             queries: Default::default(),
             provided_before_bootstrap: Some(Default::default()),
         })
     }
 
-    pub fn get(&mut self, cid: Cid, tx: oneshot::Sender<QueryResult>) {
-        self.queries.get(cid, tx);
-    }
-
-    pub fn sync(&mut self, cid: Cid, tx: oneshot::Sender<QueryResult>) {
-        self.queries.sync(cid, tx);
+    pub fn query(&mut self, query: Query) {
+        self.queries.start(query);
     }
 
     pub fn provide(&mut self, cid: Cid) {
@@ -281,16 +286,24 @@ impl<S: StoreParams> NetworkBackendBehaviour<S> {
                     log::debug!("query want {} {}", peer_id, cid);
                     self.bitswap.want_block(peer_id, cid);
                 }
+                QueryEvent::Complete(query, res) => {
+                    self.events
+                        .push_back(Event::Generate(NetworkEvent::Complete(query, res)));
+                }
             }
         }
         if let Some(event) = self.events.pop_front() {
-            return Poll::Ready(NetworkBehaviourAction::GenerateEvent(event));
-        }
-        if let Some(peer_id) = self.dial.pop_front() {
-            return Poll::Ready(NetworkBehaviourAction::DialPeer {
-                peer_id,
-                condition: DialPeerCondition::NotDialing,
-            });
+            match event {
+                Event::Generate(event) => {
+                    return Poll::Ready(NetworkBehaviourAction::GenerateEvent(event))
+                }
+                Event::Dial(peer_id) => {
+                    return Poll::Ready(NetworkBehaviourAction::DialPeer {
+                        peer_id,
+                        condition: DialPeerCondition::NotDialing,
+                    })
+                }
+            }
         }
         Poll::Pending
     }

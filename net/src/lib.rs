@@ -2,7 +2,7 @@ use async_std::task;
 use futures::channel::{mpsc, oneshot};
 use futures::future::Future;
 use futures::stream::Stream;
-use ipfs_embed_core::{Cid, Multiaddr, Network, NetworkEvent, PeerId, QueryResult, Result, StoreParams};
+use ipfs_embed_core::{Cid, Multiaddr, Network, NetworkEvent, PeerId, Query, Result, StoreParams};
 use libp2p::core::transport::upgrade::Version;
 use libp2p::core::transport::Transport;
 use libp2p::dns::DnsConfig;
@@ -69,8 +69,7 @@ impl<S: StoreParams> NetworkService<S> {
 }
 
 enum SwarmMsg {
-    Get(Cid, oneshot::Sender<QueryResult>),
-    Sync(Cid, oneshot::Sender<QueryResult>),
+    Query(Query),
     Provide(Cid),
     Unprovide(Cid),
     Send(PeerId, Cid, Option<Vec<u8>>),
@@ -94,28 +93,23 @@ impl<S: StoreParams + 'static> Network<S> for NetworkService<S> {
         self.tx.unbounded_send(SwarmMsg::ExternalAddresses(tx)).ok();
     }
 
-    fn get(&self, cid: Cid, tx: oneshot::Sender<QueryResult>) {
-        log::debug!("get {}", cid.to_string());
-        self.tx.unbounded_send(SwarmMsg::Get(cid, tx)).ok();
-    }
-
-    fn sync(&self, cid: Cid, tx: oneshot::Sender<QueryResult>) {
-        log::debug!("sync {}", cid.to_string());
-        self.tx.unbounded_send(SwarmMsg::Sync(cid, tx)).ok();
+    fn query(&self, query: Query) {
+        log::debug!("{}", query);
+        self.tx.unbounded_send(SwarmMsg::Query(query)).ok();
     }
 
     fn provide(&self, cid: Cid) {
-        log::debug!("provide {}", cid.to_string());
+        log::debug!("provide {}", cid);
         self.tx.unbounded_send(SwarmMsg::Provide(cid)).ok();
     }
 
     fn unprovide(&self, cid: Cid) {
-        log::debug!("unprovide {}", cid.to_string());
+        log::debug!("unprovide {}", cid);
         self.tx.unbounded_send(SwarmMsg::Unprovide(cid)).ok();
     }
 
     fn send(&self, peer_id: PeerId, cid: Cid, data: Option<Vec<u8>>) {
-        log::debug!("send {}", cid.to_string());
+        log::debug!("send {}", cid);
         self.tx
             .unbounded_send(SwarmMsg::Send(peer_id, cid, data))
             .ok();
@@ -152,8 +146,7 @@ impl<S: StoreParams> Future for NetworkWorker<S> {
                 Poll::Ready(None) => return Poll::Ready(()),
             };
             match cmd {
-                SwarmMsg::Get(cid, tx) => self.swarm.get(cid, tx),
-                SwarmMsg::Sync(cid, tx) => self.swarm.sync(cid, tx),
+                SwarmMsg::Query(query) => self.swarm.query(query),
                 SwarmMsg::Provide(cid) => self.swarm.provide(cid),
                 SwarmMsg::Unprovide(cid) => self.swarm.unprovide(cid),
                 SwarmMsg::Send(peer_id, cid, data) => self.swarm.send(peer_id, cid, data),

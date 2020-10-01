@@ -77,12 +77,12 @@ where
 mod tests {
     use super::*;
     use libipld::cbor::DagCborCodec;
-    use libipld::multihash::SHA2_256;
-    use libipld::store::DefaultStoreParams;
+    use libipld::multihash::Code;
+    use libipld::store::DefaultParams;
     use libipld::{alias, ipld};
 
-    fn create_block(ipld: &Ipld) -> Block<DefaultStoreParams> {
-        Block::encode(DagCborCodec, SHA2_256, ipld).unwrap()
+    fn create_block(ipld: &Ipld) -> Block<DefaultParams> {
+        Block::encode(DagCborCodec, Code::Blake3_256, ipld).unwrap()
     }
 
     macro_rules! assert_evicted {

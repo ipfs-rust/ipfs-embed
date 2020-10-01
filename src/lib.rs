@@ -5,7 +5,7 @@
 //! use ipfs_embed::Ipfs;
 //! use ipfs_embed::db::StorageService;
 //! use ipfs_embed::net::{NetworkConfig, NetworkService};
-//! use libipld::DefaultStoreParams;
+//! use libipld::DefaultParams;
 //! use std::sync::Arc;
 //! use std::time::Duration;
 //! let sled_config = sled::Config::new().temporary(true);
@@ -15,17 +15,19 @@
 //! let net_config = NetworkConfig::new();
 //! let storage = Arc::new(StorageService::open(&sled_config, cache_size, sweep_interval).unwrap());
 //! let network = Arc::new(NetworkService::new(net_config).unwrap());
-//! let ipfs = Ipfs::<DefaultStoreParams, _, _>::new(storage, network, network_timeout);
+//! let ipfs = Ipfs::<DefaultParams, _, _>::new(storage, network, network_timeout);
 //! # Ok(()) }
 //! ```
 use async_std::task;
 use async_trait::async_trait;
-use futures::channel::oneshot;
+use fnv::FnvHashMap;
+use futures::channel::{mpsc, oneshot};
 use futures::future::Future;
+use futures::sink::SinkExt;
 use futures::stream::Stream;
 use ipfs_embed_core::{
-    Block, Cid, Multiaddr, Network, NetworkEvent, PeerId, Result, Storage, StorageEvent,
-    StoreParams,
+    Block, Cid, Multiaddr, Network, NetworkEvent, PeerId, Query, QueryResult, Result, Storage,
+    StorageEvent, StoreParams,
 };
 use libipld::codec::Decode;
 use libipld::error::BlockNotFound;
@@ -46,6 +48,7 @@ pub struct Ipfs<P, S, N> {
     _marker: PhantomData<P>,
     storage: Arc<S>,
     network: Arc<N>,
+    tx: mpsc::Sender<(Query, oneshot::Sender<QueryResult>)>,
 }
 
 impl<P, S, N> Clone for Ipfs<P, S, N> {
@@ -54,6 +57,7 @@ impl<P, S, N> Clone for Ipfs<P, S, N> {
             _marker: self._marker,
             storage: self.storage.clone(),
             network: self.network.clone(),
+            tx: self.tx.clone(),
         }
     }
 }
@@ -66,11 +70,13 @@ where
     Ipld: Decode<P::Codecs>,
 {
     pub fn new(storage: Arc<S>, network: Arc<N>) -> Self {
-        task::spawn(IpfsTask::new(storage.clone(), network.clone()));
+        let (tx, rx) = mpsc::channel(0);
+        task::spawn(IpfsTask::new(storage.clone(), network.clone(), rx));
         Self {
             _marker: PhantomData,
             storage,
             network,
+            tx,
         }
     }
 
@@ -111,7 +117,7 @@ where
             return Ok(block);
         }
         let (tx, rx) = oneshot::channel();
-        self.network.get(*cid, tx);
+        self.tx.clone().send((Query::Get(*cid), tx)).await?;
         rx.await??;
         if let Some(data) = self.storage.get(cid)? {
             let block = Block::new_unchecked(*cid, data);
@@ -129,7 +135,7 @@ where
     async fn alias<T: AsRef<[u8]> + Send + Sync>(&self, alias: T, cid: Option<&Cid>) -> Result<()> {
         if let Some(cid) = cid {
             let (tx, rx) = oneshot::channel();
-            self.network.sync(*cid, tx);
+            self.tx.clone().send((Query::Sync(*cid), tx)).await?;
             rx.await??;
         }
         self.storage.alias(alias.as_ref(), cid).await?;
@@ -147,6 +153,8 @@ struct IpfsTask<P: StoreParams, S: Storage<P>, N: Network<P>> {
     storage_events: S::Subscription,
     network: Arc<N>,
     network_events: N::Subscription,
+    queries: FnvHashMap<Query, Vec<oneshot::Sender<QueryResult>>>,
+    rx: mpsc::Receiver<(Query, oneshot::Sender<QueryResult>)>,
 }
 
 impl<P, S, N> IpfsTask<P, S, N>
@@ -159,6 +167,7 @@ where
     pub fn new(
         storage: Arc<S>,
         network: Arc<N>,
+        rx: mpsc::Receiver<(Query, oneshot::Sender<QueryResult>)>,
     ) -> Self {
         let storage_events = storage.subscribe();
         let network_events = network.subscribe();
@@ -168,6 +177,8 @@ where
             network,
             storage_events,
             network_events,
+            queries: Default::default(),
+            rx,
         }
     }
 }
@@ -182,6 +193,16 @@ where
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
+        loop {
+            let (query, tx) = match Pin::new(&mut self.rx).poll_next(ctx) {
+                Poll::Ready(Some(query)) => query,
+                Poll::Ready(None) => return Poll::Ready(()),
+                Poll::Pending => break,
+            };
+            self.queries.entry(query).or_default().push(tx);
+            self.network.query(query);
+        }
+
         loop {
             let event = match Pin::new(&mut self.network_events).poll_next(ctx) {
                 Poll::Ready(Some(event)) => event,
@@ -198,6 +219,13 @@ where
                 NetworkEvent::Request(peer_id, cid) => match self.storage.get(&cid) {
                     Ok(data) => self.network.send(peer_id, cid, data),
                     Err(err) => log::error!("get: {:?}", err),
+                },
+                NetworkEvent::Complete(query, res) => {
+                    if let Some(txs) = self.queries.remove(&query) {
+                        for tx in txs {
+                            tx.send(res).ok();
+                        }
+                    }
                 }
             }
         }

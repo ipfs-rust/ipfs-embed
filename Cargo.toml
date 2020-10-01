@@ -18,6 +18,7 @@ net = ["ipfs-embed-net"]
 [dependencies]
 async-std = "1.6.5"
 async-trait = "0.1.41"
+fnv = "1.0.7"
 futures = "0.3.5"
 ipfs-embed-core = { version = "0.7.0", path = "core" }
 ipfs-embed-db = { version = "0.7.0", path = "db", optional = true }

@@ -1059,6 +1059,7 @@ dependencies = [
  "async-std",
  "async-trait",
  "env_logger",
+ "fnv",
  "futures",
  "ipfs-embed-core",
  "ipfs-embed-db",

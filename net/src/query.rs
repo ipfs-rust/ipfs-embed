@@ -1,6 +1,5 @@
-use fnv::{FnvHashMap, FnvHashSet};
-use futures::channel::oneshot;
-use ipfs_embed_core::{BlockNotFound, Cid, PeerId, QueryResult};
+use fnv::FnvHashSet;
+use ipfs_embed_core::{BlockNotFound, Cid, PeerId, Query, QueryResult};
 use std::collections::VecDeque;
 
 #[derive(Debug)]
@@ -46,6 +45,7 @@ pub enum QueryEvent {
     GetProviders(Cid),
     Have(PeerId, Cid),
     Want(PeerId, Cid),
+    Complete(Query, QueryResult),
 }
 
 #[derive(Debug)]
@@ -145,21 +145,15 @@ pub struct QueryManager {
     queries: FnvHashSet<CidQuery>,
     progress: FnvHashSet<Cid>,
     mdns_peers: FnvHashSet<PeerId>,
-    notify: FnvHashMap<Cid, Vec<oneshot::Sender<QueryResult>>>,
 }
 
 impl QueryManager {
-    pub fn get(&mut self, cid: Cid, tx: oneshot::Sender<QueryResult>) {
-        if !self.queries.contains(&cid) {
-            let query = CidQuery::new(cid, self.mdns_peers.clone());
-            self.queries.insert(query);
-            self.progress.insert(cid);
+    pub fn start(&mut self, query: Query) {
+        if !self.queries.contains(query.as_ref()) {
+            let get_query = CidQuery::new(*query.as_ref(), self.mdns_peers.clone());
+            self.queries.insert(get_query);
+            self.progress.insert(*query.as_ref());
         }
-        self.notify.entry(cid).or_default().push(tx);
-    }
-
-    pub fn sync(&mut self, _cid: Cid, _tx: oneshot::Sender<QueryResult>) {
-        todo!();
     }
 
     pub fn discover_mdns(&mut self, peer_id: PeerId) -> bool {
@@ -210,19 +204,11 @@ impl QueryManager {
                         }
                         Some(CidQueryEvent::Complete(Ok(_have))) => {
                             log::debug!("get ok {}", cid);
-                            if let Some(txs) = self.notify.remove(&cid) {
-                                for tx in txs {
-                                    tx.send(Ok(())).ok();
-                                }
-                            }
+                            return Some(QueryEvent::Complete(Query::Get(cid), Ok(())));
                         }
                         Some(CidQueryEvent::Complete(Err(err))) => {
                             log::debug!("get error {}", cid);
-                            if let Some(txs) = self.notify.remove(&cid) {
-                                for tx in txs {
-                                    tx.send(Err(err)).ok();
-                                }
-                            }
+                            return Some(QueryEvent::Complete(Query::Get(cid), Err(err)));
                         }
                         None => {
                             self.queries.insert(query);
