@@ -1055,7 +1055,7 @@ checksum = "2ee15951c035f79eddbef745611ec962f63f4558f1dadf98ab723cc603487c6f"
 
 [[package]]
 name = "ipfs-embed"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-std",
  "async-trait",
@@ -1072,7 +1072,7 @@ dependencies = [
 
 [[package]]
 name = "ipfs-embed-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1085,7 +1085,7 @@ dependencies = [
 
 [[package]]
 name = "ipfs-embed-db"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-std",
@@ -1103,7 +1103,7 @@ dependencies = [
 
 [[package]]
 name = "ipfs-embed-net"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-std",
  "fnv",
