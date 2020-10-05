@@ -3,6 +3,7 @@
 //! ```
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use ipfs_embed::Ipfs;
+//! use ipfs_embed::core::BitswapStorage;
 //! use ipfs_embed::db::StorageService;
 //! use ipfs_embed::net::{NetworkConfig, NetworkService};
 //! use libipld::DefaultParams;
@@ -14,8 +15,9 @@
 //! let network_timeout = Duration::from_secs(5);
 //! let net_config = NetworkConfig::new();
 //! let storage = Arc::new(StorageService::open(&sled_config, cache_size, sweep_interval).unwrap());
-//! let network = Arc::new(NetworkService::new(net_config).unwrap());
-//! let ipfs = Ipfs::<DefaultParams, _, _>::new(storage, network, network_timeout);
+//! let bitswap_storage = BitswapStorage::new(storage.clone());
+//! let network = Arc::new(NetworkService::new(net_config, bitswap_storage).unwrap());
+//! let ipfs = Ipfs::<DefaultParams, _, _>::new(storage, network);
 //! # Ok(()) }
 //! ```
 use async_std::task;
@@ -26,8 +28,8 @@ use futures::future::Future;
 use futures::sink::SinkExt;
 use futures::stream::Stream;
 use ipfs_embed_core::{
-    Block, Cid, Multiaddr, Network, NetworkEvent, PeerId, Query, QueryResult, Result, Storage,
-    StorageEvent, StoreParams,
+    BitswapStorage, Block, Cid, Multiaddr, Network, NetworkEvent, PeerId, Query, QueryResult,
+    QueryType, Result, Storage, StorageEvent, StoreParams,
 };
 use libipld::codec::Decode;
 use libipld::error::BlockNotFound;
@@ -117,7 +119,16 @@ where
             return Ok(block);
         }
         let (tx, rx) = oneshot::channel();
-        self.tx.clone().send((Query::Get(*cid), tx)).await?;
+        self.tx
+            .clone()
+            .send((
+                Query {
+                    cid: *cid,
+                    ty: QueryType::Get,
+                },
+                tx,
+            ))
+            .await?;
         rx.await??;
         if let Some(data) = self.storage.get(cid)? {
             let block = Block::new_unchecked(*cid, data);
@@ -135,7 +146,16 @@ where
     async fn alias<T: AsRef<[u8]> + Send + Sync>(&self, alias: T, cid: Option<&Cid>) -> Result<()> {
         if let Some(cid) = cid {
             let (tx, rx) = oneshot::channel();
-            self.tx.clone().send((Query::Sync(*cid), tx)).await?;
+            self.tx
+                .clone()
+                .send((
+                    Query {
+                        cid: *cid,
+                        ty: QueryType::Sync,
+                    },
+                    tx,
+                ))
+                .await?;
             rx.await??;
         }
         self.storage.alias(alias.as_ref(), cid).await?;
@@ -200,7 +220,13 @@ where
                 Poll::Pending => break,
             };
             self.queries.entry(query).or_default().push(tx);
-            self.network.query(query);
+            match query.ty {
+                QueryType::Get => self.network.get(query.cid),
+                QueryType::Sync => {
+                    let syncer = BitswapStorage::new(self.storage.clone());
+                    self.network.sync(query.cid, Arc::new(syncer))
+                }
+            }
         }
 
         loop {
@@ -210,17 +236,7 @@ where
                 Poll::Pending => break,
             };
             match event {
-                NetworkEvent::Response(cid, data) => {
-                    let block = Block::new_unchecked(cid, data.to_vec());
-                    if let Err(err) = self.storage.insert(&block) {
-                        log::error!("insert: {:?}", err);
-                    }
-                }
-                NetworkEvent::Request(peer_id, cid) => match self.storage.get(&cid) {
-                    Ok(data) => self.network.send(peer_id, cid, data),
-                    Err(err) => log::error!("get: {:?}", err),
-                },
-                NetworkEvent::Complete(query, res) => {
+                NetworkEvent::QueryComplete(query, res) => {
                     if let Some(txs) = self.queries.remove(&query) {
                         for tx in txs {
                             tx.send(res).ok();
@@ -275,7 +291,8 @@ mod tests {
 
         let storage =
             Arc::new(StorageService::open(&sled_config, cache_size, sweep_interval).unwrap());
-        let network = Arc::new(NetworkService::new(net_config).unwrap());
+        let bitswap_storage = BitswapStorage::new(storage.clone());
+        let network = Arc::new(NetworkService::new(net_config, bitswap_storage).unwrap());
         Ipfs::new(storage, network)
     }
 
@@ -359,7 +376,6 @@ mod tests {
     }
 
     #[async_std::test]
-    #[ignore]
     async fn test_sync() {
         env_logger::try_init().ok();
         let local1 = create_store(vec![]);
@@ -378,6 +394,7 @@ mod tests {
         assert_pinned!(&local1, &a1);
         assert_pinned!(&local1, &b1);
         assert_pinned!(&local1, &c1);
+        task::sleep(Duration::from_secs(1)).await;
 
         local2.alias(x, Some(c1.cid())).await.unwrap();
         assert_pinned!(&local2, &a1);
@@ -392,6 +409,7 @@ mod tests {
         assert_unpinned!(&local2, &c1);
         assert_pinned!(&local2, &b2);
         assert_pinned!(&local2, &c2);
+        task::sleep(Duration::from_secs(1)).await;
 
         local1.alias(x, Some(c2.cid())).await.unwrap();
         assert_pinned!(&local1, &a1);

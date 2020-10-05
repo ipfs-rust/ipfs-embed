@@ -31,7 +31,7 @@ log = "0.4.11"
 #criterion = "0.3.3"
 env_logger = "0.7.1"
 #ipld-collections = "0.2.0"
-libipld = { version = "0.7.0", features = ["dag-cbor"] }
+libipld = { version = "0.7.0", default-features = false, features = ["dag-cbor"] }
 #model = "0.1.2"
 sled = "0.34.4"
 #tempdir = "0.3.7"
@@ -45,3 +45,4 @@ harness = false
 
 [patch.crates-io]
 libp2p-bitswap = { path = "../libp2p-bitswap" }
+libipld = { path = "../rust-ipld" }

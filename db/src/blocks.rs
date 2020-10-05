@@ -60,8 +60,12 @@ where
         })
     }
 
-    pub fn contains(&self, id: &Id) -> Result<bool> {
+    pub fn contains_id(&self, id: &Id) -> Result<bool> {
         Ok(self.cid.contains_key(id)?)
+    }
+
+    pub fn contains_cid(&self, cid: &Cid) -> Result<bool> {
+        Ok(self.lookup.contains_key(&cid.to_bytes())?)
     }
 
     pub fn len(&self) -> usize {
@@ -267,6 +271,10 @@ where
         })
     }
 
+    pub fn contains(&self, cid: &Cid) -> Result<bool> {
+        self.blocks.contains_cid(cid)
+    }
+
     pub fn get(&self, cid: &Cid) -> Result<Option<Vec<u8>>> {
         self.blocks.get(cid)
     }
@@ -293,7 +301,7 @@ where
 
         let mut filter = self.filter.lock().await;
         for id in closure.iter() {
-            if !self.blocks.contains(&id)? {
+            if !self.blocks.contains_id(&id)? {
                 return Err(IdNotFound(id).into());
             }
         }

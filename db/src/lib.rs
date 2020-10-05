@@ -48,6 +48,10 @@ where
 {
     type Subscription = Subscription;
 
+    fn contains(&self, cid: &Cid) -> Result<bool> {
+        self.store.contains(cid)
+    }
+
     fn get(&self, cid: &Cid) -> Result<Option<Vec<u8>>> {
         self.store.get(cid)
     }

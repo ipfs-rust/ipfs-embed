@@ -55,6 +55,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ahash"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8fd72866655d1904d6b0997d0b07ba561047d070fbe29de039031c641b61217"
+
+[[package]]
 name = "aho-corasick"
 version = "0.7.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -254,12 +260,6 @@ name = "base-x"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b20b618342cf9891c292c4f5ac2cde7287cc5c87e87e9c769d617793607dec1"
-
-[[package]]
-name = "base64"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "904dfeac50f3cdaba28fc6f57fdcddb75f49ed61346676a78c4ffe55877802fd"
 
 [[package]]
 name = "bitflags"
@@ -968,6 +968,7 @@ version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e91b62f79061a0bc2e046024cb7ba44b08419ed238ecbd9adbd787434b9e8c25"
 dependencies = [
+ "ahash",
  "autocfg",
 ]
 
@@ -1077,7 +1078,9 @@ dependencies = [
  "async-trait",
  "futures",
  "libipld",
+ "libp2p-bitswap",
  "libp2p-core",
+ "log",
 ]
 
 [[package]]
@@ -1130,12 +1133,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "itoa"
-version = "0.4.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc6f3ad7b9d11a0c00842ff8de1b60ee58661048eb8049ed33c73594f359d7e6"
-
-[[package]]
 name = "js-sys"
 version = "0.3.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1174,19 +1171,14 @@ checksum = "f2f96b10ec2560088a8e76961b00d47107b3a625fecb76dedb29ee7ccbf98235"
 [[package]]
 name = "libipld"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c83b3109f041b35280c5655772495acbeec7879a7e985cf3ba0a62e2777a68ca"
 dependencies = [
  "async-std",
  "async-trait",
  "cached",
  "fnv",
  "libipld-cbor",
- "libipld-cbor-derive",
  "libipld-core",
- "libipld-json",
  "libipld-macro",
- "libipld-pb",
  "log",
  "thiserror",
 ]
@@ -1194,8 +1186,6 @@ dependencies = [
 [[package]]
 name = "libipld-cbor"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28dacf11437dddf1dbcb38cc9f97454a6a868c2c32f430c43b3c946958c1f295"
 dependencies = [
  "byteorder",
  "libipld-core",
@@ -1203,22 +1193,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "libipld-cbor-derive"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37dc95be4e7215b886f739566b131b8b48c75ba1991a64c39dc4833ee982d886"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
- "synstructure",
-]
-
-[[package]]
 name = "libipld-core"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22546649a520af11dc5b07b496ec5bb51c1e3fb72f413b2a0674a2cb77f01266"
 dependencies = [
  "anyhow",
  "multibase",
@@ -1228,36 +1204,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "libipld-json"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b55b775d8e3babb3b0f407c46adf40baaee1387bc7bbbb02c1d44c18baff6bc2"
-dependencies = [
- "base64",
- "libipld-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "libipld-macro"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11eb762b40158817e1663ff258da5f63e4e7800e4c7a510899a249e543d997e4"
 dependencies = [
  "libipld-core",
-]
-
-[[package]]
-name = "libipld-pb"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6500d49125c67580fa8dd4e2a2a80e86b299581958ee340932229ace9a24ca2c"
-dependencies = [
- "libipld-core",
- "prost",
- "prost-build",
- "thiserror",
 ]
 
 [[package]]
@@ -1279,6 +1229,7 @@ dependencies = [
  "libp2p-mplex",
  "libp2p-noise",
  "libp2p-ping",
+ "libp2p-request-response",
  "libp2p-swarm",
  "libp2p-tcp",
  "libp2p-yamux",
@@ -1294,18 +1245,13 @@ dependencies = [
 name = "libp2p-bitswap"
 version = "0.7.1"
 dependencies = [
- "async-std",
- "cuckoofilter",
+ "async-trait",
  "fnv",
  "futures",
- "futures_codec",
+ "libipld",
  "libp2p",
  "log",
- "prost",
- "prost-build",
  "thiserror",
- "tiny-cid",
- "tiny-multihash",
  "unsigned-varint 0.5.1",
 ]
 
@@ -1483,6 +1429,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "libp2p-request-response"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c0c9e8a4cd69d97e9646c54313d007512f411aba8c5226cfcda16df6a6e84a3"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "libp2p-core",
+ "libp2p-swarm",
+ "log",
+ "lru",
+ "minicbor",
+ "rand 0.7.3",
+ "smallvec",
+ "unsigned-varint 0.5.1",
+ "wasm-timer",
+]
+
+[[package]]
 name = "libp2p-swarm"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1571,6 +1537,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lru"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "111b945ac72ec09eb7bc62a0fbdc3cc6e80555a7245f52a69d3921a75b53b153"
+dependencies = [
+ "hashbrown",
+]
+
+[[package]]
 name = "matches"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1595,6 +1570,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c198b026e1bbf08a937e94c6c60f9ec4a2267f5b0d2eec9c1b21b061ce2be55f"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "minicbor"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fc03ad6f8f548db7194a5ff5a6f96342ecae4e3ef67d2bf18bacc0e245cd041"
+dependencies = [
+ "minicbor-derive",
+]
+
+[[package]]
+name = "minicbor-derive"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c214bf3d90099b52f3e4b328ae0fe34837fd0fab683ad1e10fceb4629106df48"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -2150,12 +2145,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ryu"
-version = "1.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71d301d4193d031abdd79ff7e3dd721168a9572ef3fe51a1517aba235bd8f86e"
-
-[[package]]
 name = "scopeguard"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2181,31 +2170,6 @@ name = "serde"
 version = "1.0.116"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96fe57af81d28386a513cbc6858332abc6117cfdb5999647c6444b8f43a370a5"
-dependencies = [
- "serde_derive",
-]
-
-[[package]]
-name = "serde_derive"
-version = "1.0.116"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f630a6370fd8e457873b4bd2ffdae75408bc291ba72be773772a4c2a065d9ae8"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "serde_json"
-version = "1.0.58"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a230ea9107ca2220eea9d46de97eddcb04cd00e92d13dda78e478dd33fa82bd4"
-dependencies = [
- "itoa",
- "ryu",
- "serde",
-]
 
 [[package]]
 name = "sha-1"
@@ -2593,8 +2557,8 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f7fdeedbf205afadfe39ae559b75c3240f24e257d0ca27e85f85cb82aa19ac35"
 dependencies = [
- "bytes",
- "futures_codec",
+ "futures-io",
+ "futures-util",
 ]
 
 [[package]]

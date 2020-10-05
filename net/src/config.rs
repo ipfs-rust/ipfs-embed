@@ -1,5 +1,7 @@
 use libp2p::core::{Multiaddr, PeerId};
 use libp2p::identity::{Keypair, PublicKey};
+use std::num::NonZeroU16;
+use std::time::Duration;
 
 /// Network configuration.
 #[derive(Clone)]
@@ -20,6 +22,12 @@ pub struct NetworkConfig {
     pub enable_ping: bool,
     /// Should we insert non-global addresses into the DHT?
     pub allow_non_globals_in_dht: bool,
+    /// Bitswap request timeout.
+    pub bitswap_request_timeout: Duration,
+    /// Bitswap connection keep alive.
+    pub bitswap_connection_keepalive: Duration,
+    /// Bitswap inbound requests per peer limit.
+    pub bitswap_receive_limit: NonZeroU16,
 }
 
 impl NetworkConfig {
@@ -36,6 +44,9 @@ impl NetworkConfig {
             node_name: names::Generator::with_naming(names::Name::Numbered)
                 .next()
                 .unwrap(),
+            bitswap_request_timeout: Duration::from_secs(10),
+            bitswap_connection_keepalive: Duration::from_secs(10),
+            bitswap_receive_limit: NonZeroU16::new(20).expect("20 > 0"),
         }
     }
 
