@@ -23,7 +23,7 @@ futures = "0.3.5"
 ipfs-embed-core = { version = "0.7.0", path = "core" }
 ipfs-embed-db = { version = "0.7.0", path = "db", optional = true }
 ipfs-embed-net = { version = "0.7.0", path = "net", optional = true }
-libipld = { version = "0.7.0", default-features = false }
+libipld = { version = "0.7.1", default-features = false }
 log = "0.4.11"
 
 [dev-dependencies]
@@ -31,7 +31,7 @@ log = "0.4.11"
 #criterion = "0.3.3"
 env_logger = "0.7.1"
 #ipld-collections = "0.2.0"
-libipld = { version = "0.7.0", default-features = false, features = ["dag-cbor"] }
+libipld = { version = "0.7.1", default-features = false, features = ["dag-cbor"] }
 #model = "0.1.2"
 sled = "0.34.4"
 #tempdir = "0.3.7"
@@ -42,7 +42,3 @@ debug = true
 [[bench]]
 name = "list"
 harness = false
-
-[patch.crates-io]
-libp2p-bitswap = { path = "../libp2p-bitswap" }
-libipld = { path = "../rust-ipld" }

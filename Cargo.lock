@@ -1170,7 +1170,9 @@ checksum = "f2f96b10ec2560088a8e76961b00d47107b3a625fecb76dedb29ee7ccbf98235"
 
 [[package]]
 name = "libipld"
-version = "0.7.0"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a4e43078bc85b3bd472aa84da0a81ff8aa41d357744f693fe0d372eb9619f27"
 dependencies = [
  "async-std",
  "async-trait",
@@ -1186,6 +1188,8 @@ dependencies = [
 [[package]]
 name = "libipld-cbor"
 version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28dacf11437dddf1dbcb38cc9f97454a6a868c2c32f430c43b3c946958c1f295"
 dependencies = [
  "byteorder",
  "libipld-core",
@@ -1195,6 +1199,8 @@ dependencies = [
 [[package]]
 name = "libipld-core"
 version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22546649a520af11dc5b07b496ec5bb51c1e3fb72f413b2a0674a2cb77f01266"
 dependencies = [
  "anyhow",
  "multibase",
@@ -1206,6 +1212,8 @@ dependencies = [
 [[package]]
 name = "libipld-macro"
 version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11eb762b40158817e1663ff258da5f63e4e7800e4c7a510899a249e543d997e4"
 dependencies = [
  "libipld-core",
 ]
@@ -1243,7 +1251,9 @@ dependencies = [
 
 [[package]]
 name = "libp2p-bitswap"
-version = "0.7.1"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ac3c3eece30baa63e9162e8c799b45d43043d6f8f7ecccaa53de9a9c86ba2f7"
 dependencies = [
  "async-trait",
  "fnv",

@@ -13,7 +13,7 @@ fnv = "1.0.7"
 futures = "0.3.5"
 ip_network = "0.3.4"
 ipfs-embed-core = { version = "0.7.0", path = "../core" }
-libp2p-bitswap = "0.7.1"
+libp2p-bitswap = "0.8.0"
 log = "0.4.11"
 names = "0.11.0"
 thiserror = "1.0.20"

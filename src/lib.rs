@@ -12,7 +12,6 @@
 //! let sled_config = sled::Config::new().temporary(true);
 //! let cache_size = 10;
 //! let sweep_interval = Duration::from_millis(10000);
-//! let network_timeout = Duration::from_secs(5);
 //! let net_config = NetworkConfig::new();
 //! let storage = Arc::new(StorageService::open(&sled_config, cache_size, sweep_interval).unwrap());
 //! let bitswap_storage = BitswapStorage::new(storage.clone());

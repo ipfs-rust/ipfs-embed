@@ -11,7 +11,7 @@ repository = "https://github.com/ipfs-rust/ipfs-embed"
 anyhow = "1.0.32"
 async-trait = "0.1.41"
 futures = "0.3.5"
-libipld = { version = "0.7.0", default-features = false }
+libipld = { version = "0.7.1", default-features = false }
 libp2p-core = "0.22.1"
-libp2p-bitswap = "0.7.1"
+libp2p-bitswap = "0.8.0"
 log = "0.4.11"
