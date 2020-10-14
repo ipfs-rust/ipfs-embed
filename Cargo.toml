@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "db", "net"]
+members = ["core", "db", "net", "post"]
 
 [package]
 name = "ipfs-embed"
