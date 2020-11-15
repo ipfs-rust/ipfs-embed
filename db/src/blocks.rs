@@ -285,7 +285,15 @@ where
 
     pub async fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
         let closure = if let Some(cid) = cid {
-            self.blocks.closure(cid)?
+            if let Some(id) = self.blocks.lookup_id(cid)? {
+                if let Some(closure) = self.closure.get(id)? {
+                    Ids::from(closure)
+                } else {
+                    self.blocks.closure(cid)?
+                }
+            } else {
+                self.blocks.closure(cid)?
+            }
         } else {
             Default::default()
         };
@@ -314,19 +322,10 @@ where
             log::debug!("unpinned {}", id);
         }
 
-        let rm_closure = if let Some(id) = prev_id.as_ref() {
-            !filter.contains(id)
-        } else {
-            false
-        };
-
         let res = (&self.alias, &self.closure)
             .transaction(|(talias, tclosure)| {
-                if let Some(id) = prev_id.as_ref() {
+                if prev_id.is_some() {
                     talias.remove(alias)?;
-                    if rm_closure {
-                        tclosure.remove(id)?;
-                    }
                 }
                 if let Some(id) = id.as_ref() {
                     talias.insert(alias, id)?;
@@ -385,6 +384,7 @@ where
             let id = res?;
             if !filter.contains(&id) {
                 self.blocks.remove(&id)?;
+                self.closure.remove(&id)?;
                 nevict -= 1;
             }
         }
