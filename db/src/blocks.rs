@@ -102,8 +102,7 @@ where
         Ok(ids)
     }
 
-    pub fn closure(&self, cid: &Cid) -> Result<Ids> {
-        let id = self.lookup_id(cid)?.ok_or_else(|| BlockNotFound(*cid))?;
+    pub fn closure(&self, id: Id) -> Result<Ids> {
         let mut refs = FnvHashSet::default();
         let mut todo = Vec::new();
         todo.push(id);
@@ -284,20 +283,20 @@ where
     }
 
     pub async fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
-        let closure = if let Some(cid) = cid {
-            if let Some(id) = self.blocks.lookup_id(cid)? {
-                if let Some(closure) = self.closure.get(id)? {
-                    Ids::from(closure)
-                } else {
-                    self.blocks.closure(cid)?
-                }
+        let id = if let Some(cid) = cid {
+            self.blocks.lookup_id(cid)?
+        } else {
+            None
+        };
+        let closure = if let Some(id) = id.as_ref() {
+            if let Some(closure) = self.closure.get(id)? {
+                Ids::from(closure)
             } else {
-                self.blocks.closure(cid)?
+                self.blocks.closure(id.clone())?
             }
         } else {
             Default::default()
         };
-        let id = closure.iter().next();
         log::debug!("alias {:?} {:?}", alias, id.as_ref());
 
         let prev_id = self.alias.get(alias)?.map(Id::from);

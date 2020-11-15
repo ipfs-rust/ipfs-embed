@@ -3,20 +3,8 @@
 //! ```
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use ipfs_embed::Ipfs;
-//! use ipfs_embed::core::BitswapStorage;
-//! use ipfs_embed::db::StorageService;
-//! use ipfs_embed::net::{NetworkConfig, NetworkService};
-//! use libipld::DefaultParams;
-//! use std::sync::Arc;
-//! use std::time::Duration;
-//! let sled_config = sled::Config::new().temporary(true);
-//! let cache_size = 10;
-//! let sweep_interval = Duration::from_millis(10000);
-//! let net_config = NetworkConfig::new();
-//! let storage = Arc::new(StorageService::open(&sled_config, cache_size, sweep_interval).unwrap());
-//! let bitswap_storage = BitswapStorage::new(storage.clone());
-//! let network = Arc::new(NetworkService::new(net_config, bitswap_storage).unwrap());
-//! let ipfs = Ipfs::<DefaultParams, _, _>::new(storage, network);
+//! let cache_size = 100;
+//! let _ipfs = Ipfs::default(None, cache_size)?;
 //! # Ok(()) }
 //! ```
 use async_std::task;
@@ -99,6 +87,29 @@ where
 
     pub async fn pinned(&self, cid: &Cid) -> Result<Option<bool>> {
         self.storage.pinned(cid).await
+    }
+}
+
+#[cfg(all(feature = "db", feature = "net"))]
+use libipld::store::DefaultParams;
+#[cfg(all(feature = "db", feature = "net"))]
+pub type DefaultIpfs =
+    Ipfs<DefaultParams, db::StorageService<DefaultParams>, net::NetworkService<DefaultParams>>;
+#[cfg(all(feature = "db", feature = "net"))]
+impl DefaultIpfs {
+    /// If no path is provided a temporary db will be created.
+    pub fn default(path: Option<std::path::PathBuf>, cache_size: usize) -> Result<Self> {
+        let sled_config = if let Some(path) = path {
+            sled::Config::new().path(path)
+        } else {
+            sled::Config::new().temporary(true)
+        };
+        let sweep_interval = std::time::Duration::from_millis(10000);
+        let net_config = net::NetworkConfig::new();
+        let storage = Arc::new(db::StorageService::open(&sled_config, cache_size, sweep_interval)?);
+        let bitswap_storage = core::BitswapStorage::new(storage.clone());
+        let network = Arc::new(net::NetworkService::new(net_config, bitswap_storage)?);
+        Ok(Self::new(storage, network))
     }
 }
 
