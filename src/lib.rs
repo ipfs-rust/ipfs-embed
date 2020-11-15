@@ -88,6 +88,32 @@ where
     pub async fn pinned(&self, cid: &Cid) -> Result<Option<bool>> {
         self.storage.pinned(cid).await
     }
+
+    pub async fn alias_with_syncer<T: AsRef<[u8]> + Send + Sync>(
+        &self, alias: T,
+        cid: Option<&Cid>,
+        syncer: Option<Arc<dyn core::BitswapSync>>,
+    ) -> Result<()> {
+        if let Some(cid) = cid {
+            let (tx, rx) = oneshot::channel();
+            self.tx
+                .clone()
+                .send((
+                    Query {
+                        cid: *cid,
+                        ty: QueryType::Sync,
+                        syncer: syncer.unwrap_or_else(|| {
+                            Arc::new(BitswapStorage::new(self.storage.clone()))
+                        }),
+                    },
+                    tx,
+                ))
+                .await?;
+            rx.await??;
+        }
+        self.storage.alias(alias.as_ref(), cid).await?;
+        Ok(())
+    }
 }
 
 #[cfg(all(feature = "db", feature = "net"))]
@@ -154,22 +180,7 @@ where
     }
 
     async fn alias<T: AsRef<[u8]> + Send + Sync>(&self, alias: T, cid: Option<&Cid>) -> Result<()> {
-        if let Some(cid) = cid {
-            let (tx, rx) = oneshot::channel();
-            self.tx
-                .clone()
-                .send((
-                    Query {
-                        cid: *cid,
-                        ty: QueryType::Sync,
-                    },
-                    tx,
-                ))
-                .await?;
-            rx.await??;
-        }
-        self.storage.alias(alias.as_ref(), cid).await?;
-        Ok(())
+        self.alias_with_syncer(alias, cid, None).await
     }
 
     async fn resolve<T: AsRef<[u8]> + Send + Sync>(&self, alias: T) -> Result<Option<Cid>> {
