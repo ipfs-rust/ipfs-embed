@@ -137,11 +137,11 @@ where
                         Ok(())
                     })
                     .map_err(map_tx_error)?;
-                log::debug!("hit {}", id);
+                //log::trace!("hit {}", id);
                 return Ok(Some(data.to_vec()));
             }
         }
-        log::debug!("miss {}", cid.to_string());
+        //log::trace!("miss {}", cid.to_string());
         Ok(None)
     }
 
@@ -314,11 +314,9 @@ where
         }
         for id in closure.iter() {
             filter.add(&id).unwrap();
-            log::debug!("pinned {}", id);
         }
         for id in prev_closure.iter() {
             filter.delete(&id);
-            log::debug!("unpinned {}", id);
         }
 
         let res = (&self.alias, &self.closure)
@@ -337,11 +335,9 @@ where
         if res.is_err() {
             for id in prev_closure.iter() {
                 filter.add(&id).unwrap();
-                log::debug!("pinned {}", id);
             }
             for id in closure.iter() {
                 filter.delete(&id);
-                log::debug!("unpinned {}", id);
             }
         }
         drop(filter);

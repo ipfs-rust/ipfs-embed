@@ -44,8 +44,8 @@ impl NetworkConfig {
             node_name: names::Generator::with_naming(names::Name::Numbered)
                 .next()
                 .unwrap(),
-            bitswap_request_timeout: Duration::from_secs(10),
-            bitswap_connection_keepalive: Duration::from_secs(10),
+            bitswap_request_timeout: Duration::from_secs(1),
+            bitswap_connection_keepalive: Duration::from_secs(1),
             bitswap_receive_limit: NonZeroU16::new(20).expect("20 > 0"),
         }
     }

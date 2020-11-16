@@ -15,7 +15,7 @@ use futures::future::Future;
 use futures::sink::SinkExt;
 use futures::stream::Stream;
 use ipfs_embed_core::{
-    BitswapStorage, Block, Cid, Multiaddr, Network, NetworkEvent, PeerId, Query, QueryResult,
+    BitswapStorage, BitswapSync, Block, Cid, Multiaddr, Network, NetworkEvent, PeerId, Query, QueryResult,
     QueryType, Result, Storage, StorageEvent, StoreParams,
 };
 use libipld::codec::Decode;
@@ -37,7 +37,7 @@ pub struct Ipfs<P, S, N> {
     _marker: PhantomData<P>,
     storage: Arc<S>,
     network: Arc<N>,
-    tx: mpsc::Sender<(Query, oneshot::Sender<QueryResult>)>,
+    tx: mpsc::Sender<(Query, Option<Arc<dyn BitswapSync>>, oneshot::Sender<QueryResult>)>,
 }
 
 impl<P, S, N> Clone for Ipfs<P, S, N> {
@@ -89,10 +89,14 @@ where
         self.storage.pinned(cid).await
     }
 
+    pub fn bitswap_storage(&self) -> BitswapStorage<P, S> {
+        BitswapStorage::new(self.storage.clone())
+    }
+
     pub async fn alias_with_syncer<T: AsRef<[u8]> + Send + Sync>(
         &self, alias: T,
         cid: Option<&Cid>,
-        syncer: Option<Arc<dyn core::BitswapSync>>,
+        syncer: Option<Arc<dyn BitswapSync>>,
     ) -> Result<()> {
         if let Some(cid) = cid {
             let (tx, rx) = oneshot::channel();
@@ -102,10 +106,8 @@ where
                     Query {
                         cid: *cid,
                         ty: QueryType::Sync,
-                        syncer: syncer.unwrap_or_else(|| {
-                            Arc::new(BitswapStorage::new(self.storage.clone()))
-                        }),
                     },
+                    syncer,
                     tx,
                 ))
                 .await?;
@@ -162,6 +164,7 @@ where
                     cid: *cid,
                     ty: QueryType::Get,
                 },
+                None,
                 tx,
             ))
             .await?;
@@ -195,7 +198,7 @@ struct IpfsTask<P: StoreParams, S: Storage<P>, N: Network<P>> {
     network: Arc<N>,
     network_events: N::Subscription,
     queries: FnvHashMap<Query, Vec<oneshot::Sender<QueryResult>>>,
-    rx: mpsc::Receiver<(Query, oneshot::Sender<QueryResult>)>,
+    rx: mpsc::Receiver<(Query, Option<Arc<dyn BitswapSync>>, oneshot::Sender<QueryResult>)>,
 }
 
 impl<P, S, N> IpfsTask<P, S, N>
@@ -208,7 +211,7 @@ where
     pub fn new(
         storage: Arc<S>,
         network: Arc<N>,
-        rx: mpsc::Receiver<(Query, oneshot::Sender<QueryResult>)>,
+        rx: mpsc::Receiver<(Query, Option<Arc<dyn BitswapSync>>, oneshot::Sender<QueryResult>)>,
     ) -> Self {
         let storage_events = storage.subscribe();
         let network_events = network.subscribe();
@@ -235,7 +238,7 @@ where
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         loop {
-            let (query, tx) = match Pin::new(&mut self.rx).poll_next(ctx) {
+            let (query, syncer, tx) = match Pin::new(&mut self.rx).poll_next(ctx) {
                 Poll::Ready(Some(query)) => query,
                 Poll::Ready(None) => return Poll::Ready(()),
                 Poll::Pending => break,
@@ -244,8 +247,10 @@ where
             match query.ty {
                 QueryType::Get => self.network.get(query.cid),
                 QueryType::Sync => {
-                    let syncer = BitswapStorage::new(self.storage.clone());
-                    self.network.sync(query.cid, Arc::new(syncer))
+                    let syncer = syncer.unwrap_or_else(|| {
+                        Arc::new(BitswapStorage::new(self.storage.clone()))
+                    });
+                    self.network.sync(query.cid, syncer)
                 }
             }
         }

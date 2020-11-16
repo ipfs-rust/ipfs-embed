@@ -10,7 +10,7 @@ use libp2p::core::transport::Transport;
 use libp2p::dns::DnsConfig;
 use libp2p::mplex::MplexConfig;
 use libp2p::noise::{Keypair, NoiseConfig, X25519Spec};
-use libp2p::swarm::Swarm;
+use libp2p::swarm::{Swarm, SwarmBuilder};
 use libp2p::tcp::TcpConfig;
 //use libp2p::yamux::Config as YamuxConfig;
 use std::marker::PhantomData;
@@ -47,7 +47,9 @@ impl<P: StoreParams> NetworkService<P> {
 
         let peer_id = config.peer_id();
         let behaviour = NetworkBackendBehaviour::<P>::new(config.clone(), store)?;
-        let mut swarm = Swarm::new(transport, behaviour, peer_id.clone());
+        let mut swarm = SwarmBuilder::new(transport, behaviour, peer_id.clone())
+            .executor(Box::new(|fut| { async_std::task::spawn(fut); }))
+            .build();
         for addr in config.listen_addresses {
             Swarm::listen_on(&mut swarm, addr)?;
         }

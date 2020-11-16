@@ -43,3 +43,6 @@ debug = true
 [[bench]]
 name = "list"
 harness = false
+
+[patch.crates-io]
+libp2p-bitswap = { git = "https://github.com/ipfs-rust/libp2p-bitswap" }
