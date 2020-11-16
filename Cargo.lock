@@ -1289,6 +1289,7 @@ dependencies = [
 [[package]]
 name = "libp2p-bitswap"
 version = "0.8.0"
+source = "git+https://github.com/ipfs-rust/libp2p-bitswap#2c5db79969438ee21bc7d8e2aac3f0ac6f8ddf92"
 dependencies = [
  "async-trait",
  "fnv",
