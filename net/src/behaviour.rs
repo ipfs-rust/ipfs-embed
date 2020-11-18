@@ -10,7 +10,7 @@ use libp2p::kad::{
     BootstrapError, BootstrapOk, GetProvidersOk, Kademlia, KademliaEvent,
     QueryResult as KademliaQueryResult,
 };
-use libp2p::mdns::{Mdns, MdnsEvent};
+//use libp2p::mdns::{Mdns, MdnsEvent};
 use libp2p::multiaddr::Protocol;
 use libp2p::ping::{Ping, PingEvent};
 use libp2p::swarm::toggle::Toggle;
@@ -33,7 +33,7 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     allow_non_globals_in_dht: bool,
 
     kad: Kademlia<MemoryStore>,
-    mdns: Toggle<Mdns>,
+    //mdns: Toggle<Mdns>,
     ping: Toggle<Ping>,
     identify: Identify,
     bitswap: Bitswap<P>,
@@ -46,7 +46,7 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     events: VecDeque<NetworkEvent>,
 }
 
-impl<P: StoreParams> NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendBehaviour<P> {
+/*impl<P: StoreParams> NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendBehaviour<P> {
     fn inject_event(&mut self, event: MdnsEvent) {
         match event {
             MdnsEvent::Discovered(list) => {
@@ -65,7 +65,7 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendB
             }
         }
     }
-}
+}*/
 
 impl<P: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBackendBehaviour<P> {
     fn inject_event(&mut self, event: KademliaEvent) {
@@ -178,12 +178,12 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
     pub fn new<S: BitswapStore<P>>(config: NetworkConfig, store: S) -> Result<Self> {
         let peer_id = config.peer_id();
 
-        let mdns = if config.enable_mdns {
+        /*let mdns = if config.enable_mdns {
             Some(Mdns::new()?)
         } else {
             None
         }
-        .into();
+        .into();*/
 
         let kad_store = MemoryStore::new(peer_id.clone());
         let mut kad = Kademlia::new(peer_id.clone(), kad_store);
@@ -213,7 +213,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         Ok(Self {
             peer_id,
             allow_non_globals_in_dht: config.allow_non_globals_in_dht,
-            mdns,
+            //mdns,
             kad,
             ping,
             identify,

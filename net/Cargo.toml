@@ -29,4 +29,5 @@ features = [
     "ping",
     # "quic",
     "mplex", "noise", "tcp-async-std", "yamux",
+    "wasm-ext-websocket",
 ]

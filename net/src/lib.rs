@@ -7,12 +7,13 @@ use ipfs_embed_core::{
 };
 use libp2p::core::transport::upgrade::Version;
 use libp2p::core::transport::Transport;
-use libp2p::dns::DnsConfig;
+//use libp2p::dns::DnsConfig;
 use libp2p::mplex::MplexConfig;
 use libp2p::noise::{Keypair, NoiseConfig, X25519Spec};
 use libp2p::swarm::{Swarm, SwarmBuilder};
-use libp2p::tcp::TcpConfig;
+//use libp2p::tcp::TcpConfig;
 //use libp2p::yamux::Config as YamuxConfig;
+use libp2p::wasm_ext::{ExtTransport, ffi::websocket_transport};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -36,20 +37,26 @@ impl<P: StoreParams> NetworkService<P> {
         let dh_key = Keypair::<X25519Spec>::new()
             .into_authentic(&config.node_key)
             .unwrap();
-        let transport = DnsConfig::new(
+        /*let transport = DnsConfig::new(
             TcpConfig::new()
                 .nodelay(true)
                 .upgrade(Version::V1)
                 .authenticate(NoiseConfig::xx(dh_key).into_authenticated())
                 .multiplex(MplexConfig::new())
                 .timeout(Duration::from_secs(5)),
-        )?;
+        )?;*/
+        let transport = ExtTransport::new(websocket_transport())
+            .upgrade(Version::V1)
+            .authenticate(NoiseConfig::xx(dh_key).into_authenticated())
+            .multiplex(MplexConfig::new())
+            .timeout(Duration::from_secs(5))
+            .boxed();
 
         let peer_id = config.peer_id();
         let behaviour = NetworkBackendBehaviour::<P>::new(config.clone(), store)?;
-        let mut swarm = SwarmBuilder::new(transport, behaviour, peer_id.clone())
-            .executor(Box::new(|fut| { async_std::task::spawn(fut); }))
-            .build();
+        let mut swarm = Swarm::new(transport, behaviour, peer_id.clone());
+        //    .executor(Box::new(|fut| { async_std::task::spawn(fut); }))
+        //    .build();
         for addr in config.listen_addresses {
             Swarm::listen_on(&mut swarm, addr)?;
         }
@@ -58,11 +65,11 @@ impl<P: StoreParams> NetworkService<P> {
         }
 
         let (tx, rx) = mpsc::unbounded();
-        task::spawn(NetworkWorker {
+        /*task::spawn(NetworkWorker {
             swarm,
             rx,
             subscriptions: Default::default(),
-        });
+        });*/
 
         Ok(Self {
             _marker: PhantomData,
