@@ -16,7 +16,7 @@ db = ["ipfs-embed-db", "sled"]
 net = ["ipfs-embed-net"]
 
 [dependencies]
-async-std = "1.6.5"
+async-std = "1.7.0"
 async-trait = "0.1.41"
 fnv = "1.0.7"
 futures = "0.3.5"
@@ -45,4 +45,4 @@ name = "list"
 harness = false
 
 [patch.crates-io]
-libp2p-bitswap = { git = "https://github.com/ipfs-rust/libp2p-bitswap" }
+libp2p-bitswap = { path = "../libp2p-bitswap" } #git = "https://github.com/ipfs-rust/libp2p-bitswap" }

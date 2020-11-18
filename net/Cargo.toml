@@ -19,7 +19,7 @@ names = "0.11.0"
 thiserror = "1.0.20"
 
 [dependencies.libp2p]
-version = "0.28.1"
+version = "0.30.1"
 default-features = false
 features = [
     "dns",

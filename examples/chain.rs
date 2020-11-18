@@ -8,6 +8,7 @@ use std::convert::TryFrom;
 use std::path::Path;
 use std::sync::Arc;
 
+const TMP_ROOT: &str = alias!(tmp_root);
 const ROOT: &str = alias!(root);
 
 #[derive(Debug, Default, DagCbor)]
@@ -183,20 +184,23 @@ impl BlockChain {
 
     pub async fn sync(&mut self, root: &Cid) -> Result<()> {
         let syncer = ChainSyncer::new(self.index.clone(), self.ipfs.bitswap_storage());
-        self.ipfs.alias_with_syncer(ROOT, Some(root), Some(syncer)).await?;
+        self.ipfs.alias_with_syncer(TMP_ROOT, Some(root), Some(syncer)).await?;
 
         let mut cid = *root;
         let mut block = self.get_by_cid(root).await?;
         let prev_root_id = self.root_id;
+        let new_root_id = block.id;
 
-        self.root_id = block.id;
-        self.root_cid = Some(cid);
-
-        for _ in prev_root_id..self.root_id {
+        for _ in prev_root_id..new_root_id {
             self.index_block(block.id, &cid)?;
             cid = block.prev.unwrap();
             block = self.get_by_cid(&cid).await?;
         }
+
+        self.ipfs.alias(ROOT, Some(root), Some(syncer)).await?;
+        self.root_id = block.id;
+        self.root_cid = Some(cid);
+
         Ok(())
     }
 
