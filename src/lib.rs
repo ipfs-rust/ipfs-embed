@@ -350,7 +350,7 @@ mod tests {
         let store2 = create_store(vec![]);
         let block = create_block(b"test_exchange_mdns");
         store1.insert(&block).await.unwrap();
-        task::sleep(Duration::from_millis(1000)).await;
+        task::sleep(Duration::from_secs(3)).await;
         let block2 = store2.get(block.cid()).await.unwrap();
         assert_eq!(block.data(), block2.data());
     }
@@ -360,7 +360,7 @@ mod tests {
         env_logger::try_init().ok();
         let store = create_store(vec![]);
         // make sure bootstrap node has started
-        task::sleep(Duration::from_millis(1000)).await;
+        task::sleep(Duration::from_secs(3)).await;
         let bootstrap = vec![(
             store.listeners().await[0].clone(),
             store.local_peer_id().clone(),
@@ -370,7 +370,7 @@ mod tests {
         let block = create_block(b"test_exchange_kad");
         store1.insert(&block).await.unwrap();
         // wait for entry to propagate
-        task::sleep(Duration::from_millis(1000)).await;
+        task::sleep(Duration::from_secs(3)).await;
         let block2 = store2.get(block.cid()).await.unwrap();
         assert_eq!(block.data(), block2.data());
     }
@@ -426,7 +426,7 @@ mod tests {
         assert_pinned!(&local1, &a1);
         assert_pinned!(&local1, &b1);
         assert_pinned!(&local1, &c1);
-        task::sleep(Duration::from_secs(1)).await;
+        task::sleep(Duration::from_secs(3)).await;
 
         local2.alias(x, Some(c1.cid())).await.unwrap();
         assert_pinned!(&local2, &a1);
@@ -441,7 +441,7 @@ mod tests {
         assert_unpinned!(&local2, &c1);
         assert_pinned!(&local2, &b2);
         assert_pinned!(&local2, &c2);
-        task::sleep(Duration::from_secs(1)).await;
+        task::sleep(Duration::from_secs(3)).await;
 
         local1.alias(x, Some(c2.cid())).await.unwrap();
         assert_pinned!(&local1, &a1);
