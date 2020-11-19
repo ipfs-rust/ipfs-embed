@@ -16,22 +16,22 @@ db = ["ipfs-embed-db", "sled"]
 net = ["ipfs-embed-net"]
 
 [dependencies]
-async-std = "1.6.5"
+async-std = "1.7.0"
 async-trait = "0.1.41"
 fnv = "1.0.7"
-futures = "0.3.5"
+futures = "0.3.8"
 ipfs-embed-core = { version = "0.8.0", path = "core" }
 ipfs-embed-db = { version = "0.8.0", path = "db", optional = true }
 ipfs-embed-net = { version = "0.8.0", path = "net", optional = true }
 libipld = { version = "0.7.1", default-features = false }
 log = "0.4.11"
-sled = { version = "0.34.4", optional = true }
+sled = { version = "0.34.6", optional = true }
 
 [dev-dependencies]
 async-std = { version = "1.7.0", features = ["attributes"] }
 #async-log = "2.0.0"
 #criterion = "0.3.3"
-env_logger = "0.7.1"
+env_logger = "0.8.2"
 #ipld-collections = "0.2.0"
 libipld = { version = "0.7.1", default-features = false, features = ["dag-cbor", "derive"] }
 #model = "0.1.2"

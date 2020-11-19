@@ -8,19 +8,19 @@ description = "small embeddable ipfs implementation"
 repository = "https://github.com/ipfs-rust/ipfs-embed"
 
 [dependencies]
-anyhow = "1.0.32"
-async-std = { version = "1.6.5", features = ["unstable"] }
+anyhow = "1.0.34"
+async-std = { version = "1.7.0", features = ["unstable"] }
 cuckoofilter = "0.5.0"
 fnv = "1.0.7"
-futures = "0.3.5"
+futures = "0.3.8"
 ipfs-embed-core = { version = "0.8.0", path = "../core" }
 libipld = { version = "0.7.1", default-features = false }
 log = "0.4.11"
-sled = "0.34.4"
-thiserror = "1.0.20"
+sled = "0.34.6"
+thiserror = "1.0.22"
 
 [dev-dependencies]
-async-std = { version = "1.6.5", features = ["attributes"] }
-env_logger = "0.7.1"
+async-std = { version = "1.7.0", features = ["attributes"] }
+env_logger = "0.8.2"
 libipld = { version = "0.7.1", features = ["dag-cbor"], default-features = false }
 tempdir = "0.3.7"
