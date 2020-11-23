@@ -171,3 +171,20 @@ impl LiveSet {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_live_set() {
+        let mut live = LiveSet::new();
+        let id = Id::from(0);
+        live.add(&id).unwrap();
+        live.add(&id).unwrap();
+        live.delete(&id);
+        assert_eq!(live.contains(&id), true);
+        live.delete(&id);
+        assert_eq!(live.contains(&id), false);
+    }
+}
