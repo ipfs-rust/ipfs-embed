@@ -29,16 +29,32 @@ where
         let store = Aliases::open(&db)?;
         let gc = store.clone();
         task::spawn(async move {
+            let mut atime = gc.atime();
             let mut stream = interval(sweep_interval);
             while let Some(()) = stream.next().await {
-                gc.evict(cache_size).await.ok();
+                let next_atime = gc.atime();
+                gc.evict(cache_size, atime).await.ok();
+                atime = next_atime;
             }
         });
-        Ok(Self { db, cache_size, store })
+        Ok(Self {
+            db,
+            cache_size,
+            store,
+        })
     }
 
-    pub async fn evict(&self) -> Result<()> {
-        self.store.evict(self.cache_size).await
+    pub fn atime(&self) -> u64 {
+        self.store.atime()
+    }
+
+    pub async fn evict(&self, grace_atime: u64) -> Result<()> {
+        self.store.evict(self.cache_size, grace_atime).await
+    }
+
+    pub async fn flush(&self) -> Result<()> {
+        self.db.flush_async().await?;
+        Ok(())
     }
 }
 
@@ -63,8 +79,7 @@ where
 
     async fn alias<T: AsRef<[u8]> + Send + Sync>(&self, alias: T, cid: Option<&Cid>) -> Result<()> {
         self.store.alias(alias.as_ref(), cid).await?;
-        self.db.flush_async().await?;
-        Ok(())
+        self.flush().await
     }
 
     fn resolve<T: AsRef<[u8]> + Send + Sync>(&self, alias: T) -> Result<Option<Cid>> {
@@ -123,20 +138,33 @@ mod tests {
         ];
         store.insert(&blocks[0]).unwrap();
         store.insert(&blocks[1]).unwrap();
-        store.evict().await.unwrap();
+        store.evict(store.atime() + 1).await.unwrap();
         assert_unpinned!(&store, &blocks[0]);
         assert_unpinned!(&store, &blocks[1]);
         store.insert(&blocks[2]).unwrap();
-        store.evict().await.unwrap();
+        store.evict(store.atime() + 1).await.unwrap();
         assert_evicted!(&store, &blocks[0]);
         assert_unpinned!(&store, &blocks[1]);
         assert_unpinned!(&store, &blocks[2]);
         store.get(&blocks[1]).unwrap();
         store.insert(&blocks[3]).unwrap();
-        store.evict().await.unwrap();
+        store.evict(store.atime() + 1).await.unwrap();
         assert_unpinned!(&store, &blocks[1]);
         assert_evicted!(&store, &blocks[2]);
         assert_unpinned!(&store, &blocks[3]);
+    }
+
+    #[async_std::test]
+    async fn test_grace_period() {
+        env_logger::try_init().ok();
+        let config = sled::Config::new().temporary(true);
+        let store = StorageService::open(&config, 0, Duration::from_millis(10000)).unwrap();
+        let blocks = [create_block(&ipld!(0))];
+        store.insert(&blocks[0]).unwrap();
+        store.evict(0).await.unwrap();
+        assert_unpinned!(&store, &blocks[0]);
+        store.evict(store.atime() + 1).await.unwrap();
+        assert_evicted!(&store, &blocks[0]);
     }
 
     #[async_std::test]
