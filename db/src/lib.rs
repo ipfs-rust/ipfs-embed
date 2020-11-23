@@ -11,6 +11,7 @@ mod blocks;
 mod id;
 
 pub struct StorageService<S: StoreParams> {
+    db: sled::Db,
     store: Aliases<S>,
     cache_size: usize,
 }
@@ -33,7 +34,7 @@ where
                 gc.evict(cache_size).await.ok();
             }
         });
-        Ok(Self { cache_size, store })
+        Ok(Self { db, cache_size, store })
     }
 
     pub async fn evict(&self) -> Result<()> {
@@ -61,7 +62,9 @@ where
     }
 
     async fn alias<T: AsRef<[u8]> + Send + Sync>(&self, alias: T, cid: Option<&Cid>) -> Result<()> {
-        self.store.alias(alias.as_ref(), cid).await
+        self.store.alias(alias.as_ref(), cid).await?;
+        self.db.flush_async().await?;
+        Ok(())
     }
 
     fn resolve<T: AsRef<[u8]> + Send + Sync>(&self, alias: T) -> Result<Option<Cid>> {
