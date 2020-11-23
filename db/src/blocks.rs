@@ -1,3 +1,10 @@
+//! Implements a block store.
+//!
+//! The references of a block is the set of `Cid`s that are contained within a block. A closure
+//! is the recursive set of references, containing all `Cid`s that are reachable from a block.
+//!
+//! When aliasing a block the closure of the block is added to the bag containing the blocks
+//! reachable from all aliases. A bag is a set where each value can be inserted multiple times.
 use crate::id::{Id, Ids, LiveSet};
 use async_std::sync::Mutex;
 use fnv::FnvHashSet;
@@ -27,6 +34,7 @@ fn map_tx_error(e: TransactionError<Error>) -> Error {
 #[error("Id {0:?} not found.")]
 pub struct IdNotFound(Id);
 
+/// Implements a reference counted lru cache.
 #[derive(Clone)]
 pub struct Blocks<S: StoreParams> {
     _marker: PhantomData<S>,
@@ -48,6 +56,7 @@ impl<S: StoreParams> Blocks<S>
 where
     Ipld: Decode<S::Codecs>,
 {
+    /// Opens the store.
     pub fn open(db: &sled::Db) -> Result<Self> {
         Ok(Self {
             _marker: PhantomData,
@@ -60,23 +69,28 @@ where
         })
     }
 
+    /// Checks if the store contains an `Id`.
     pub fn contains_id(&self, id: &Id) -> Result<bool> {
         Ok(self.cid.contains_key(id)?)
     }
 
+    /// Checks if the store contains a `Cid`.
     pub fn contains_cid(&self, cid: &Cid) -> Result<bool> {
         Ok(self.lookup.contains_key(&cid.to_bytes())?)
     }
 
+    /// The number of blocks contained in the store.
     pub fn len(&self) -> usize {
         self.lookup.len()
     }
 
+    /// Returns the `Id` of the block with a given `Cid`.
     pub fn lookup_id(&self, cid: &Cid) -> Result<Option<Id>> {
         Ok(self.lookup.get(&cid.to_bytes())?.map(From::from))
     }
 
-    pub fn cid(&self, id: &Id) -> Result<Option<Cid>> {
+    /// Returns the `Cid` of the block with a given `Id`.
+    pub fn lookup_cid(&self, id: &Id) -> Result<Option<Cid>> {
         if let Some(bytes) = self.cid.get(id)? {
             Ok(Some(Cid::try_from(&bytes[..])?))
         } else {
@@ -84,11 +98,12 @@ where
         }
     }
 
+    /// Returns the set of references of a block.
     pub fn refs(&self, id: &Id) -> Result<Ids> {
         if let Some(refs) = self.refs.get(id)?.map(From::from) {
             return Ok(refs);
         }
-        let cid = self.cid(id)?.ok_or_else(|| IdNotFound(id.clone()))?;
+        let cid = self.lookup_cid(id)?.ok_or_else(|| IdNotFound(id.clone()))?;
         let data = self.data.get(id)?.ok_or_else(|| IdNotFound(id.clone()))?;
         let block = Block::<S>::new_unchecked(cid, data.to_vec());
         let cid_refs = block.ipld()?.references();
@@ -102,6 +117,7 @@ where
         Ok(ids)
     }
 
+    /// Returns the recursive set of references of a block.
     pub fn closure(&self, id: Id) -> Result<Ids> {
         let mut refs = FnvHashSet::default();
         let mut todo = Vec::new();
@@ -116,6 +132,7 @@ where
         Ok(Ids::from(&refs))
     }
 
+    /// Returns an iterator of `Id`s sorted by least recently used.
     pub fn lru(&self) -> impl Iterator<Item = Result<Id>> {
         self.lru
             .iter()
@@ -123,6 +140,7 @@ where
             .map(|v| v.map(Into::into).map_err(Into::into))
     }
 
+    /// Returns the data of a block and increments the access time.
     pub fn get(&self, cid: &Cid) -> Result<Option<Vec<u8>>> {
         if let Some(id) = self.lookup_id(cid)? {
             if let Some(data) = self.data.get(&id)? {
@@ -145,6 +163,7 @@ where
         Ok(None)
     }
 
+    /// Inserts a block into the store.
     pub fn insert(&self, block: &Block<S>) -> Result<()> {
         let cid = IVec::from(block.cid().to_bytes());
         let data = block.data();
@@ -167,6 +186,7 @@ where
         Ok(())
     }
 
+    /// Removes a block from the store.
     pub fn remove(&self, id: &Id) -> Result<()> {
         (
             &self.lookup,
@@ -192,6 +212,7 @@ where
         Ok(())
     }
 
+    /// Returns a subscription of store events.
     pub fn subscribe(&self) -> Subscription {
         let subscriber = self.lookup.watch_prefix([]);
         let keys = self.lookup.scan_prefix([]);
@@ -251,6 +272,7 @@ impl<S: StoreParams> Aliases<S>
 where
     Ipld: Decode<S::Codecs>,
 {
+    /// Opens the store and initializes the live set.
     pub fn open(db: &sled::Db) -> Result<Self> {
         let blocks = Blocks::open(db)?;
         let alias = db.open_tree("alias")?;
@@ -270,18 +292,22 @@ where
         })
     }
 
+    /// Checks if the store contains a block.
     pub fn contains(&self, cid: &Cid) -> Result<bool> {
         self.blocks.contains_cid(cid)
     }
 
+    /// Returns the block from the store.
     pub fn get(&self, cid: &Cid) -> Result<Option<Vec<u8>>> {
         self.blocks.get(cid)
     }
 
+    /// Inserts a block into the store.
     pub fn insert(&self, block: &Block<S>) -> Result<()> {
         self.blocks.insert(block)
     }
 
+    /// Aliases a block.
     pub async fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
         let id = if let Some(cid) = cid {
             self.blocks.lookup_id(cid)?
@@ -345,14 +371,17 @@ where
         res
     }
 
+    /// Resolves the alias to a `Cid`.
     pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>> {
         if let Some(id) = self.alias.get(alias)? {
-            self.blocks.cid(&id.into())
+            self.blocks.lookup_cid(&id.into())
         } else {
             Ok(None)
         }
     }
 
+    /// Checks if the block is pinned. If the block is pinned it
+    /// means that it can't be evicted.
     pub async fn pinned(&self, cid: &Cid) -> Result<Option<bool>> {
         if let Some(id) = self.blocks.lookup_id(cid)? {
             let filter = self.filter.lock().await;
@@ -362,6 +391,8 @@ where
         }
     }
 
+    /// Evicts least recently used blocks until there are no more
+    /// than `cache_size` number of unpinned blocks.
     pub async fn evict(&self, cache_size: usize) -> Result<()> {
         let filter = self.filter.lock().await;
         let nblocks = self.blocks.len();
@@ -386,6 +417,7 @@ where
         Ok(())
     }
 
+    /// Subscribes to store events.
     pub fn subscribe(&self) -> Subscription {
         self.blocks.subscribe()
     }
