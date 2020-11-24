@@ -133,11 +133,19 @@ where
     }
 
     /// Returns an iterator of `Id`s sorted by least recently used.
-    pub fn lru(&self) -> impl Iterator<Item = Result<Id>> {
-        self.lru
-            .iter()
-            .values()
-            .map(|v| v.map(Into::into).map_err(Into::into))
+    pub fn lru(&self) -> impl Iterator<Item = Result<(u64, Id)>> {
+        self.lru.iter().map(|res| {
+            res.map(|(atime, id)| (u64::from(&Id::from(atime)), id.into()))
+                .map_err(Into::into)
+        })
+    }
+
+    /// Returns the current atime.
+    pub fn atime(&self) -> u64 {
+        match self.lru.last() {
+            Ok(Some((atime, _))) => u64::from(&Id::from(atime)),
+            _ => 0,
+        }
     }
 
     /// Returns the data of a block and increments the access time.
@@ -152,6 +160,7 @@ where
                         }
                         tlru.insert(&atime, &id)?;
                         tatime.insert(&id, &atime)?;
+                        log::debug!("get {} at {}", id, atime);
                         Ok(())
                     })
                     .map_err(map_tx_error)?;
@@ -167,10 +176,10 @@ where
     pub fn insert(&self, block: &Block<S>) -> Result<()> {
         let cid = IVec::from(block.cid().to_bytes());
         let data = block.data();
-        let id = (&self.lookup, &self.cid, &self.data, &self.atime, &self.lru)
+        (&self.lookup, &self.cid, &self.data, &self.atime, &self.lru)
             .transaction(|(tlookup, tcid, tdata, tatime, tlru)| {
-                if let Some(id) = tlookup.get(&cid)? {
-                    return Ok(Id::from(id));
+                if tlookup.get(&cid)?.is_some() {
+                    return Ok(());
                 }
                 let id: Id = tlookup.generate_id()?.into();
                 let atime: Id = tlru.generate_id()?.into();
@@ -179,10 +188,10 @@ where
                 tdata.insert(&id, data)?;
                 tatime.insert(&id, &atime)?;
                 tlru.insert(&atime, &id)?;
-                Ok(id)
+                log::debug!("insert {} at {}", id, atime);
+                Ok(())
             })
             .map_err(map_tx_error)?;
-        log::debug!("insert {}", id);
         Ok(())
     }
 
@@ -281,7 +290,7 @@ where
         for res in alias.iter().values() {
             let id = res?;
             for id in Ids::from(closure.get(&id)?.unwrap()).iter() {
-                filter.add(&id)?;
+                filter.add(&id);
             }
         }
         Ok(Self {
@@ -339,7 +348,7 @@ where
             }
         }
         for id in closure.iter() {
-            filter.add(&id).unwrap();
+            filter.add(&id);
         }
         for id in prev_closure.iter() {
             filter.delete(&id);
@@ -360,7 +369,7 @@ where
 
         if res.is_err() {
             for id in prev_closure.iter() {
-                filter.add(&id).unwrap();
+                filter.add(&id);
             }
             for id in closure.iter() {
                 filter.delete(&id);
@@ -391,9 +400,14 @@ where
         }
     }
 
+    /// Returns the current atime.
+    pub fn atime(&self) -> u64 {
+        self.blocks.atime()
+    }
+
     /// Evicts least recently used blocks until there are no more
     /// than `cache_size` number of unpinned blocks.
-    pub async fn evict(&self, cache_size: usize) -> Result<()> {
+    pub async fn evict(&self, cache_size: usize, grace_atime: u64) -> Result<()> {
         let filter = self.filter.lock().await;
         let nblocks = self.blocks.len();
         let nlive = filter.len();
@@ -402,12 +416,15 @@ where
             return Ok(());
         }
         let mut nevict = ncache - cache_size;
-        log::debug!("evicting {} blocks", nevict);
+        log::debug!("evicting {} blocks older than {}", nevict, grace_atime);
         for res in self.blocks.lru() {
             if nevict < 1 {
                 break;
             }
-            let id = res?;
+            let (atime, id) = res?;
+            if atime >= grace_atime {
+                return Ok(());
+            }
             if !filter.contains(&id) {
                 self.blocks.remove(&id)?;
                 self.closure.remove(&id)?;
