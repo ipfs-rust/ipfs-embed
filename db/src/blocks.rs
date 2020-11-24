@@ -290,7 +290,7 @@ where
         for res in alias.iter().values() {
             let id = res?;
             for id in Ids::from(closure.get(&id)?.unwrap()).iter() {
-                filter.add(&id)?;
+                filter.add(&id);
             }
         }
         Ok(Self {
@@ -348,7 +348,7 @@ where
             }
         }
         for id in closure.iter() {
-            filter.add(&id).unwrap();
+            filter.add(&id);
         }
         for id in prev_closure.iter() {
             filter.delete(&id);
@@ -369,7 +369,7 @@ where
 
         if res.is_err() {
             for id in prev_closure.iter() {
-                filter.add(&id).unwrap();
+                filter.add(&id);
             }
             for id in closure.iter() {
                 filter.delete(&id);

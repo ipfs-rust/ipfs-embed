@@ -1,6 +1,4 @@
-use cuckoofilter::CuckooFilter;
-use fnv::FnvHasher;
-use ipfs_embed_core::Result;
+use fnv::FnvHashMap;
 use sled::IVec;
 use std::collections::HashSet;
 use std::hash::{BuildHasherDefault, Hasher};
@@ -136,38 +134,34 @@ impl<'a> Iterator for IdsIter<'a> {
 }
 
 pub struct LiveSet {
-    filter: CuckooFilter<FnvHasher>,
-    distinct: usize,
+    filter: FnvHashMap<Id, u32>,
 }
 
 impl LiveSet {
     pub fn new() -> Self {
         Self {
-            filter: CuckooFilter::with_capacity(cuckoofilter::DEFAULT_CAPACITY),
-            distinct: 0,
+            filter: Default::default(),
         }
     }
 
     pub fn len(&self) -> usize {
-        self.distinct
+        self.filter.len()
     }
 
     pub fn contains(&self, id: &Id) -> bool {
-        self.filter.contains(id)
+        self.filter.contains_key(id)
     }
 
-    pub fn add(&mut self, id: &Id) -> Result<()> {
-        if !self.filter.contains(id) {
-            self.distinct += 1;
-        }
-        self.filter.add(id)?;
-        Ok(())
+    pub fn add(&mut self, id: &Id) {
+        let count = self.filter.entry(id.clone()).or_default();
+        *count += 1;
     }
 
     pub fn delete(&mut self, id: &Id) {
-        self.filter.delete(id);
-        if !self.filter.contains(id) {
-            self.distinct -= 1;
+        if let Some((id, count)) = self.filter.remove_entry(id) {
+            if count > 1 {
+                self.filter.insert(id, count - 1);
+            }
         }
     }
 }
@@ -180,8 +174,8 @@ mod tests {
     fn test_live_set() {
         let mut live = LiveSet::new();
         let id = Id::from(0);
-        live.add(&id).unwrap();
-        live.add(&id).unwrap();
+        live.add(&id);
+        live.add(&id);
         live.delete(&id);
         assert_eq!(live.contains(&id), true);
         live.delete(&id);
