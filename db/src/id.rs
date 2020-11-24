@@ -134,7 +134,7 @@ impl<'a> Iterator for IdsIter<'a> {
 }
 
 pub struct LiveSet {
-    filter: FnvHashMap<Id, u32>,
+    filter: FnvHashMap<Id, u64>,
 }
 
 impl LiveSet {
