@@ -23,20 +23,22 @@ where
     pub fn open(
         config: &sled::Config,
         cache_size: usize,
-        sweep_interval: Duration,
+        sweep_interval: Option<Duration>,
     ) -> Result<Self> {
         let db = config.open()?;
         let store = Aliases::open(&db)?;
-        let gc = store.clone();
-        task::spawn(async move {
-            let mut atime = gc.atime();
-            let mut stream = interval(sweep_interval);
-            while let Some(()) = stream.next().await {
-                let next_atime = gc.atime();
-                gc.evict(cache_size, atime).await.ok();
-                atime = next_atime;
-            }
-        });
+        if let Some(sweep_interval) = sweep_interval {
+            let gc = store.clone();
+            task::spawn(async move {
+                let mut atime = gc.atime();
+                let mut stream = interval(sweep_interval);
+                while let Some(()) = stream.next().await {
+                    let next_atime = gc.atime();
+                    gc.evict(cache_size, atime).await.ok();
+                    atime = next_atime;
+                }
+            });
+        }
         Ok(Self {
             db,
             cache_size,
@@ -125,11 +127,18 @@ mod tests {
         };
     }
 
+    fn tracing_try_init() {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .try_init()
+            .ok();
+    }
+
     #[async_std::test]
     async fn test_store_evict() {
-        env_logger::try_init().ok();
+        tracing_try_init();
         let config = sled::Config::new().temporary(true);
-        let store = StorageService::open(&config, 2, Duration::from_millis(10000)).unwrap();
+        let store = StorageService::open(&config, 2, None).unwrap();
         let blocks = [
             create_block(&ipld!(0)),
             create_block(&ipld!(1)),
@@ -156,9 +165,9 @@ mod tests {
 
     #[async_std::test]
     async fn test_grace_period() {
-        env_logger::try_init().ok();
+        tracing_try_init();
         let config = sled::Config::new().temporary(true);
-        let store = StorageService::open(&config, 0, Duration::from_millis(10000)).unwrap();
+        let store = StorageService::open(&config, 0, None).unwrap();
         let blocks = [create_block(&ipld!(0))];
         store.insert(&blocks[0]).unwrap();
         store.evict(0).await.unwrap();
@@ -170,9 +179,9 @@ mod tests {
     #[async_std::test]
     #[allow(clippy::many_single_char_names)]
     async fn test_store_unpin() {
-        env_logger::try_init().ok();
+        tracing_try_init();
         let config = sled::Config::new().temporary(true);
-        let store = StorageService::open(&config, 2, Duration::from_millis(10000)).unwrap();
+        let store = StorageService::open(&config, 2, None).unwrap();
         let a = create_block(&ipld!({ "a": [] }));
         let b = create_block(&ipld!({ "b": [a.cid()] }));
         let c = create_block(&ipld!({ "c": [a.cid()] }));
@@ -199,9 +208,9 @@ mod tests {
     #[async_std::test]
     #[allow(clippy::many_single_char_names)]
     async fn test_store_unpin2() {
-        env_logger::try_init().ok();
+        tracing_try_init();
         let config = sled::Config::new().temporary(true);
-        let store = StorageService::open(&config, 2, Duration::from_millis(10000)).unwrap();
+        let store = StorageService::open(&config, 2, None).unwrap();
         let a = create_block(&ipld!({ "a": [] }));
         let b = create_block(&ipld!({ "b": [a.cid()] }));
         let x = alias!(x);

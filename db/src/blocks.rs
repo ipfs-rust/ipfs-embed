@@ -22,6 +22,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use thiserror::Error;
+use tracing::instrument;
 
 fn map_tx_error(e: TransactionError<Error>) -> Error {
     match e {
@@ -50,6 +51,12 @@ pub struct Blocks<S: StoreParams> {
     atime: Tree,
     // atime -> id
     lru: Tree,
+}
+
+impl<S: StoreParams> std::fmt::Debug for Blocks<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Blocks")
+    }
 }
 
 impl<S: StoreParams> Blocks<S>
@@ -118,6 +125,7 @@ where
     }
 
     /// Returns the recursive set of references of a block.
+    #[instrument]
     pub fn closure(&self, id: Id) -> Result<Ids> {
         let mut refs = FnvHashSet::default();
         let mut todo = Vec::new();
@@ -160,15 +168,15 @@ where
                         }
                         tlru.insert(&atime, &id)?;
                         tatime.insert(&id, &atime)?;
-                        log::debug!("get {} at {}", id, atime);
+                        tracing::debug!("get {} at {}", id, atime);
                         Ok(())
                     })
                     .map_err(map_tx_error)?;
-                //log::trace!("hit {}", id);
+                //tracing::trace!("hit {}", id);
                 return Ok(Some(data.to_vec()));
             }
         }
-        //log::trace!("miss {}", cid.to_string());
+        //tracing::trace!("miss {}", cid.to_string());
         Ok(None)
     }
 
@@ -188,7 +196,7 @@ where
                 tdata.insert(&id, data)?;
                 tatime.insert(&id, &atime)?;
                 tlru.insert(&atime, &id)?;
-                log::debug!("insert {} at {}", id, atime);
+                tracing::debug!("insert {} at {}", id, atime);
                 Ok(())
             })
             .map_err(map_tx_error)?;
@@ -217,7 +225,7 @@ where
                 Ok(())
             })
             .map_err(map_tx_error)?;
-        log::debug!("remove {}", id);
+        tracing::debug!("remove {}", id);
         Ok(())
     }
 
@@ -277,11 +285,18 @@ pub struct Aliases<S: StoreParams> {
     closure: Tree,
 }
 
+impl<S: StoreParams> std::fmt::Debug for Aliases<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Aliases")
+    }
+}
+
 impl<S: StoreParams> Aliases<S>
 where
     Ipld: Decode<S::Codecs>,
 {
     /// Opens the store and initializes the live set.
+    #[instrument]
     pub fn open(db: &sled::Db) -> Result<Self> {
         let blocks = Blocks::open(db)?;
         let alias = db.open_tree("alias")?;
@@ -316,23 +331,30 @@ where
         self.blocks.insert(block)
     }
 
-    /// Aliases a block.
-    pub async fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
-        let id = if let Some(cid) = cid {
-            self.blocks.lookup_id(cid)?
+    /// Returns the closure of a cid.
+    pub fn closure(&self, cid: &Cid) -> Result<(Id, Ids)> {
+        let id = if let Some(id) = self.blocks.lookup_id(cid)? {
+            id
         } else {
-            None
+            return Err(BlockNotFound(*cid).into());
         };
-        let closure = if let Some(id) = id.as_ref() {
-            if let Some(closure) = self.closure.get(id)? {
-                Ids::from(closure)
-            } else {
-                self.blocks.closure(id.clone())?
-            }
+        if let Some(closure) = self.closure.get(&id)? {
+            Ok((id, Ids::from(closure)))
+        } else {
+            Ok((id.clone(), self.blocks.closure(id)?))
+        }
+    }
+
+    /// Aliases a block.
+    #[instrument]
+    pub async fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
+        let (id, closure) = if let Some(cid) = cid {
+            let (id, closure) = self.closure(cid)?;
+            (Some(id), closure)
         } else {
             Default::default()
         };
-        log::debug!("alias {:?} {:?}", alias, id.as_ref());
+        tracing::debug!("alias {:?} {:?} {}", alias, id.as_ref(), closure.len());
 
         let prev_id = self.alias.get(alias)?.map(Id::from);
         let prev_closure = if let Some(id) = prev_id.as_ref() {
@@ -407,6 +429,7 @@ where
 
     /// Evicts least recently used blocks until there are no more
     /// than `cache_size` number of unpinned blocks.
+    #[instrument]
     pub async fn evict(&self, cache_size: usize, grace_atime: u64) -> Result<()> {
         let filter = self.filter.lock().await;
         let nblocks = self.blocks.len();
@@ -416,7 +439,7 @@ where
             return Ok(());
         }
         let mut nevict = ncache - cache_size;
-        log::debug!("evicting {} blocks older than {}", nevict, grace_atime);
+        tracing::debug!("evicting {} blocks older than {}", nevict, grace_atime);
         for res in self.blocks.lru() {
             if nevict < 1 {
                 break;

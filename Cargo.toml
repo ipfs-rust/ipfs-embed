@@ -43,3 +43,6 @@ debug = true
 [[bench]]
 name = "list"
 harness = false
+
+[patch.crates-io]
+libipld = { path = "../rust-ipld" }

@@ -14,12 +14,19 @@ fnv = "1.0.7"
 futures = "0.3.8"
 ipfs-embed-core = { version = "0.9.0", path = "../core" }
 libipld = { version = "0.7.1", default-features = false }
-log = "0.4.11"
 sled = "0.34.6"
 thiserror = "1.0.22"
+tracing = "0.1.22"
+tracing-futures = "0.2.4"
 
 [dev-dependencies]
 async-std = { version = "1.7.0", features = ["attributes"] }
-env_logger = "0.8.2"
-libipld = { version = "0.7.1", features = ["dag-cbor"], default-features = false }
-tempdir = "0.3.7"
+criterion = "0.3.3"
+inferno = "0.10.1"
+libipld = { version = "0.7.1", features = ["dag-cbor", "derive"], default-features = false }
+tracing-flame = "0.1.0"
+tracing-subscriber = { version = "0.2.15", features = ["chrono", "env-filter", "fmt"] }
+
+[[bench]]
+name = "alias"
+harness = false

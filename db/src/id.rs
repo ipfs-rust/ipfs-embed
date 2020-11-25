@@ -77,6 +77,14 @@ impl Ids {
     pub fn iter(&self) -> IdsIter<'_> {
         IdsIter { ids: self, pos: 0 }
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len() / 8
+    }
 }
 
 impl From<IVec> for Ids {
@@ -133,6 +141,7 @@ impl<'a> Iterator for IdsIter<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct LiveSet {
     filter: FnvHashMap<Id, u64>,
 }
