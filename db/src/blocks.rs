@@ -124,22 +124,6 @@ where
         Ok(ids)
     }
 
-    /// Returns the recursive set of references of a block.
-    #[instrument]
-    pub fn closure(&self, id: Id) -> Result<Ids> {
-        let mut refs = FnvHashSet::default();
-        let mut todo = Vec::new();
-        todo.push(id);
-        while let Some(id) = todo.pop() {
-            if refs.contains(&id) {
-                continue;
-            }
-            todo.extend(self.refs(&id)?.iter());
-            refs.insert(id);
-        }
-        Ok(Ids::from(&refs))
-    }
-
     /// Returns an iterator of `Id`s sorted by least recently used.
     pub fn lru(&self) -> impl Iterator<Item = Result<(u64, Id)>> {
         self.lru.iter().map(|res| {
@@ -331,25 +315,36 @@ where
         self.blocks.insert(block)
     }
 
-    /// Returns the closure of a cid.
-    pub fn closure(&self, cid: &Cid) -> Result<(Id, Ids)> {
-        let id = if let Some(id) = self.blocks.lookup_id(cid)? {
-            id
-        } else {
-            return Err(BlockNotFound(*cid).into());
-        };
-        if let Some(closure) = self.closure.get(&id)? {
-            Ok((id, Ids::from(closure)))
-        } else {
-            Ok((id.clone(), self.blocks.closure(id)?))
+    /// Returns the recursive set of references of a block.
+    #[instrument]
+    pub fn closure(&self, id: &Id) -> Result<Ids> {
+        if let Some(closure) = self.closure.get(id)?.map(Ids::from) {
+            return Ok(closure);
         }
+        let mut refs = FnvHashSet::default();
+        let mut todo = vec![id.clone()];
+        while let Some(id) = todo.pop() {
+            if refs.contains(&id) {
+                continue;
+            }
+            if let Some(closure) = self.closure.get(&id)? {
+                for id in Ids::from(closure).iter() {
+                    refs.insert(id.into());
+                }
+            } else {
+                todo.extend(self.blocks.refs(&id)?.iter());
+                refs.insert(id);
+            }
+        }
+        Ok(Ids::from(&refs))
     }
 
     /// Aliases a block.
     #[instrument]
     pub async fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
         let (id, closure) = if let Some(cid) = cid {
-            let (id, closure) = self.closure(cid)?;
+            let id = self.blocks.lookup_id(cid)?.ok_or(BlockNotFound(*cid))?;
+            let closure = self.closure(&id)?;
             (Some(id), closure)
         } else {
             Default::default()
@@ -358,7 +353,7 @@ where
 
         let prev_id = self.alias.get(alias)?.map(Id::from);
         let prev_closure = if let Some(id) = prev_id.as_ref() {
-            self.closure.get(id)?.map(Ids::from).unwrap_or_default()
+            self.closure(id)?
         } else {
             Default::default()
         };
