@@ -7,7 +7,6 @@
 //! reachable from all aliases. A bag is a set where each value can be inserted multiple times.
 use crate::id::{Id, Ids, LiveSet};
 use async_std::sync::Mutex;
-use fnv::FnvHashSet;
 use futures::future::Future;
 use futures::stream::Stream;
 use ipfs_embed_core::{Block, Cid, Error, Result, StorageEvent, StoreParams};
@@ -317,61 +316,61 @@ where
 
     /// Returns the recursive set of references of a block.
     #[instrument]
-    pub fn closure(&self, id: &Id) -> Result<Ids> {
-        if let Some(closure) = self.closure.get(id)?.map(Ids::from) {
-            return Ok(closure);
-        }
-        let mut refs = FnvHashSet::default();
+    pub fn closure(&self, id: &Id, prev_id: Option<&Id>) -> Result<(Ids, bool)> {
+        let mut refs = vec![];
         let mut todo = vec![id.clone()];
+        let mut superset = prev_id.is_none();
         while let Some(id) = todo.pop() {
-            if refs.contains(&id) {
+            if Some(&id) == prev_id {
+                superset = true;
                 continue;
             }
             if let Some(closure) = self.closure.get(&id)? {
-                for id in Ids::from(closure).iter() {
-                    refs.insert(id.into());
-                }
+                refs.extend_from_slice(closure.as_ref());
             } else {
                 todo.extend(self.blocks.refs(&id)?.iter());
-                refs.insert(id);
+                refs.extend_from_slice(id.as_ref());
             }
         }
-        Ok(Ids::from(&refs))
+        Ok((Ids::from(IVec::from(refs)), superset))
     }
 
     /// Aliases a block.
     #[instrument]
     pub async fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
-        let (id, closure) = if let Some(cid) = cid {
-            let id = self.blocks.lookup_id(cid)?.ok_or(BlockNotFound(*cid))?;
-            let closure = self.closure(&id)?;
-            (Some(id), closure)
-        } else {
-            Default::default()
-        };
-        tracing::debug!("alias {:?} {:?} {}", alias, id.as_ref(), closure.len());
-
         let prev_id = self.alias.get(alias)?.map(Id::from);
         let prev_closure = if let Some(id) = prev_id.as_ref() {
-            self.closure(id)?
+            self.closure.get(id)?.map(Ids::from).unwrap_or_default()
         } else {
             Default::default()
         };
 
+        let (id, partial_closure, superset) = if let Some(cid) = cid {
+            let id = self.blocks.lookup_id(cid)?.ok_or(BlockNotFound(*cid))?;
+            let (closure, superset) = self.closure(&id, prev_id.as_ref())?;
+            (Some(id), closure, superset)
+        } else {
+            Default::default()
+        };
+        tracing::debug!("alias {:?} {:?} {} {}", alias, id.as_ref(), partial_closure.len(), superset);
+
         let mut filter = self.filter.lock().await;
-        for id in closure.iter() {
+        for id in partial_closure.iter() {
             if !self.blocks.contains_id(&id)? {
                 return Err(IdNotFound(id).into());
             }
         }
-        for id in closure.iter() {
-            filter.add(&id);
-        }
-        for id in prev_closure.iter() {
-            filter.delete(&id);
-        }
 
-        let res = (&self.alias, &self.closure)
+        let closure = if superset {
+            let mut closure = Vec::with_capacity(partial_closure.len() + prev_closure.len());
+            closure.extend_from_slice(partial_closure.as_ref());
+            closure.extend_from_slice(prev_closure.as_ref());
+            Ids::from(IVec::from(closure))
+        } else {
+            partial_closure.clone()
+        };
+
+        (&self.alias, &self.closure)
             .transaction(|(talias, tclosure)| {
                 if prev_id.is_some() {
                     talias.remove(alias)?;
@@ -382,19 +381,19 @@ where
                 }
                 Ok(())
             })
-            .map_err(map_tx_error);
+            .map_err(map_tx_error)?;
 
-        if res.is_err() {
+        for id in partial_closure.iter() {
+            filter.add(&id);
+        }
+
+        if !superset {
             for id in prev_closure.iter() {
-                filter.add(&id);
-            }
-            for id in closure.iter() {
                 filter.delete(&id);
             }
         }
-        drop(filter);
 
-        res
+        Ok(())
     }
 
     /// Resolves the alias to a `Cid`.

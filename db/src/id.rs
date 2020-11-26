@@ -1,7 +1,5 @@
 use fnv::FnvHashMap;
 use sled::IVec;
-use std::collections::HashSet;
-use std::hash::{BuildHasherDefault, Hasher};
 
 #[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Id(IVec);
@@ -62,9 +60,10 @@ impl std::fmt::Display for Id {
 pub struct Ids(IVec);
 
 impl Ids {
-    pub fn concat(idss: &[Self]) -> Self {
+    pub fn concat(idss: &[&Self]) -> Self {
         let cap = idss.iter().map(|ids| ids.as_ref().len()).sum();
-        let mut buf = vec![0; cap];
+        let mut buf = Vec::with_capacity(cap);
+        unsafe { buf.set_len(cap) };
         let mut start = 0;
         for ids in idss {
             let end = start + ids.as_ref().len();
