@@ -36,11 +36,6 @@ fn main() {
     }
     async_std::task::block_on(async {
         db.alias("test", Some(prev.cid())).await.unwrap();
-        db.alias("test", None).await.unwrap();
-    });
-    let checkpoint = prev.clone();
-    async_std::task::block_on(async {
-        db.alias("test", Some(checkpoint.cid())).await.unwrap();
     });
     for _ in 0..1024 {
         prev = block(Some(*prev.cid()));
@@ -48,11 +43,6 @@ fn main() {
     }
     async_std::task::block_on(async {
         db.alias("test", Some(prev.cid())).await.unwrap();
-        db.alias("test", Some(checkpoint.cid())).await.unwrap();
-    });
-    let checkpoint = prev.clone();
-    async_std::task::block_on(async {
-        db.alias("test", Some(checkpoint.cid())).await.unwrap();
     });
     for _ in 0..1024 {
         prev = block(Some(*prev.cid()));
@@ -60,7 +50,6 @@ fn main() {
     }
     async_std::task::block_on(async {
         db.alias("test", Some(prev.cid())).await.unwrap();
-        db.alias("test", Some(checkpoint.cid())).await.unwrap();
     });
 
     drop(guard);

@@ -3,7 +3,7 @@ use sled::IVec;
 use std::collections::HashSet;
 use std::hash::{BuildHasherDefault, Hasher};
 
-#[derive(Clone, Eq, Hash, PartialEq)]
+#[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Id(IVec);
 
 impl From<IVec> for Id {
@@ -85,6 +85,14 @@ impl Ids {
     pub fn len(&self) -> usize {
         self.0.len() / 8
     }
+
+    pub fn from_iter<'a, I: Iterator<Item = &'a Id> + 'a>(iter: I, len: usize) -> Self {
+        let mut buf = Vec::with_capacity(len * 8);
+        for id in iter {
+            buf.extend_from_slice(id.as_ref());
+        }
+        Self(IVec::from(buf))
+    }
 }
 
 impl From<IVec> for Ids {
@@ -102,16 +110,6 @@ impl<'a> From<&'a Ids> for IVec {
 impl From<Ids> for IVec {
     fn from(ids: Ids) -> Self {
         ids.0
-    }
-}
-
-impl<'a, H: Hasher> From<&'a HashSet<Id, BuildHasherDefault<H>>> for Ids {
-    fn from(ids: &HashSet<Id, BuildHasherDefault<H>>) -> Self {
-        let mut buf = Vec::with_capacity(ids.len() * 8);
-        for id in ids {
-            buf.extend_from_slice(id.as_ref());
-        }
-        Self(IVec::from(buf))
     }
 }
 
