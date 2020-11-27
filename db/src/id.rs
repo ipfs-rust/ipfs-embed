@@ -1,9 +1,7 @@
 use fnv::FnvHashMap;
 use sled::IVec;
-use std::collections::HashSet;
-use std::hash::{BuildHasherDefault, Hasher};
 
-#[derive(Clone, Eq, Hash, PartialEq)]
+#[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Id(IVec);
 
 impl From<IVec> for Id {
@@ -62,9 +60,10 @@ impl std::fmt::Display for Id {
 pub struct Ids(IVec);
 
 impl Ids {
-    pub fn concat(idss: &[Self]) -> Self {
+    pub fn concat(idss: &[&Self]) -> Self {
         let cap = idss.iter().map(|ids| ids.as_ref().len()).sum();
-        let mut buf = vec![0; cap];
+        let mut buf = Vec::with_capacity(cap);
+        unsafe { buf.set_len(cap) };
         let mut start = 0;
         for ids in idss {
             let end = start + ids.as_ref().len();
@@ -76,6 +75,22 @@ impl Ids {
 
     pub fn iter(&self) -> IdsIter<'_> {
         IdsIter { ids: self, pos: 0 }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len() / 8
+    }
+
+    pub fn from_iter<'a, I: Iterator<Item = &'a Id> + 'a>(iter: I, len: usize) -> Self {
+        let mut buf = Vec::with_capacity(len * 8);
+        for id in iter {
+            buf.extend_from_slice(id.as_ref());
+        }
+        Self(IVec::from(buf))
     }
 }
 
@@ -94,16 +109,6 @@ impl<'a> From<&'a Ids> for IVec {
 impl From<Ids> for IVec {
     fn from(ids: Ids) -> Self {
         ids.0
-    }
-}
-
-impl<'a, H: Hasher> From<&'a HashSet<Id, BuildHasherDefault<H>>> for Ids {
-    fn from(ids: &HashSet<Id, BuildHasherDefault<H>>) -> Self {
-        let mut buf = Vec::with_capacity(ids.len() * 8);
-        for id in ids {
-            buf.extend_from_slice(id.as_ref());
-        }
-        Self(IVec::from(buf))
     }
 }
 
@@ -133,6 +138,7 @@ impl<'a> Iterator for IdsIter<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct LiveSet {
     filter: FnvHashMap<Id, u64>,
 }

@@ -7,7 +7,6 @@
 //! reachable from all aliases. A bag is a set where each value can be inserted multiple times.
 use crate::id::{Id, Ids, LiveSet};
 use async_std::sync::Mutex;
-use fnv::FnvHashSet;
 use futures::future::Future;
 use futures::stream::Stream;
 use ipfs_embed_core::{Block, Cid, Error, Result, StorageEvent, StoreParams};
@@ -22,6 +21,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use thiserror::Error;
+use tracing::instrument;
 
 fn map_tx_error(e: TransactionError<Error>) -> Error {
     match e {
@@ -50,6 +50,12 @@ pub struct Blocks<S: StoreParams> {
     atime: Tree,
     // atime -> id
     lru: Tree,
+}
+
+impl<S: StoreParams> std::fmt::Debug for Blocks<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Blocks")
+    }
 }
 
 impl<S: StoreParams> Blocks<S>
@@ -117,21 +123,6 @@ where
         Ok(ids)
     }
 
-    /// Returns the recursive set of references of a block.
-    pub fn closure(&self, id: Id) -> Result<Ids> {
-        let mut refs = FnvHashSet::default();
-        let mut todo = Vec::new();
-        todo.push(id);
-        while let Some(id) = todo.pop() {
-            if refs.contains(&id) {
-                continue;
-            }
-            todo.extend(self.refs(&id)?.iter());
-            refs.insert(id);
-        }
-        Ok(Ids::from(&refs))
-    }
-
     /// Returns an iterator of `Id`s sorted by least recently used.
     pub fn lru(&self) -> impl Iterator<Item = Result<(u64, Id)>> {
         self.lru.iter().map(|res| {
@@ -160,15 +151,15 @@ where
                         }
                         tlru.insert(&atime, &id)?;
                         tatime.insert(&id, &atime)?;
-                        log::debug!("get {} at {}", id, atime);
+                        tracing::debug!("get {} at {}", id, atime);
                         Ok(())
                     })
                     .map_err(map_tx_error)?;
-                //log::trace!("hit {}", id);
+                //tracing::trace!("hit {}", id);
                 return Ok(Some(data.to_vec()));
             }
         }
-        //log::trace!("miss {}", cid.to_string());
+        //tracing::trace!("miss {}", cid.to_string());
         Ok(None)
     }
 
@@ -188,7 +179,7 @@ where
                 tdata.insert(&id, data)?;
                 tatime.insert(&id, &atime)?;
                 tlru.insert(&atime, &id)?;
-                log::debug!("insert {} at {}", id, atime);
+                tracing::debug!("insert {} at {}", id, atime);
                 Ok(())
             })
             .map_err(map_tx_error)?;
@@ -217,7 +208,7 @@ where
                 Ok(())
             })
             .map_err(map_tx_error)?;
-        log::debug!("remove {}", id);
+        tracing::debug!("remove {}", id);
         Ok(())
     }
 
@@ -277,11 +268,18 @@ pub struct Aliases<S: StoreParams> {
     closure: Tree,
 }
 
+impl<S: StoreParams> std::fmt::Debug for Aliases<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Aliases")
+    }
+}
+
 impl<S: StoreParams> Aliases<S>
 where
     Ipld: Decode<S::Codecs>,
 {
     /// Opens the store and initializes the live set.
+    #[instrument]
     pub fn open(db: &sled::Db) -> Result<Self> {
         let blocks = Blocks::open(db)?;
         let alias = db.open_tree("alias")?;
@@ -316,24 +314,30 @@ where
         self.blocks.insert(block)
     }
 
-    /// Aliases a block.
-    pub async fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
-        let id = if let Some(cid) = cid {
-            self.blocks.lookup_id(cid)?
-        } else {
-            None
-        };
-        let closure = if let Some(id) = id.as_ref() {
-            if let Some(closure) = self.closure.get(id)? {
-                Ids::from(closure)
-            } else {
-                self.blocks.closure(id.clone())?
+    /// Returns the recursive set of references of a block.
+    #[instrument]
+    pub fn closure(&self, id: &Id, prev_id: Option<&Id>) -> Result<(Ids, bool)> {
+        let mut refs = vec![];
+        let mut todo = vec![id.clone()];
+        let mut superset = prev_id.is_none();
+        while let Some(id) = todo.pop() {
+            if Some(&id) == prev_id {
+                superset = true;
+                continue;
             }
-        } else {
-            Default::default()
-        };
-        log::debug!("alias {:?} {:?}", alias, id.as_ref());
+            if let Some(closure) = self.closure.get(&id)? {
+                refs.extend_from_slice(closure.as_ref());
+            } else {
+                todo.extend(self.blocks.refs(&id)?.iter());
+                refs.extend_from_slice(id.as_ref());
+            }
+        }
+        Ok((Ids::from(IVec::from(refs)), superset))
+    }
 
+    /// Aliases a block.
+    #[instrument]
+    pub async fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
         let prev_id = self.alias.get(alias)?.map(Id::from);
         let prev_closure = if let Some(id) = prev_id.as_ref() {
             self.closure.get(id)?.map(Ids::from).unwrap_or_default()
@@ -341,20 +345,32 @@ where
             Default::default()
         };
 
+        let (id, partial_closure, superset) = if let Some(cid) = cid {
+            let id = self.blocks.lookup_id(cid)?.ok_or(BlockNotFound(*cid))?;
+            let (closure, superset) = self.closure(&id, prev_id.as_ref())?;
+            (Some(id), closure, superset)
+        } else {
+            Default::default()
+        };
+        tracing::debug!("alias {:?} {:?} {} {}", alias, id.as_ref(), partial_closure.len(), superset);
+
         let mut filter = self.filter.lock().await;
-        for id in closure.iter() {
+        for id in partial_closure.iter() {
             if !self.blocks.contains_id(&id)? {
                 return Err(IdNotFound(id).into());
             }
         }
-        for id in closure.iter() {
-            filter.add(&id);
-        }
-        for id in prev_closure.iter() {
-            filter.delete(&id);
-        }
 
-        let res = (&self.alias, &self.closure)
+        let closure = if superset {
+            let mut closure = Vec::with_capacity(partial_closure.len() + prev_closure.len());
+            closure.extend_from_slice(partial_closure.as_ref());
+            closure.extend_from_slice(prev_closure.as_ref());
+            Ids::from(IVec::from(closure))
+        } else {
+            partial_closure.clone()
+        };
+
+        (&self.alias, &self.closure)
             .transaction(|(talias, tclosure)| {
                 if prev_id.is_some() {
                     talias.remove(alias)?;
@@ -365,19 +381,19 @@ where
                 }
                 Ok(())
             })
-            .map_err(map_tx_error);
+            .map_err(map_tx_error)?;
 
-        if res.is_err() {
+        for id in partial_closure.iter() {
+            filter.add(&id);
+        }
+
+        if !superset {
             for id in prev_closure.iter() {
-                filter.add(&id);
-            }
-            for id in closure.iter() {
                 filter.delete(&id);
             }
         }
-        drop(filter);
 
-        res
+        Ok(())
     }
 
     /// Resolves the alias to a `Cid`.
@@ -407,6 +423,7 @@ where
 
     /// Evicts least recently used blocks until there are no more
     /// than `cache_size` number of unpinned blocks.
+    #[instrument]
     pub async fn evict(&self, cache_size: usize, grace_atime: u64) -> Result<()> {
         let filter = self.filter.lock().await;
         let nblocks = self.blocks.len();
@@ -416,7 +433,7 @@ where
             return Ok(());
         }
         let mut nevict = ncache - cache_size;
-        log::debug!("evicting {} blocks older than {}", nevict, grace_atime);
+        tracing::debug!("evicting {} blocks older than {}", nevict, grace_atime);
         for res in self.blocks.lru() {
             if nevict < 1 {
                 break;
