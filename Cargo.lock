@@ -1456,6 +1456,8 @@ checksum = "4d58d1b70b004888f764dfbf6a26a3b0342a1632d33968e4a179d8011c760614"
 [[package]]
 name = "libipld"
 version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a4e43078bc85b3bd472aa84da0a81ff8aa41d357744f693fe0d372eb9619f27"
 dependencies = [
  "async-std",
  "async-trait",
@@ -1472,6 +1474,8 @@ dependencies = [
 [[package]]
 name = "libipld-cbor"
 version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28dacf11437dddf1dbcb38cc9f97454a6a868c2c32f430c43b3c946958c1f295"
 dependencies = [
  "byteorder",
  "libipld-core",
@@ -1481,6 +1485,8 @@ dependencies = [
 [[package]]
 name = "libipld-cbor-derive"
 version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37dc95be4e7215b886f739566b131b8b48c75ba1991a64c39dc4833ee982d886"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1491,6 +1497,8 @@ dependencies = [
 [[package]]
 name = "libipld-core"
 version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22546649a520af11dc5b07b496ec5bb51c1e3fb72f413b2a0674a2cb77f01266"
 dependencies = [
  "anyhow",
  "multibase",
@@ -1502,6 +1510,8 @@ dependencies = [
 [[package]]
 name = "libipld-macro"
 version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11eb762b40158817e1663ff258da5f63e4e7800e4c7a510899a249e543d997e4"
 dependencies = [
  "libipld-core",
 ]

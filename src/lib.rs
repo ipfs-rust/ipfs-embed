@@ -144,7 +144,7 @@ impl DefaultIpfs {
         let storage = Arc::new(db::StorageService::open(
             &sled_config,
             cache_size,
-            sweep_interval,
+            Some(sweep_interval),
         )?);
         let bitswap_storage = core::BitswapStorage::new(storage.clone());
         let network = Arc::new(net::NetworkService::new(net_config, bitswap_storage)?);
@@ -322,7 +322,7 @@ mod tests {
         net_config.allow_non_globals_in_dht = true;
 
         let storage =
-            Arc::new(StorageService::open(&sled_config, cache_size, sweep_interval).unwrap());
+            Arc::new(StorageService::open(&sled_config, cache_size, Some(sweep_interval)).unwrap());
         let bitswap_storage = BitswapStorage::new(storage.clone());
         let network = Arc::new(NetworkService::new(net_config, bitswap_storage).unwrap());
         Ipfs::new(storage, network)
