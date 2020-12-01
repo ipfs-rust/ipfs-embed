@@ -58,6 +58,10 @@ where
         self.db.flush_async().await?;
         Ok(())
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = Result<Cid>> {
+        self.store.iter()
+    }
 }
 
 #[async_trait]

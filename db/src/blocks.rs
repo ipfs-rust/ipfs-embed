@@ -139,6 +139,16 @@ where
         }
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = Result<Cid>> {
+        self.cid
+            .iter()
+            .values()
+            .map(|v| match v {
+                Ok(cid) => Cid::try_from(&cid[..]).map_err(Into::into),
+                Err(err) => Err(err.into())
+            })
+    }
+
     /// Returns the data of a block and increments the access time.
     pub fn get(&self, cid: &Cid) -> Result<Option<Vec<u8>>> {
         if let Some(id) = self.lookup_id(cid)? {
@@ -302,6 +312,10 @@ where
     /// Checks if the store contains a block.
     pub fn contains(&self, cid: &Cid) -> Result<bool> {
         self.blocks.contains_cid(cid)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Result<Cid>> {
+        self.blocks.iter()
     }
 
     /// Returns the block from the store.
