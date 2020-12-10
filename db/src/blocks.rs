@@ -7,6 +7,7 @@
 //! reachable from all aliases. A bag is a set where each value can be inserted multiple times.
 use crate::id::{Id, Ids, LiveSet};
 use async_std::sync::Mutex;
+use fnv::FnvHashSet;
 use futures::future::Future;
 use futures::stream::Stream;
 use ipfs_embed_core::{Block, Cid, Error, Result, StorageEvent, StoreParams};
@@ -112,7 +113,8 @@ where
         let cid = self.lookup_cid(id)?.ok_or_else(|| IdNotFound(id.clone()))?;
         let data = self.data.get(id)?.ok_or_else(|| IdNotFound(id.clone()))?;
         let block = Block::<S>::new_unchecked(cid, data.to_vec());
-        let cid_refs = block.ipld()?.references();
+        let mut cid_refs = FnvHashSet::default();
+        block.ipld()?.references(&mut cid_refs);
         let mut refs = Vec::with_capacity(cid_refs.len() * 8);
         for cid in &cid_refs {
             let id = self.lookup_id(cid)?.ok_or_else(|| BlockNotFound(*cid))?;
@@ -140,13 +142,10 @@ where
     }
 
     pub fn iter(&self) -> impl Iterator<Item = Result<Cid>> {
-        self.cid
-            .iter()
-            .values()
-            .map(|v| match v {
-                Ok(cid) => Cid::try_from(&cid[..]).map_err(Into::into),
-                Err(err) => Err(err.into())
-            })
+        self.cid.iter().values().map(|v| match v {
+            Ok(cid) => Cid::try_from(&cid[..]).map_err(Into::into),
+            Err(err) => Err(err.into()),
+        })
     }
 
     /// Returns the data of a block and increments the access time.
@@ -366,7 +365,13 @@ where
         } else {
             Default::default()
         };
-        tracing::debug!("alias {:?} {:?} {} {}", alias, id.as_ref(), partial_closure.len(), superset);
+        tracing::debug!(
+            "alias {:?} {:?} {} {}",
+            alias,
+            id.as_ref(),
+            partial_closure.len(),
+            superset
+        );
 
         let mut filter = self.filter.lock().await;
         for id in partial_closure.iter() {

@@ -1,16 +1,18 @@
 pub use anyhow::{Error, Result};
 pub use async_trait::async_trait;
+use fnv::FnvHashSet;
 use futures::channel::oneshot;
 use futures::stream::Stream;
 pub use libipld::block::Block;
 pub use libipld::cid::Cid;
-use libipld::codec::Decode;
+use libipld::codec::References;
 pub use libipld::error::BlockNotFound;
 use libipld::ipld::Ipld;
-pub use libipld::multihash::{MultihashCode, U64};
+pub use libipld::multihash::{MultihashDigest, U64};
 pub use libipld::store::{Store, StoreParams};
+pub use libp2p::swarm::AddressRecord;
+pub use libp2p::{Multiaddr, PeerId};
 pub use libp2p_bitswap::{BitswapStore, BitswapSync, Query, QueryResult, QueryType};
-pub use libp2p_core::{Multiaddr, PeerId};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -23,7 +25,7 @@ pub trait Network<S: StoreParams>: Send + Sync + 'static {
     type Subscription: Stream<Item = NetworkEvent> + Send + Unpin;
     fn local_peer_id(&self) -> &PeerId;
     fn listeners(&self, tx: oneshot::Sender<Vec<Multiaddr>>);
-    fn external_addresses(&self, tx: oneshot::Sender<Vec<Multiaddr>>);
+    fn external_addresses(&self, tx: oneshot::Sender<Vec<AddressRecord>>);
     fn get(&self, cid: Cid);
     fn cancel_get(&self, cid: Cid);
     fn sync(&self, cid: Cid, syncer: Arc<dyn BitswapSync>);
@@ -96,12 +98,13 @@ impl<S: StoreParams, T: Storage<S>> BitswapStore<S> for BitswapStorage<S, T> {
 
 impl<S: StoreParams, T: Storage<S>> BitswapSync for BitswapStorage<S, T>
 where
-    Ipld: Decode<S::Codecs>,
+    Ipld: References<S::Codecs>,
 {
     fn references(&self, cid: &Cid) -> Box<dyn Iterator<Item = Cid>> {
         if let Some(data) = self.get(cid) {
             let block = Block::<S>::new_unchecked(*cid, data);
-            if let Ok(refs) = block.references() {
+            let mut refs = FnvHashSet::default();
+            if block.references(&mut refs).is_ok() {
                 return Box::new(refs.into_iter());
             }
         }

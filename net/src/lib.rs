@@ -10,7 +10,7 @@ use libp2p::core::transport::Transport;
 use libp2p::dns::DnsConfig;
 use libp2p::mplex::MplexConfig;
 use libp2p::noise::{Keypair, NoiseConfig, X25519Spec};
-use libp2p::swarm::{Swarm, SwarmBuilder};
+use libp2p::swarm::{AddressRecord, AddressScore, Swarm, SwarmBuilder};
 use libp2p::tcp::TcpConfig;
 //use libp2p::yamux::Config as YamuxConfig;
 use std::marker::PhantomData;
@@ -32,7 +32,7 @@ pub struct NetworkService<P: StoreParams> {
 }
 
 impl<P: StoreParams> NetworkService<P> {
-    pub fn new<S: BitswapStore<P>>(config: NetworkConfig, store: S) -> Result<Self> {
+    pub async fn new<S: BitswapStore<P>>(config: NetworkConfig, store: S) -> Result<Self> {
         let dh_key = Keypair::<X25519Spec>::new()
             .into_authentic(&config.node_key)
             .unwrap();
@@ -47,7 +47,7 @@ impl<P: StoreParams> NetworkService<P> {
         )?;
 
         let peer_id = config.peer_id();
-        let behaviour = NetworkBackendBehaviour::<P>::new(config.clone(), store)?;
+        let behaviour = NetworkBackendBehaviour::<P>::new(config.clone(), store).await?;
         let mut swarm = SwarmBuilder::new(transport.boxed(), behaviour, peer_id.clone())
             .executor(Box::new(|fut| {
                 async_std::task::spawn(fut);
@@ -57,7 +57,7 @@ impl<P: StoreParams> NetworkService<P> {
             Swarm::listen_on(&mut swarm, addr)?;
         }
         for addr in config.public_addresses {
-            Swarm::add_external_address(&mut swarm, addr);
+            Swarm::add_external_address(&mut swarm, addr, AddressScore::Infinite);
         }
 
         let (tx, rx) = mpsc::unbounded();
@@ -83,7 +83,7 @@ enum SwarmMsg {
     Provide(Cid),
     Unprovide(Cid),
     Listeners(oneshot::Sender<Vec<Multiaddr>>),
-    ExternalAddresses(oneshot::Sender<Vec<Multiaddr>>),
+    ExternalAddresses(oneshot::Sender<Vec<AddressRecord>>),
     Subscribe(mpsc::UnboundedSender<NetworkEvent>),
 }
 
@@ -98,7 +98,7 @@ impl<P: StoreParams + 'static> Network<P> for NetworkService<P> {
         self.tx.unbounded_send(SwarmMsg::Listeners(tx)).ok();
     }
 
-    fn external_addresses(&self, tx: oneshot::Sender<Vec<Multiaddr>>) {
+    fn external_addresses(&self, tx: oneshot::Sender<Vec<AddressRecord>>) {
         self.tx.unbounded_send(SwarmMsg::ExternalAddresses(tx)).ok();
     }
 

@@ -1,11 +1,11 @@
 use ipfs_embed_core::Storage;
 use ipfs_embed_db::StorageService;
-use libipld::DagCbor;
 use libipld::block::Block;
 use libipld::cbor::DagCborCodec;
 use libipld::cid::Cid;
 use libipld::multihash::Code;
 use libipld::store::DefaultParams;
+use libipld::DagCbor;
 use sled::Config;
 use tracing_subscriber::prelude::*;
 

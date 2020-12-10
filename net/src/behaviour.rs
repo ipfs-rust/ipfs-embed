@@ -175,11 +175,11 @@ pub struct KadRecordError(pub libp2p::kad::record::store::Error);
 
 impl<P: StoreParams> NetworkBackendBehaviour<P> {
     /// Create a Kademlia behaviour with the IPFS bootstrap nodes.
-    pub fn new<S: BitswapStore<P>>(config: NetworkConfig, store: S) -> Result<Self> {
+    pub async fn new<S: BitswapStore<P>>(config: NetworkConfig, store: S) -> Result<Self> {
         let peer_id = config.peer_id();
 
         let mdns = if config.enable_mdns {
-            Some(Mdns::new()?)
+            Some(Mdns::new().await?)
         } else {
             None
         }

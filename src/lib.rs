@@ -1,10 +1,11 @@
 //! IpfsEmbed is an embeddable ipfs implementation.
 //!
 //! ```
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # #[async_std::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use ipfs_embed::Ipfs;
 //! let cache_size = 100;
-//! let _ipfs = Ipfs::default(None, cache_size)?;
+//! let _ipfs = Ipfs::default(None, cache_size).await?;
 //! # Ok(()) }
 //! ```
 use async_std::task;
@@ -15,10 +16,10 @@ use futures::future::Future;
 use futures::sink::SinkExt;
 use futures::stream::Stream;
 use ipfs_embed_core::{
-    BitswapStorage, BitswapSync, Block, Cid, Multiaddr, Network, NetworkEvent, PeerId, Query,
-    QueryResult, QueryType, Result, Storage, StorageEvent, StoreParams,
+    AddressRecord, BitswapStorage, BitswapSync, Block, Cid, Multiaddr, Network, NetworkEvent,
+    PeerId, Query, QueryResult, QueryType, Result, Storage, StorageEvent, StoreParams,
 };
-use libipld::codec::Decode;
+use libipld::codec::References;
 use libipld::error::BlockNotFound;
 use libipld::ipld::Ipld;
 use libipld::store::Store;
@@ -62,7 +63,7 @@ where
     P: StoreParams + Unpin + 'static,
     S: Storage<P>,
     N: Network<P>,
-    Ipld: Decode<P::Codecs>,
+    Ipld: References<P::Codecs>,
 {
     pub fn new(storage: Arc<S>, network: Arc<N>) -> Self {
         let (tx, rx) = mpsc::channel(0);
@@ -85,7 +86,7 @@ where
         rx.await.unwrap()
     }
 
-    pub async fn external_addresses(&self) -> Vec<Multiaddr> {
+    pub async fn external_addresses(&self) -> Vec<AddressRecord> {
         let (tx, rx) = oneshot::channel();
         self.network.external_addresses(tx);
         rx.await.unwrap()
@@ -133,7 +134,7 @@ pub type DefaultIpfs =
 #[cfg(all(feature = "db", feature = "net"))]
 impl DefaultIpfs {
     /// If no path is provided a temporary db will be created.
-    pub fn default(path: Option<std::path::PathBuf>, cache_size: usize) -> Result<Self> {
+    pub async fn default(path: Option<std::path::PathBuf>, cache_size: usize) -> Result<Self> {
         let sled_config = if let Some(path) = path {
             sled::Config::new().path(path)
         } else {
@@ -147,7 +148,7 @@ impl DefaultIpfs {
             Some(sweep_interval),
         )?);
         let bitswap_storage = core::BitswapStorage::new(storage.clone());
-        let network = Arc::new(net::NetworkService::new(net_config, bitswap_storage)?);
+        let network = Arc::new(net::NetworkService::new(net_config, bitswap_storage).await?);
         Ok(Self::new(storage, network))
     }
 }
@@ -158,7 +159,7 @@ where
     P: StoreParams + Unpin + 'static,
     S: Storage<P>,
     N: Network<P>,
-    Ipld: Decode<P::Codecs>,
+    Ipld: References<P::Codecs>,
 {
     type Params = P;
 
@@ -217,7 +218,7 @@ where
     P: StoreParams + Unpin + 'static,
     S: Storage<P>,
     N: Network<P>,
-    Ipld: Decode<P::Codecs>,
+    Ipld: References<P::Codecs>,
 {
     pub fn new(storage: Arc<S>, network: Arc<N>, rx: mpsc::Receiver<Message>) -> Self {
         let storage_events = storage.subscribe();
@@ -239,7 +240,7 @@ where
     P: StoreParams + Unpin + 'static,
     S: Storage<P>,
     N: Network<P>,
-    Ipld: Decode<P::Codecs>,
+    Ipld: References<P::Codecs>,
 {
     type Output = ();
 
@@ -311,7 +312,7 @@ mod tests {
     type Network = NetworkService<DefaultParams>;
     type DefaultIpfs = Ipfs<DefaultParams, Storage, Network>;
 
-    fn create_store(bootstrap: Vec<(Multiaddr, PeerId)>) -> DefaultIpfs {
+    async fn create_store(bootstrap: Vec<(Multiaddr, PeerId)>) -> DefaultIpfs {
         let sled_config = sled::Config::new().temporary(true);
         let cache_size = 10;
         let sweep_interval = Duration::from_millis(10000);
@@ -324,7 +325,11 @@ mod tests {
         let storage =
             Arc::new(StorageService::open(&sled_config, cache_size, Some(sweep_interval)).unwrap());
         let bitswap_storage = BitswapStorage::new(storage.clone());
-        let network = Arc::new(NetworkService::new(net_config, bitswap_storage).unwrap());
+        let network = Arc::new(
+            NetworkService::new(net_config, bitswap_storage)
+                .await
+                .unwrap(),
+        );
         Ipfs::new(storage, network)
     }
 
@@ -335,7 +340,7 @@ mod tests {
     #[async_std::test]
     async fn test_local_store() {
         env_logger::try_init().ok();
-        let store = create_store(vec![]);
+        let store = create_store(vec![]).await;
         let block = create_block(b"test_local_store");
         store.insert(&block).await.unwrap();
         let block2 = store.get(block.cid()).await.unwrap();
@@ -346,8 +351,8 @@ mod tests {
     #[cfg(not(target_os = "macos"))] // mdns doesn't work on macos in github actions
     async fn test_exchange_mdns() {
         env_logger::try_init().ok();
-        let store1 = create_store(vec![]);
-        let store2 = create_store(vec![]);
+        let store1 = create_store(vec![]).await;
+        let store2 = create_store(vec![]).await;
         let block = create_block(b"test_exchange_mdns");
         store1.insert(&block).await.unwrap();
         task::sleep(Duration::from_secs(3)).await;
@@ -358,15 +363,15 @@ mod tests {
     #[async_std::test]
     async fn test_exchange_kad() {
         env_logger::try_init().ok();
-        let store = create_store(vec![]);
+        let store = create_store(vec![]).await;
         // make sure bootstrap node has started
         task::sleep(Duration::from_secs(3)).await;
         let bootstrap = vec![(
             store.listeners().await[0].clone(),
             store.local_peer_id().clone(),
         )];
-        let store1 = create_store(bootstrap.clone());
-        let store2 = create_store(bootstrap);
+        let store1 = create_store(bootstrap.clone()).await;
+        let store2 = create_store(bootstrap).await;
         let block = create_block(b"test_exchange_kad");
         store1.insert(&block).await.unwrap();
         // wait for entry to propagate
@@ -378,7 +383,7 @@ mod tests {
     #[async_std::test]
     async fn test_provider_not_found() {
         env_logger::try_init().ok();
-        let store1 = create_store(vec![]);
+        let store1 = create_store(vec![]).await;
         let block = create_block(b"test_provider_not_found");
         if store1
             .get(block.cid())
@@ -410,8 +415,8 @@ mod tests {
     #[async_std::test]
     async fn test_sync() {
         env_logger::try_init().ok();
-        let local1 = create_store(vec![]);
-        let local2 = create_store(vec![]);
+        let local1 = create_store(vec![]).await;
+        let local2 = create_store(vec![]).await;
         let a1 = create_ipld_block(&ipld!({ "a": 0 }));
         let b1 = create_ipld_block(&ipld!({ "b": 0 }));
         let c1 = create_ipld_block(&ipld!({ "c": [a1.cid(), b1.cid()] }));

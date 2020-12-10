@@ -107,7 +107,7 @@ pub struct BlockChain {
 impl BlockChain {
     pub async fn open<P: AsRef<Path>>(path: P, cache_size: usize) -> Result<Self> {
         let index = sled::open(path.as_ref().join("index"))?;
-        let ipfs = DefaultIpfs::default(Some(path.as_ref().join("blocks")), cache_size)?;
+        let ipfs = DefaultIpfs::default(Some(path.as_ref().join("blocks")), cache_size).await?;
         let root_cid = ipfs.resolve(ROOT).await?;
         let mut chain = Self {
             index,
