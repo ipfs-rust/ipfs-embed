@@ -8,18 +8,18 @@ description = "small embeddable ipfs implementation"
 repository = "https://github.com/ipfs-rust/ipfs-embed"
 
 [dependencies]
-async-std = "1.8.0"
+async-global-executor = "2.0.1"
 fnv = "1.0.7"
 futures = "0.3.8"
 ip_network = "0.3.4"
 ipfs-embed-core = { version = "0.9.0", path = "../core" }
-libp2p-bitswap = "0.10.0"
+libp2p-bitswap = "0.11.0"
 log = "0.4.11"
 names = "0.11.0"
 thiserror = "1.0.22"
 
 [dependencies.libp2p]
-version = "0.32.2"
+version = "0.33.0"
 default-features = false
 features = [
     "dns",

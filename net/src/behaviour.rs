@@ -16,7 +16,7 @@ use libp2p::ping::{Ping, PingEvent};
 use libp2p::swarm::toggle::Toggle;
 use libp2p::swarm::{NetworkBehaviourAction, NetworkBehaviourEventProcess, PollParameters};
 use libp2p::NetworkBehaviour;
-use libp2p_bitswap::{Bitswap, BitswapConfig, BitswapEvent, BitswapStore, BitswapSync};
+use libp2p_bitswap::{Bitswap, BitswapConfig, BitswapEvent, Channel};
 use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::sync::Arc;
@@ -25,7 +25,7 @@ use thiserror::Error;
 
 /// Behaviour type.
 #[derive(NetworkBehaviour)]
-#[behaviour(poll_method = "custom_poll", out_event = "NetworkEvent")]
+#[behaviour(poll_method = "custom_poll", out_event = "NetworkEvent<P>")]
 pub struct NetworkBackendBehaviour<P: StoreParams> {
     #[behaviour(ignore)]
     peer_id: PeerId,
@@ -43,7 +43,7 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     #[behaviour(ignore)]
     mdns_peers: FnvHashSet<PeerId>,
     #[behaviour(ignore)]
-    events: VecDeque<NetworkEvent>,
+    events: VecDeque<NetworkEvent<P>>,
 }
 
 impl<P: StoreParams> NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendBehaviour<P> {
@@ -51,7 +51,7 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendB
         match event {
             MdnsEvent::Discovered(list) => {
                 for (peer_id, _) in list {
-                    if self.mdns_peers.insert(peer_id.clone()) {
+                    if self.mdns_peers.insert(peer_id) {
                         log::trace!("discovered {}", peer_id);
                     }
                 }
@@ -109,12 +109,12 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBack
     }
 }
 
-impl<P: StoreParams> NetworkBehaviourEventProcess<BitswapEvent> for NetworkBackendBehaviour<P> {
-    fn inject_event(&mut self, event: BitswapEvent) {
+impl<P: StoreParams> NetworkBehaviourEventProcess<BitswapEvent<P>> for NetworkBackendBehaviour<P> {
+    fn inject_event(&mut self, event: BitswapEvent<P>) {
         match event {
             BitswapEvent::GetProviders(cid) => {
                 for peer in &self.mdns_peers {
-                    self.bitswap.add_provider(cid, peer.clone());
+                    self.bitswap.add_provider(cid, *peer);
                 }
                 let key = Key::new(&cid.to_bytes());
                 self.kad.get_providers(key);
@@ -122,6 +122,20 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<BitswapEvent> for NetworkBacke
             BitswapEvent::QueryComplete(query, result) => {
                 self.events
                     .push_back(NetworkEvent::QueryComplete(query, result));
+            }
+            BitswapEvent::HaveBlock(ch, cid) => {
+                self.events
+                    .push_back(NetworkEvent::HaveBlock(Arc::new(ch), cid));
+            }
+            BitswapEvent::WantBlock(ch, cid) => {
+                self.events
+                    .push_back(NetworkEvent::WantBlock(Arc::new(ch), cid));
+            }
+            BitswapEvent::ReceivedBlock(block) => {
+                self.events.push_back(NetworkEvent::ReceivedBlock(block));
+            }
+            BitswapEvent::MissingBlocks(cid) => {
+                self.events.push_back(NetworkEvent::MissingBlocks(cid));
             }
         }
     }
@@ -175,7 +189,7 @@ pub struct KadRecordError(pub libp2p::kad::record::store::Error);
 
 impl<P: StoreParams> NetworkBackendBehaviour<P> {
     /// Create a Kademlia behaviour with the IPFS bootstrap nodes.
-    pub async fn new<S: BitswapStore<P>>(config: NetworkConfig, store: S) -> Result<Self> {
+    pub async fn new(config: NetworkConfig) -> Result<Self> {
         let peer_id = config.peer_id();
 
         let mdns = if config.enable_mdns {
@@ -185,8 +199,8 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         }
         .into();
 
-        let kad_store = MemoryStore::new(peer_id.clone());
-        let mut kad = Kademlia::new(peer_id.clone(), kad_store);
+        let kad_store = MemoryStore::new(peer_id);
+        let mut kad = Kademlia::new(peer_id, kad_store);
         for (addr, peer_id) in &config.boot_nodes {
             kad.add_address(peer_id, addr.to_owned());
         }
@@ -204,7 +218,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         let public = config.public();
         let identify = Identify::new("/ipfs-embed/1.0".into(), config.node_name.clone(), public);
 
-        let mut bitswap_config = BitswapConfig::new(store);
+        let mut bitswap_config = BitswapConfig::new();
         bitswap_config.request_timeout = config.bitswap_request_timeout;
         bitswap_config.connection_keep_alive = config.bitswap_connection_keepalive;
         bitswap_config.receive_limit = config.bitswap_receive_limit;
@@ -232,12 +246,24 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         self.bitswap.cancel_get(cid);
     }
 
-    pub fn sync(&mut self, cid: Cid, syncer: Arc<dyn BitswapSync>) {
-        self.bitswap.sync(cid, syncer);
+    pub fn sync(&mut self, cid: Cid, missing: FnvHashSet<Cid>) {
+        self.bitswap.sync(cid, missing);
     }
 
     pub fn cancel_sync(&mut self, cid: Cid) {
         self.bitswap.cancel_sync(cid);
+    }
+
+    pub fn add_missing(&mut self, cid: Cid, missing: FnvHashSet<Cid>) {
+        self.bitswap.add_missing(cid, missing);
+    }
+
+    pub fn send_have(&mut self, ch: Channel, have: bool) {
+        self.bitswap.send_have(ch, have);
+    }
+
+    pub fn send_block(&mut self, ch: Channel, block: Option<Vec<u8>>) {
+        self.bitswap.send_block(ch, block);
     }
 
     pub fn provide(&mut self, cid: Cid) {
@@ -269,7 +295,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         &mut self,
         _: &mut Context,
         _: &mut impl PollParameters,
-    ) -> Poll<NetworkBehaviourAction<T, NetworkEvent>> {
+    ) -> Poll<NetworkBehaviourAction<T, NetworkEvent<P>>> {
         if let Some(event) = self.events.pop_front() {
             Poll::Ready(NetworkBehaviourAction::GenerateEvent(event))
         } else {

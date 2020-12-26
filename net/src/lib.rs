@@ -1,9 +1,9 @@
-use async_std::task;
+use fnv::FnvHashSet;
 use futures::channel::{mpsc, oneshot};
 use futures::future::Future;
 use futures::stream::Stream;
 use ipfs_embed_core::{
-    BitswapStore, BitswapSync, Cid, Multiaddr, Network, NetworkEvent, PeerId, Result, StoreParams,
+    Channel, Cid, Multiaddr, Network, NetworkEvent, PeerId, Result, StoreParams,
 };
 use libp2p::core::transport::upgrade::Version;
 use libp2p::core::transport::Transport;
@@ -15,7 +15,6 @@ use libp2p::tcp::TcpConfig;
 //use libp2p::yamux::Config as YamuxConfig;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -27,12 +26,12 @@ pub use config::NetworkConfig;
 
 pub struct NetworkService<P: StoreParams> {
     _marker: PhantomData<P>,
-    tx: mpsc::UnboundedSender<SwarmMsg>,
+    tx: mpsc::UnboundedSender<SwarmMsg<P>>,
     local_peer_id: PeerId,
 }
 
 impl<P: StoreParams> NetworkService<P> {
-    pub async fn new<S: BitswapStore<P>>(config: NetworkConfig, store: S) -> Result<Self> {
+    pub async fn new(config: NetworkConfig) -> Result<Self> {
         let dh_key = Keypair::<X25519Spec>::new()
             .into_authentic(&config.node_key)
             .unwrap();
@@ -47,10 +46,10 @@ impl<P: StoreParams> NetworkService<P> {
         )?;
 
         let peer_id = config.peer_id();
-        let behaviour = NetworkBackendBehaviour::<P>::new(config.clone(), store).await?;
-        let mut swarm = SwarmBuilder::new(transport.boxed(), behaviour, peer_id.clone())
+        let behaviour = NetworkBackendBehaviour::<P>::new(config.clone()).await?;
+        let mut swarm = SwarmBuilder::new(transport.boxed(), behaviour, peer_id)
             .executor(Box::new(|fut| {
-                async_std::task::spawn(fut);
+                async_global_executor::spawn(fut).detach();
             }))
             .build();
         for addr in config.listen_addresses {
@@ -61,11 +60,12 @@ impl<P: StoreParams> NetworkService<P> {
         }
 
         let (tx, rx) = mpsc::unbounded();
-        task::spawn(NetworkWorker {
+        async_global_executor::spawn(NetworkWorker {
             swarm,
             rx,
             subscriptions: Default::default(),
-        });
+        })
+        .detach();
 
         Ok(Self {
             _marker: PhantomData,
@@ -75,20 +75,23 @@ impl<P: StoreParams> NetworkService<P> {
     }
 }
 
-enum SwarmMsg {
+enum SwarmMsg<P: StoreParams> {
     Get(Cid),
     CancelGet(Cid),
-    Sync(Cid, Arc<dyn BitswapSync>),
+    Sync(Cid, FnvHashSet<Cid>),
     CancelSync(Cid),
+    AddMissing(Cid, FnvHashSet<Cid>),
+    SendHave(Channel, bool),
+    SendBlock(Channel, Option<Vec<u8>>),
     Provide(Cid),
     Unprovide(Cid),
     Listeners(oneshot::Sender<Vec<Multiaddr>>),
     ExternalAddresses(oneshot::Sender<Vec<AddressRecord>>),
-    Subscribe(mpsc::UnboundedSender<NetworkEvent>),
+    Subscribe(mpsc::UnboundedSender<NetworkEvent<P>>),
 }
 
 impl<P: StoreParams + 'static> Network<P> for NetworkService<P> {
-    type Subscription = mpsc::UnboundedReceiver<NetworkEvent>;
+    type Subscription = mpsc::UnboundedReceiver<NetworkEvent<P>>;
 
     fn local_peer_id(&self) -> &PeerId {
         &self.local_peer_id
@@ -110,12 +113,26 @@ impl<P: StoreParams + 'static> Network<P> for NetworkService<P> {
         self.tx.unbounded_send(SwarmMsg::CancelGet(cid)).ok();
     }
 
-    fn sync(&self, cid: Cid, syncer: Arc<dyn BitswapSync>) {
-        self.tx.unbounded_send(SwarmMsg::Sync(cid, syncer)).ok();
+    fn sync(&self, cid: Cid, missing: FnvHashSet<Cid>) {
+        self.tx.unbounded_send(SwarmMsg::Sync(cid, missing)).ok();
     }
 
     fn cancel_sync(&self, cid: Cid) {
         self.tx.unbounded_send(SwarmMsg::CancelSync(cid)).ok();
+    }
+
+    fn add_missing(&self, cid: Cid, missing: FnvHashSet<Cid>) {
+        self.tx
+            .unbounded_send(SwarmMsg::AddMissing(cid, missing))
+            .ok();
+    }
+
+    fn send_have(&self, ch: Channel, have: bool) {
+        self.tx.unbounded_send(SwarmMsg::SendHave(ch, have)).ok();
+    }
+
+    fn send_block(&self, ch: Channel, block: Option<Vec<u8>>) {
+        self.tx.unbounded_send(SwarmMsg::SendBlock(ch, block)).ok();
     }
 
     fn provide(&self, cid: Cid) {
@@ -135,12 +152,12 @@ impl<P: StoreParams + 'static> Network<P> for NetworkService<P> {
 
 struct NetworkWorker<P: StoreParams> {
     swarm: Swarm<NetworkBackendBehaviour<P>>,
-    rx: mpsc::UnboundedReceiver<SwarmMsg>,
-    subscriptions: Vec<mpsc::UnboundedSender<NetworkEvent>>,
+    rx: mpsc::UnboundedReceiver<SwarmMsg<P>>,
+    subscriptions: Vec<mpsc::UnboundedSender<NetworkEvent<P>>>,
 }
 
 impl<P: StoreParams> NetworkWorker<P> {
-    fn send_event(&mut self, ev: NetworkEvent) {
+    fn send_event(&mut self, ev: NetworkEvent<P>) {
         self.subscriptions
             .retain(|s| s.unbounded_send(ev.clone()).is_ok())
     }
@@ -159,7 +176,7 @@ impl<P: StoreParams> Future for NetworkWorker<P> {
             match cmd {
                 SwarmMsg::Get(cid) => self.swarm.get(cid),
                 SwarmMsg::CancelGet(cid) => self.swarm.cancel_get(cid),
-                SwarmMsg::Sync(cid, syncer) => self.swarm.sync(cid, syncer),
+                SwarmMsg::Sync(cid, missing) => self.swarm.sync(cid, missing),
                 SwarmMsg::CancelSync(cid) => self.swarm.cancel_sync(cid),
                 SwarmMsg::Provide(cid) => self.swarm.provide(cid),
                 SwarmMsg::Unprovide(cid) => self.swarm.unprovide(cid),
@@ -172,6 +189,9 @@ impl<P: StoreParams> Future for NetworkWorker<P> {
                         Swarm::external_addresses(&self.swarm).cloned().collect();
                     tx.send(external_addresses).ok();
                 }
+                SwarmMsg::AddMissing(cid, missing) => self.swarm.add_missing(cid, missing),
+                SwarmMsg::SendHave(ch, have) => self.swarm.send_have(ch, have),
+                SwarmMsg::SendBlock(ch, block) => self.swarm.send_block(ch, block),
                 SwarmMsg::Subscribe(tx) => self.subscriptions.push(tx),
             }
         }

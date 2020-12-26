@@ -8,16 +8,15 @@
 //! let _ipfs = Ipfs::default(None, cache_size).await?;
 //! # Ok(()) }
 //! ```
-use async_std::task;
 use async_trait::async_trait;
-use fnv::FnvHashMap;
+use fnv::{FnvHashMap, FnvHashSet};
 use futures::channel::{mpsc, oneshot};
 use futures::future::Future;
 use futures::sink::SinkExt;
 use futures::stream::Stream;
 use ipfs_embed_core::{
-    AddressRecord, BitswapStorage, BitswapSync, Block, Cid, Multiaddr, Network, NetworkEvent,
-    PeerId, Query, QueryResult, QueryType, Result, Storage, StorageEvent, StoreParams,
+    AddressRecord, Block, Cid, Multiaddr, Network, NetworkEvent, PeerId, Query, QueryResult,
+    QueryType, Result, Storage, StorageEvent, StoreParams,
 };
 use libipld::codec::References;
 use libipld::error::BlockNotFound;
@@ -29,22 +28,21 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 pub use ipfs_embed_core as core;
-#[cfg(feature = "db")]
-pub use ipfs_embed_db as db;
 #[cfg(feature = "net")]
 pub use ipfs_embed_net as net;
+#[cfg(feature = "db")]
+pub use ipfs_embed_sqlite as db;
 
-type Message = (
-    Query,
-    Option<Arc<dyn BitswapSync>>,
-    oneshot::Sender<QueryResult>,
-);
+enum Command {
+    Get(Cid, oneshot::Sender<QueryResult>),
+    Sync(Cid, FnvHashSet<Cid>, oneshot::Sender<QueryResult>),
+}
 
 pub struct Ipfs<P, S, N> {
     _marker: PhantomData<P>,
     storage: Arc<S>,
     network: Arc<N>,
-    tx: mpsc::Sender<Message>,
+    tx: mpsc::Sender<Command>,
 }
 
 impl<P, S, N> Clone for Ipfs<P, S, N> {
@@ -65,15 +63,18 @@ where
     N: Network<P>,
     Ipld: References<P::Codecs>,
 {
-    pub fn new(storage: Arc<S>, network: Arc<N>) -> Self {
+    pub async fn new(storage: Arc<S>, network: Arc<N>) -> Result<Self> {
+        for cid in storage.iter().await? {
+            network.provide(cid);
+        }
         let (tx, rx) = mpsc::channel(0);
-        task::spawn(IpfsTask::new(storage.clone(), network.clone(), rx));
-        Self {
+        async_global_executor::spawn(IpfsTask::new(storage.clone(), network.clone(), rx)).detach();
+        Ok(Self {
             _marker: PhantomData,
             storage,
             network,
             tx,
-        }
+        })
     }
 
     pub fn local_peer_id(&self) -> &PeerId {
@@ -92,37 +93,8 @@ where
         rx.await.unwrap()
     }
 
-    pub async fn pinned(&self, cid: &Cid) -> Result<Option<bool>> {
+    pub async fn pinned(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
         self.storage.pinned(cid).await
-    }
-
-    pub fn bitswap_storage(&self) -> BitswapStorage<P, S> {
-        BitswapStorage::new(self.storage.clone())
-    }
-
-    pub async fn alias_with_syncer<T: AsRef<[u8]> + Send + Sync>(
-        &self,
-        alias: T,
-        cid: Option<&Cid>,
-        syncer: Option<Arc<dyn BitswapSync>>,
-    ) -> Result<()> {
-        if let Some(cid) = cid {
-            let (tx, rx) = oneshot::channel();
-            self.tx
-                .clone()
-                .send((
-                    Query {
-                        cid: *cid,
-                        ty: QueryType::Sync,
-                    },
-                    syncer,
-                    tx,
-                ))
-                .await?;
-            rx.await??;
-        }
-        self.storage.alias(alias.as_ref(), cid).await?;
-        Ok(())
     }
 }
 
@@ -134,22 +106,13 @@ pub type DefaultIpfs =
 #[cfg(all(feature = "db", feature = "net"))]
 impl DefaultIpfs {
     /// If no path is provided a temporary db will be created.
-    pub async fn default(path: Option<std::path::PathBuf>, cache_size: usize) -> Result<Self> {
-        let sled_config = if let Some(path) = path {
-            sled::Config::new().path(path)
-        } else {
-            sled::Config::new().temporary(true)
-        };
+    pub async fn default(path: Option<std::path::PathBuf>, cache_size: u64) -> Result<Self> {
         let sweep_interval = std::time::Duration::from_millis(10000);
-        let net_config = net::NetworkConfig::new();
-        let storage = Arc::new(db::StorageService::open(
-            &sled_config,
-            cache_size,
-            Some(sweep_interval),
-        )?);
-        let bitswap_storage = core::BitswapStorage::new(storage.clone());
-        let network = Arc::new(net::NetworkService::new(net_config, bitswap_storage).await?);
-        Ok(Self::new(storage, network))
+        let storage_config = db::StorageConfig::new(path, cache_size, sweep_interval);
+        let storage = Arc::new(db::StorageService::open(storage_config)?);
+        let network_config = net::NetworkConfig::new();
+        let network = Arc::new(net::NetworkService::new(network_config).await?);
+        Ok(Self::new(storage, network).await?)
     }
 }
 
@@ -164,24 +127,14 @@ where
     type Params = P;
 
     async fn get(&self, cid: &Cid) -> Result<Block<P>> {
-        if let Some(data) = self.storage.get(cid)? {
+        if let Some(data) = self.storage.get(cid).await? {
             let block = Block::new_unchecked(*cid, data);
             return Ok(block);
         }
         let (tx, rx) = oneshot::channel();
-        self.tx
-            .clone()
-            .send((
-                Query {
-                    cid: *cid,
-                    ty: QueryType::Get,
-                },
-                None,
-                tx,
-            ))
-            .await?;
+        self.tx.clone().send(Command::Get(*cid, tx)).await?;
         rx.await??;
-        if let Some(data) = self.storage.get(cid)? {
+        if let Some(data) = self.storage.get(cid).await? {
             let block = Block::new_unchecked(*cid, data);
             return Ok(block);
         }
@@ -190,16 +143,29 @@ where
     }
 
     async fn insert(&self, block: &Block<P>) -> Result<()> {
-        self.storage.insert(block)?;
+        self.storage.insert(block, None).await?;
+        self.network.provide(*block.cid());
         Ok(())
     }
 
     async fn alias<T: AsRef<[u8]> + Send + Sync>(&self, alias: T, cid: Option<&Cid>) -> Result<()> {
-        self.alias_with_syncer(alias, cid, None).await
+        if let Some(cid) = cid {
+            let missing = self.storage.missing_blocks(cid).await?;
+            if !missing.is_empty() {
+                let (tx, rx) = oneshot::channel();
+                self.tx
+                    .clone()
+                    .send(Command::Sync(*cid, missing, tx))
+                    .await?;
+                rx.await??;
+            }
+        }
+        self.storage.alias(alias.as_ref(), cid).await?;
+        Ok(())
     }
 
     async fn resolve<T: AsRef<[u8]> + Send + Sync>(&self, alias: T) -> Result<Option<Cid>> {
-        self.storage.resolve(alias.as_ref())
+        self.storage.resolve(alias.as_ref()).await
     }
 }
 
@@ -210,7 +176,7 @@ struct IpfsTask<P: StoreParams, S: Storage<P>, N: Network<P>> {
     network: Arc<N>,
     network_events: N::Subscription,
     queries: FnvHashMap<Query, Vec<oneshot::Sender<QueryResult>>>,
-    rx: mpsc::Receiver<Message>,
+    rx: mpsc::Receiver<Command>,
 }
 
 impl<P, S, N> IpfsTask<P, S, N>
@@ -220,7 +186,7 @@ where
     N: Network<P>,
     Ipld: References<P::Codecs>,
 {
-    pub fn new(storage: Arc<S>, network: Arc<N>, rx: mpsc::Receiver<Message>) -> Self {
+    pub fn new(storage: Arc<S>, network: Arc<N>, rx: mpsc::Receiver<Command>) -> Self {
         let storage_events = storage.subscribe();
         let network_events = network.subscribe();
         Self {
@@ -246,18 +212,27 @@ where
 
     fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
         loop {
-            let (query, syncer, tx) = match Pin::new(&mut self.rx).poll_next(ctx) {
+            let cmd = match Pin::new(&mut self.rx).poll_next(ctx) {
                 Poll::Ready(Some(query)) => query,
                 Poll::Ready(None) => return Poll::Ready(()),
                 Poll::Pending => break,
             };
-            self.queries.entry(query).or_default().push(tx);
-            match query.ty {
-                QueryType::Get => self.network.get(query.cid),
-                QueryType::Sync => {
-                    let syncer = syncer
-                        .unwrap_or_else(|| Arc::new(BitswapStorage::new(self.storage.clone())));
-                    self.network.sync(query.cid, syncer)
+            match cmd {
+                Command::Get(cid, tx) => {
+                    let query = Query {
+                        cid,
+                        ty: QueryType::Get,
+                    };
+                    self.queries.entry(query).or_default().push(tx);
+                    self.network.get(cid);
+                }
+                Command::Sync(cid, missing, tx) => {
+                    let query = Query {
+                        cid,
+                        ty: QueryType::Sync,
+                    };
+                    self.queries.entry(query).or_default().push(tx);
+                    self.network.sync(cid, missing);
                 }
             }
         }
@@ -276,6 +251,48 @@ where
                         }
                     }
                 }
+                NetworkEvent::HaveBlock(ch, cid) => {
+                    let storage = self.storage.clone();
+                    let network = self.network.clone();
+                    let ch = Arc::try_unwrap(ch).expect("one ref");
+                    async_global_executor::spawn(async move {
+                        if let Ok(have) = storage.contains(&cid).await {
+                            network.send_have(ch, have);
+                        }
+                    })
+                    .detach();
+                }
+                NetworkEvent::WantBlock(ch, cid) => {
+                    let storage = self.storage.clone();
+                    let network = self.network.clone();
+                    let ch = Arc::try_unwrap(ch).expect("one ref");
+                    async_global_executor::spawn(async move {
+                        if let Ok(block) = storage.get(&cid).await {
+                            network.send_block(ch, block);
+                        }
+                    })
+                    .detach();
+                }
+                NetworkEvent::ReceivedBlock(block) => {
+                    let storage = self.storage.clone();
+                    let network = self.network.clone();
+                    async_global_executor::spawn(async move {
+                        if storage.insert(&block, None).await.is_ok() {
+                            network.provide(*block.cid());
+                        }
+                    })
+                    .detach();
+                }
+                NetworkEvent::MissingBlocks(cid) => {
+                    let storage = self.storage.clone();
+                    let network = self.network.clone();
+                    async_global_executor::spawn(async move {
+                        if let Ok(missing) = storage.missing_blocks(&cid).await {
+                            network.add_missing(cid, missing);
+                        }
+                    })
+                    .detach();
+                }
             }
         }
 
@@ -286,7 +303,6 @@ where
                 Poll::Pending => break,
             };
             match event {
-                StorageEvent::Insert(cid) => self.network.provide(cid),
                 StorageEvent::Remove(cid) => self.network.unprovide(cid),
             }
         }
@@ -298,8 +314,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ipfs_embed_db::StorageService;
+    use async_std::task;
     use ipfs_embed_net::{NetworkConfig, NetworkService};
+    use ipfs_embed_sqlite::{StorageConfig, StorageService};
     use libipld::block::Block;
     use libipld::cbor::DagCborCodec;
     use libipld::multihash::Code;
@@ -313,24 +330,18 @@ mod tests {
     type DefaultIpfs = Ipfs<DefaultParams, Storage, Network>;
 
     async fn create_store(bootstrap: Vec<(Multiaddr, PeerId)>) -> DefaultIpfs {
-        let sled_config = sled::Config::new().temporary(true);
         let cache_size = 10;
         let sweep_interval = Duration::from_millis(10000);
+        let storage_config = StorageConfig::new(None, cache_size, sweep_interval);
 
         let mut net_config = NetworkConfig::new();
         net_config.enable_mdns = bootstrap.is_empty();
         net_config.boot_nodes = bootstrap;
         net_config.allow_non_globals_in_dht = true;
 
-        let storage =
-            Arc::new(StorageService::open(&sled_config, cache_size, Some(sweep_interval)).unwrap());
-        let bitswap_storage = BitswapStorage::new(storage.clone());
-        let network = Arc::new(
-            NetworkService::new(net_config, bitswap_storage)
-                .await
-                .unwrap(),
-        );
-        Ipfs::new(storage, network)
+        let storage = Arc::new(StorageService::open(storage_config).unwrap());
+        let network = Arc::new(NetworkService::new(net_config).await.unwrap());
+        Ipfs::new(storage, network).await.unwrap()
     }
 
     fn create_block(bytes: &[u8]) -> Block<DefaultParams> {
@@ -366,10 +377,7 @@ mod tests {
         let store = create_store(vec![]).await;
         // make sure bootstrap node has started
         task::sleep(Duration::from_secs(3)).await;
-        let bootstrap = vec![(
-            store.listeners().await[0].clone(),
-            store.local_peer_id().clone(),
-        )];
+        let bootstrap = vec![(store.listeners().await[0].clone(), *store.local_peer_id())];
         let store1 = create_store(bootstrap.clone()).await;
         let store2 = create_store(bootstrap).await;
         let block = create_block(b"test_exchange_kad");
@@ -398,13 +406,27 @@ mod tests {
 
     macro_rules! assert_pinned {
         ($store:expr, $block:expr) => {
-            assert_eq!($store.pinned($block.cid()).await.unwrap(), Some(true));
+            assert_eq!(
+                $store
+                    .pinned($block.cid())
+                    .await
+                    .unwrap()
+                    .map(|a| !a.is_empty()),
+                Some(true)
+            );
         };
     }
 
     macro_rules! assert_unpinned {
         ($store:expr, $block:expr) => {
-            assert_eq!($store.pinned($block.cid()).await.unwrap(), Some(false));
+            assert_eq!(
+                $store
+                    .pinned($block.cid())
+                    .await
+                    .unwrap()
+                    .map(|a| !a.is_empty()),
+                Some(false)
+            );
         };
     }
 
