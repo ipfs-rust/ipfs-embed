@@ -8,6 +8,7 @@ use ipfs_embed_core::{
 use libp2p::core::transport::upgrade::Version;
 use libp2p::core::transport::Transport;
 use libp2p::dns::DnsConfig;
+use libp2p::gossipsub::{error::PublishError, Topic};
 use libp2p::mplex::MplexConfig;
 use libp2p::noise::{Keypair, NoiseConfig, X25519Spec};
 use libp2p::swarm::{AddressRecord, AddressScore, Swarm, SwarmBuilder};
@@ -85,6 +86,9 @@ enum SwarmMsg<P: StoreParams> {
     SendBlock(Channel, Option<Vec<u8>>),
     Provide(Cid),
     Unprovide(Cid),
+    SubscribeTopic(Topic),
+    UnsubscribeTopic(Topic),
+    Publish(Topic, Vec<u8>, oneshot::Sender<Result<(), PublishError>>),
     Listeners(oneshot::Sender<Vec<Multiaddr>>),
     ExternalAddresses(oneshot::Sender<Vec<AddressRecord>>),
     Subscribe(mpsc::UnboundedSender<NetworkEvent<P>>),
@@ -143,6 +147,22 @@ impl<P: StoreParams + 'static> Network<P> for NetworkService<P> {
         self.tx.unbounded_send(SwarmMsg::Unprovide(cid)).ok();
     }
 
+    fn subscribe_topic(&self, topic: Topic) {
+        self.tx.unbounded_send(SwarmMsg::SubscribeTopic(topic)).ok();
+    }
+
+    fn unsubscribe_topic(&self, topic: Topic) {
+        self.tx
+            .unbounded_send(SwarmMsg::UnsubscribeTopic(topic))
+            .ok();
+    }
+
+    fn publish(&self, topic: Topic, msg: Vec<u8>, tx: oneshot::Sender<Result<(), PublishError>>) {
+        self.tx
+            .unbounded_send(SwarmMsg::Publish(topic, msg, tx))
+            .ok();
+    }
+
     fn subscribe(&self) -> Self::Subscription {
         let (tx, rx) = mpsc::unbounded();
         self.tx.unbounded_send(SwarmMsg::Subscribe(tx)).ok();
@@ -192,6 +212,15 @@ impl<P: StoreParams> Future for NetworkWorker<P> {
                 SwarmMsg::AddMissing(cid, missing) => self.swarm.add_missing(cid, missing),
                 SwarmMsg::SendHave(ch, have) => self.swarm.send_have(ch, have),
                 SwarmMsg::SendBlock(ch, block) => self.swarm.send_block(ch, block),
+                SwarmMsg::SubscribeTopic(topic) => {
+                    self.swarm.subscribe(topic);
+                }
+                SwarmMsg::UnsubscribeTopic(topic) => {
+                    self.swarm.unsubscribe(topic);
+                }
+                SwarmMsg::Publish(topic, msg, tx) => {
+                    tx.send(self.swarm.publish(&topic, msg)).ok();
+                }
                 SwarmMsg::Subscribe(tx) => self.subscriptions.push(tx),
             }
         }

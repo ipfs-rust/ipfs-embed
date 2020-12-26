@@ -8,6 +8,7 @@ pub use libipld::cid::Cid;
 pub use libipld::error::BlockNotFound;
 pub use libipld::multihash::{MultihashDigest, U64};
 pub use libipld::store::{Store, StoreParams};
+pub use libp2p::gossipsub::{error::PublishError, GossipsubEvent, Topic};
 pub use libp2p::swarm::AddressRecord;
 pub use libp2p::{Multiaddr, PeerId};
 pub use libp2p_bitswap::{Channel, Query, QueryResult, QueryType};
@@ -20,6 +21,7 @@ pub enum NetworkEvent<S: StoreParams> {
     WantBlock(Arc<Channel>, Cid),
     ReceivedBlock(Block<S>),
     MissingBlocks(Cid),
+    Gossip(GossipsubEvent),
 }
 
 pub trait Network<S: StoreParams>: Send + Sync + 'static {
@@ -36,6 +38,9 @@ pub trait Network<S: StoreParams>: Send + Sync + 'static {
     fn unprovide(&self, cid: Cid);
     fn send_have(&self, ch: Channel, have: bool);
     fn send_block(&self, ch: Channel, block: Option<Vec<u8>>);
+    fn subscribe_topic(&self, topic: Topic);
+    fn unsubscribe_topic(&self, topic: Topic);
+    fn publish(&self, topic: Topic, msg: Vec<u8>, tx: oneshot::Sender<Result<(), PublishError>>);
     fn subscribe(&self) -> Self::Subscription;
 }
 

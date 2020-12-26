@@ -20,6 +20,8 @@ pub struct NetworkConfig {
     pub enable_mdns: bool,
     /// Enable ping.
     pub enable_ping: bool,
+    /// Enable gossipsub.
+    pub enable_gossipsub: bool,
     /// Should we insert non-global addresses into the DHT?
     pub allow_non_globals_in_dht: bool,
     /// Bitswap request timeout.
@@ -39,6 +41,7 @@ impl NetworkConfig {
             boot_nodes: vec![],
             enable_mdns: true,
             enable_ping: true,
+            enable_gossipsub: false,
             allow_non_globals_in_dht: false,
             node_key: Keypair::generate_ed25519(),
             node_name: names::Generator::with_naming(names::Name::Numbered)

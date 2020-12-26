@@ -3,6 +3,9 @@ use fnv::FnvHashSet;
 use ip_network::IpNetwork;
 use ipfs_embed_core::{Cid, NetworkEvent, Result, StoreParams};
 use libp2p::core::PeerId;
+use libp2p::gossipsub::{
+    error::PublishError, Gossipsub, GossipsubConfig, GossipsubEvent, MessageAuthenticity, Topic,
+};
 use libp2p::identify::{Identify, IdentifyEvent};
 use libp2p::kad::record::store::MemoryStore;
 use libp2p::kad::record::Key;
@@ -35,6 +38,7 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     kad: Kademlia<MemoryStore>,
     mdns: Toggle<Mdns>,
     ping: Toggle<Ping>,
+    gossipsub: Toggle<Gossipsub>,
     identify: Identify,
     bitswap: Bitswap<P>,
 
@@ -183,6 +187,12 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<IdentifyEvent> for NetworkBack
     }
 }
 
+impl<P: StoreParams> NetworkBehaviourEventProcess<GossipsubEvent> for NetworkBackendBehaviour<P> {
+    fn inject_event(&mut self, event: GossipsubEvent) {
+        self.events.push_back(NetworkEvent::Gossip(event));
+    }
+}
+
 #[derive(Debug, Error)]
 #[error("{0:?}")]
 pub struct KadRecordError(pub libp2p::kad::record::store::Error);
@@ -215,6 +225,16 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         }
         .into();
 
+        let gossipsub = if config.enable_gossipsub {
+            Some(Gossipsub::new(
+                MessageAuthenticity::Signed(config.node_key.clone()),
+                GossipsubConfig::default(),
+            ))
+        } else {
+            None
+        }
+        .into();
+
         let public = config.public();
         let identify = Identify::new("/ipfs-embed/1.0".into(), config.node_name.clone(), public);
 
@@ -232,6 +252,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             ping,
             identify,
             bitswap,
+            gossipsub,
             events: Default::default(),
             mdns_peers: Default::default(),
             provided_before_bootstrap: Some(Default::default()),
@@ -278,6 +299,30 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
     pub fn unprovide(&mut self, cid: Cid) {
         let key = Key::new(&cid.to_bytes());
         self.kad.stop_providing(&key);
+    }
+
+    pub fn subscribe(&mut self, topic: Topic) -> bool {
+        if let Some(gossipsub) = self.gossipsub.as_mut() {
+            gossipsub.subscribe(topic)
+        } else {
+            false
+        }
+    }
+
+    pub fn unsubscribe(&mut self, topic: Topic) -> bool {
+        if let Some(gossipsub) = self.gossipsub.as_mut() {
+            gossipsub.unsubscribe(topic)
+        } else {
+            false
+        }
+    }
+
+    pub fn publish(&mut self, topic: &Topic, bytes: Vec<u8>) -> Result<(), PublishError> {
+        if let Some(gossipsub) = self.gossipsub.as_mut() {
+            gossipsub.publish(topic, bytes)
+        } else {
+            Ok(())
+        }
     }
 
     fn bootstrap_complete(&mut self) {

@@ -15,8 +15,8 @@ use futures::future::Future;
 use futures::sink::SinkExt;
 use futures::stream::Stream;
 use ipfs_embed_core::{
-    AddressRecord, Block, Cid, Multiaddr, Network, NetworkEvent, PeerId, Query, QueryResult,
-    QueryType, Result, Storage, StorageEvent, StoreParams,
+    AddressRecord, Block, Cid, Multiaddr, Network, NetworkEvent, PeerId, PublishError, Query,
+    QueryResult, QueryType, Result, Storage, StorageEvent, StoreParams, Topic, GossipsubEvent,
 };
 use libipld::codec::References;
 use libipld::error::BlockNotFound;
@@ -24,7 +24,7 @@ use libipld::ipld::Ipld;
 use libipld::store::Store;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 pub use ipfs_embed_core as core;
@@ -43,6 +43,7 @@ pub struct Ipfs<P, S, N> {
     storage: Arc<S>,
     network: Arc<N>,
     tx: mpsc::Sender<Command>,
+    subscriptions: Arc<Mutex<Vec<mpsc::UnboundedSender<GossipsubEvent>>>>,
 }
 
 impl<P, S, N> Clone for Ipfs<P, S, N> {
@@ -52,6 +53,7 @@ impl<P, S, N> Clone for Ipfs<P, S, N> {
             storage: self.storage.clone(),
             network: self.network.clone(),
             tx: self.tx.clone(),
+            subscriptions: self.subscriptions.clone(),
         }
     }
 }
@@ -67,13 +69,21 @@ where
         for cid in storage.iter().await? {
             network.provide(cid);
         }
+        let subscriptions = Arc::new(Mutex::new(Default::default()));
         let (tx, rx) = mpsc::channel(0);
-        async_global_executor::spawn(IpfsTask::new(storage.clone(), network.clone(), rx)).detach();
+        async_global_executor::spawn(IpfsTask::new(
+            storage.clone(),
+            network.clone(),
+            rx,
+            subscriptions.clone(),
+        ))
+        .detach();
         Ok(Self {
             _marker: PhantomData,
             storage,
             network,
             tx,
+            subscriptions,
         })
     }
 
@@ -95,6 +105,26 @@ where
 
     pub async fn pinned(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
         self.storage.pinned(cid).await
+    }
+
+    pub async fn subscribe_topic(&self, topic: Topic) {
+        self.network.subscribe_topic(topic);
+    }
+
+    pub async fn unsubscribe_topic(&self, topic: Topic) {
+        self.network.unsubscribe_topic(topic);
+    }
+
+    pub async fn publish(&self, topic: Topic, msg: Vec<u8>) -> Result<(), PublishError> {
+        let (tx, rx) = oneshot::channel();
+        self.network.publish(topic, msg, tx);
+        rx.await.unwrap()
+    }
+
+    pub fn subscribe(&self) -> mpsc::UnboundedReceiver<GossipsubEvent> {
+        let (tx, rx) = mpsc::unbounded();
+        self.subscriptions.lock().unwrap().push(tx);
+        rx
     }
 }
 
@@ -177,6 +207,7 @@ struct IpfsTask<P: StoreParams, S: Storage<P>, N: Network<P>> {
     network_events: N::Subscription,
     queries: FnvHashMap<Query, Vec<oneshot::Sender<QueryResult>>>,
     rx: mpsc::Receiver<Command>,
+    subscriptions: Arc<Mutex<Vec<mpsc::UnboundedSender<GossipsubEvent>>>>,
 }
 
 impl<P, S, N> IpfsTask<P, S, N>
@@ -186,7 +217,12 @@ where
     N: Network<P>,
     Ipld: References<P::Codecs>,
 {
-    pub fn new(storage: Arc<S>, network: Arc<N>, rx: mpsc::Receiver<Command>) -> Self {
+    pub fn new(
+        storage: Arc<S>,
+        network: Arc<N>,
+        rx: mpsc::Receiver<Command>,
+        subscriptions: Arc<Mutex<Vec<mpsc::UnboundedSender<GossipsubEvent>>>>,
+    ) -> Self {
         let storage_events = storage.subscribe();
         let network_events = network.subscribe();
         Self {
@@ -197,6 +233,7 @@ where
             network_events,
             queries: Default::default(),
             rx,
+            subscriptions,
         }
     }
 }
@@ -293,6 +330,12 @@ where
                     })
                     .detach();
                 }
+                NetworkEvent::Gossip(event) => {
+                    let mut subscriptions = self.subscriptions.lock().unwrap();
+                    subscriptions.retain(|tx| {
+                        tx.unbounded_send(event.clone()).is_ok()
+                    });
+                }
             }
         }
 
@@ -315,6 +358,7 @@ where
 mod tests {
     use super::*;
     use async_std::task;
+    use futures::stream::StreamExt;
     use ipfs_embed_net::{NetworkConfig, NetworkService};
     use ipfs_embed_sqlite::{StorageConfig, StorageService};
     use libipld::block::Block;
@@ -336,6 +380,7 @@ mod tests {
 
         let mut net_config = NetworkConfig::new();
         net_config.enable_mdns = bootstrap.is_empty();
+        net_config.enable_gossipsub = true;
         net_config.boot_nodes = bootstrap;
         net_config.allow_non_globals_in_dht = true;
 
@@ -490,5 +535,30 @@ mod tests {
         assert_unpinned!(&local1, &c1);
         assert_unpinned!(&local1, &b2);
         assert_unpinned!(&local1, &c2);
+    }
+
+    #[async_std::test]
+    async fn test_gossip() {
+        env_logger::try_init().ok();
+        let store = create_store(vec![]).await;
+        // make sure bootstrap node has started
+        task::sleep(Duration::from_secs(3)).await;
+        let bootstrap = vec![(store.listeners().await[0].clone(), *store.local_peer_id())];
+        let store1 = create_store(bootstrap.clone()).await;
+        let store2 = create_store(bootstrap).await;
+
+        let mut rx = store2.subscribe();
+
+        store.subscribe_topic(Topic::new("topic".to_string())).await;
+        assert!(matches!(rx.next().await, Some(GossipsubEvent::Subscribed { .. })));
+
+        store1.subscribe_topic(Topic::new("topic".to_string())).await;
+        assert!(matches!(rx.next().await, Some(GossipsubEvent::Subscribed { .. })));
+
+        store2.subscribe_topic(Topic::new("topic".to_string())).await;
+        assert!(matches!(rx.next().await, Some(GossipsubEvent::Subscribed { .. })));
+
+        store1.publish(Topic::new("topic".to_string()), b"hello world".to_vec()).await.unwrap();
+        assert!(matches!(rx.next().await, Some(GossipsubEvent::Message(_, _, _))));
     }
 }
