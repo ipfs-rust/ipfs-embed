@@ -1,12 +1,11 @@
-use ipfs_embed::core::{BitswapStorage, BitswapStore, BitswapSync, Result, Storage};
+use ipfs_embed::core::Result;
 use ipfs_embed::DefaultIpfs;
 use libipld::cbor::DagCborCodec;
 use libipld::multihash::Code;
-use libipld::store::{Store, StoreParams};
+use libipld::store::Store;
 use libipld::{alias, Cid, DagCbor};
 use std::convert::TryFrom;
 use std::path::Path;
-use std::sync::Arc;
 
 const TMP_ROOT: &str = alias!(tmp_root);
 const ROOT: &str = alias!(root);
@@ -28,7 +27,7 @@ fn loopback(block: u32) -> Option<u32> {
     }
 }
 
-pub struct ChainSyncer<S: StoreParams, T: Storage<S>> {
+/*pub struct ChainSyncer<S: StoreParams, T: Storage<S>> {
     index: sled::Db,
     storage: BitswapStorage<S, T>,
 }
@@ -95,7 +94,7 @@ where
     fn contains(&self, cid: &Cid) -> bool {
         self.storage.contains(cid)
     }
-}
+}*/
 
 pub struct BlockChain {
     index: sled::Db,
@@ -105,7 +104,7 @@ pub struct BlockChain {
 }
 
 impl BlockChain {
-    pub async fn open<P: AsRef<Path>>(path: P, cache_size: usize) -> Result<Self> {
+    pub async fn open<P: AsRef<Path>>(path: P, cache_size: u64) -> Result<Self> {
         let index = sled::open(path.as_ref().join("index"))?;
         let ipfs = DefaultIpfs::default(Some(path.as_ref().join("blocks")), cache_size).await?;
         let root_cid = ipfs.resolve(ROOT).await?;
@@ -183,10 +182,8 @@ impl BlockChain {
     }
 
     pub async fn sync(&mut self, root: &Cid) -> Result<()> {
-        let syncer = ChainSyncer::new(self.index.clone(), self.ipfs.bitswap_storage());
-        self.ipfs
-            .alias_with_syncer(TMP_ROOT, Some(root), Some(syncer.clone()))
-            .await?;
+        //let syncer = ChainSyncer::new(self.index.clone(), self.ipfs.bitswap_storage());
+        self.ipfs.alias(TMP_ROOT, Some(root)).await?;
 
         let mut cid = *root;
         let mut block = self.get_by_cid(root).await?;
@@ -199,9 +196,7 @@ impl BlockChain {
             block = self.get_by_cid(&cid).await?;
         }
 
-        self.ipfs
-            .alias_with_syncer(ROOT, Some(root), Some(syncer))
-            .await?;
+        self.ipfs.alias(ROOT, Some(root)).await?;
         self.root_id = block.id;
         self.root_cid = Some(cid);
 
@@ -215,11 +210,11 @@ impl BlockChain {
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    //env_logger::init();
+    env_logger::init();
     let mut local1 = BlockChain::open("/tmp/local1", 1000).await?;
     let mut local2 = BlockChain::open("/tmp/local2", 1000).await?;
 
-    for i in 1..1000 {
+    for i in 1..10 {
         local1.push(vec![i as u8], true).await?;
     }
 
