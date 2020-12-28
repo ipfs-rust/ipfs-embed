@@ -17,7 +17,8 @@ use libp2p::swarm::toggle::Toggle;
 use libp2p::swarm::NetworkBehaviourEventProcess;
 use libp2p::NetworkBehaviour;
 use libp2p::{Multiaddr, PeerId};
-use libp2p_bitswap::{Bitswap, BitswapConfig, BitswapEvent, BitswapStats, Channel};
+use libp2p_bitswap::{Bitswap, BitswapConfig, BitswapEvent, Channel};
+use prometheus::Registry;
 use thiserror::Error;
 
 #[derive(Debug)]
@@ -26,11 +27,6 @@ pub enum NetworkEvent<S: StoreParams> {
     Have(Channel, PeerId, Cid),
     Block(Channel, PeerId, Cid),
     Received(QueryId, PeerId, Block<S>),
-}
-
-#[derive(Clone, Debug)]
-pub struct NetworkStats {
-    pub bitswap: BitswapStats,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -372,9 +368,8 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         self.kad.stop_providing(&key);
     }
 
-    pub fn stats(&self) -> NetworkStats {
-        NetworkStats {
-            bitswap: self.bitswap.stats().clone(),
-        }
+    pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
+        self.bitswap.register_metrics(registry)?;
+        Ok(())
     }
 }

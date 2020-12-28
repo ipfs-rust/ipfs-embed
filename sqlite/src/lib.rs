@@ -6,12 +6,145 @@ use ipfs_sqlite_block_store::{
     cache::{BlockInfo, CacheTracker, SqliteCacheTracker},
     BlockStore, Config, SizeTargets,
 };
+use lazy_static::lazy_static;
 use libipld::codec::References;
 use libipld::store::StoreParams;
 use libipld::{Block, Cid, Ipld, Result};
+use prometheus::core::{Collector, Desc};
+use prometheus::proto::MetricFamily;
+use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry};
+use std::future::Future;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::time::Duration;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StorageConfig {
+    pub path: Option<PathBuf>,
+    pub cache_size_blocks: u64,
+    pub cache_size_bytes: u64,
+    pub gc_interval: Duration,
+    pub gc_min_blocks: usize,
+    pub gc_target_duration: Duration,
+}
+
+impl StorageConfig {
+    pub fn new(path: Option<PathBuf>, cache_size: u64, gc_interval: Duration) -> Self {
+        Self {
+            path,
+            cache_size_blocks: cache_size,
+            cache_size_bytes: u64::MAX,
+            gc_interval,
+            gc_min_blocks: usize::MAX,
+            gc_target_duration: Duration::new(u64::MAX, 1_000_000_000 - 1),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StorageEvent {
+    Remove(Cid),
+}
+
+#[derive(Clone)]
+pub struct StorageService<S: StoreParams> {
+    _marker: PhantomData<S>,
+    store: AsyncBlockStore<AsyncGlobalExecutor>,
+    gc_target_duration: Duration,
+    gc_min_blocks: usize,
+}
+
+impl<S: StoreParams> StorageService<S>
+where
+    Ipld: References<S::Codecs>,
+{
+    pub fn open(config: StorageConfig, tx: mpsc::UnboundedSender<StorageEvent>) -> Result<Self> {
+        let size = SizeTargets::new(config.cache_size_blocks, config.cache_size_bytes);
+        let store_config = Config::default().with_size_targets(size);
+        let gc_config = GcConfig {
+            interval: config.gc_interval,
+            min_blocks: config.gc_min_blocks,
+            target_duration: config.gc_target_duration,
+        };
+        let store = if let Some(path) = config.path {
+            let tracker = SqliteCacheTracker::open(&path, |access, _| Some(access))?;
+            let tracker = IpfsCacheTracker { tracker, tx };
+            BlockStore::open(path, store_config.with_cache_tracker(tracker))?
+        } else {
+            let tracker = SqliteCacheTracker::memory(|access, _| Some(access))?;
+            let tracker = IpfsCacheTracker { tracker, tx };
+            BlockStore::memory(store_config.with_cache_tracker(tracker))?
+        };
+        let store = AsyncBlockStore::new(AsyncGlobalExecutor, store);
+        let gc = store.clone().gc_loop(gc_config);
+        async_global_executor::spawn(gc).detach();
+        Ok(Self {
+            _marker: PhantomData,
+            gc_target_duration: config.gc_target_duration,
+            gc_min_blocks: config.gc_min_blocks,
+            store,
+        })
+    }
+
+    pub async fn temp_pin(&self) -> Result<AsyncTempPin> {
+        observe_query("temp_pin", self.store.temp_pin()).await
+    }
+
+    pub async fn iter(&self) -> Result<std::vec::IntoIter<Cid>> {
+        let fut = self.store.get_block_cids::<Vec<Cid>>();
+        let cids = observe_query("iter", fut).await?;
+        Ok(cids.into_iter())
+    }
+
+    pub async fn contains(&self, cid: &Cid) -> Result<bool> {
+        observe_query("contains", self.store.has_block(cid)).await
+    }
+
+    pub async fn get(&self, cid: Cid) -> Result<Option<Vec<u8>>> {
+        observe_query("get", self.store.get_block(cid)).await
+    }
+
+    pub async fn insert(&self, block: Block<S>, alias: Option<&AsyncTempPin>) -> Result<()> {
+        observe_query("insert", self.store.put_block(block, alias)).await
+    }
+
+    pub async fn evict(&self) -> Result<()> {
+        while !self
+            .store
+            .incremental_gc(self.gc_min_blocks, self.gc_target_duration)
+            .await?
+        {}
+        while !self
+            .store
+            .incremental_delete_orphaned(self.gc_min_blocks, self.gc_target_duration)
+            .await?
+        {}
+        Ok(())
+    }
+
+    pub async fn alias(&self, alias: Vec<u8>, cid: Option<Cid>) -> Result<()> {
+        observe_query("alias", self.store.alias(alias, cid)).await
+    }
+
+    pub async fn resolve(&self, alias: Vec<u8>) -> Result<Option<Cid>> {
+        observe_query("resolve", self.store.resolve(alias)).await
+    }
+
+    pub async fn pinned(&self, cid: Cid) -> Result<Option<Vec<Vec<u8>>>> {
+        observe_query("pinned", self.store.reverse_alias(cid)).await
+    }
+
+    pub async fn missing_blocks(&self, cid: Cid) -> Result<Vec<Cid>> {
+        observe_query("missing_blocks", self.store.get_missing_blocks(cid)).await
+    }
+
+    pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
+        registry.register(Box::new(QUERIES_TOTAL.clone()))?;
+        registry.register(Box::new(QUERY_DURATION.clone()))?;
+        registry.register(Box::new(SqliteStoreCollector::new(self.store.clone())))?;
+        Ok(())
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 struct AsyncGlobalExecutor;
@@ -61,138 +194,80 @@ impl<T: CacheTracker> CacheTracker for IpfsCacheTracker<T> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StorageConfig {
-    pub path: Option<PathBuf>,
-    pub cache_size_blocks: u64,
-    pub cache_size_bytes: u64,
-    pub gc_interval: Duration,
-    pub gc_min_blocks: usize,
-    pub gc_target_duration: Duration,
+lazy_static! {
+    pub static ref QUERIES_TOTAL: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "block_store_queries_total",
+            "Number of block store requests labelled by type."
+        ),
+        &["type"],
+    )
+    .unwrap();
+    pub static ref QUERY_DURATION: HistogramVec = HistogramVec::new(
+        HistogramOpts::new(
+            "block_store_query_duration",
+            "Duration of store queries labelled by type.",
+        ),
+        &["type"],
+    )
+    .unwrap();
 }
 
-impl StorageConfig {
-    pub fn new(path: Option<PathBuf>, cache_size: u64, gc_interval: Duration) -> Self {
-        Self {
-            path,
-            cache_size_blocks: cache_size,
-            cache_size_bytes: u64::MAX,
-            gc_interval,
-            gc_min_blocks: usize::MAX,
-            gc_target_duration: Duration::new(u64::MAX, 1_000_000_000 - 1),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct StorageStats {
-    /// Total number of blocks in the store
-    pub count: u64,
-    /// Total size of blocks in the store
-    pub size: u64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum StorageEvent {
-    Remove(Cid),
-}
-
-#[derive(Clone)]
-pub struct StorageService<S: StoreParams> {
-    _marker: PhantomData<S>,
-    store: AsyncBlockStore<AsyncGlobalExecutor>,
-    gc_target_duration: Duration,
-    gc_min_blocks: usize,
-}
-
-impl<S: StoreParams> StorageService<S>
+async fn observe_query<T, E, F>(name: &'static str, query: F) -> Result<T>
 where
-    Ipld: References<S::Codecs>,
+    E: std::error::Error + Send + Sync + 'static,
+    F: Future<Output = Result<T, E>>,
 {
-    pub fn open(config: StorageConfig, tx: mpsc::UnboundedSender<StorageEvent>) -> Result<Self> {
-        let size = SizeTargets::new(config.cache_size_blocks, config.cache_size_bytes);
-        let store_config = Config::default().with_size_targets(size);
-        let gc_config = GcConfig {
-            interval: config.gc_interval,
-            min_blocks: config.gc_min_blocks,
-            target_duration: config.gc_target_duration,
-        };
-        let store = if let Some(path) = config.path {
-            let tracker = SqliteCacheTracker::open(&path, |access, _| Some(access))?;
-            let tracker = IpfsCacheTracker { tracker, tx };
-            BlockStore::open(path, store_config.with_cache_tracker(tracker))?
-        } else {
-            let tracker = SqliteCacheTracker::memory(|access, _| Some(access))?;
-            let tracker = IpfsCacheTracker { tracker, tx };
-            BlockStore::memory(store_config.with_cache_tracker(tracker))?
-        };
-        let store = AsyncBlockStore::new(AsyncGlobalExecutor, store);
-        let gc = store.clone().gc_loop(gc_config);
-        async_global_executor::spawn(gc).detach();
-        Ok(Self {
-            _marker: PhantomData,
-            gc_target_duration: config.gc_target_duration,
-            gc_min_blocks: config.gc_min_blocks,
-            store,
-        })
+    QUERIES_TOTAL.with_label_values(&[name]).inc();
+    let timer = QUERY_DURATION.with_label_values(&[name]).start_timer();
+    let res = query.await;
+    if res.is_ok() {
+        timer.observe_duration();
+    } else {
+        timer.stop_and_discard();
+    }
+    Ok(res?)
+}
+
+struct SqliteStoreCollector {
+    desc: Desc,
+    store: AsyncBlockStore<AsyncGlobalExecutor>,
+}
+
+impl Collector for SqliteStoreCollector {
+    fn desc(&self) -> Vec<&Desc> {
+        vec![&self.desc]
     }
 
-    pub async fn temp_pin(&self) -> Result<AsyncTempPin> {
-        Ok(self.store.temp_pin().await?)
-    }
+    fn collect(&self) -> Vec<MetricFamily> {
+        let mut family = vec![];
 
-    pub async fn iter(&self) -> Result<std::vec::IntoIter<Cid>> {
-        Ok(self.store.get_block_cids::<Vec<Cid>>().await?.into_iter())
-    }
+        let stats = async_global_executor::block_on(self.store.get_store_stats()).unwrap();
 
-    pub async fn contains(&self, cid: &Cid) -> Result<bool> {
-        Ok(self.store.has_block(cid).await?)
-    }
+        let store_block_count =
+            IntGauge::new("block_store_block_count", "Number of stored blocks").unwrap();
+        store_block_count.set(stats.count() as _);
+        family.push(store_block_count.collect()[0].clone());
 
-    pub async fn get(&self, cid: Cid) -> Result<Option<Vec<u8>>> {
-        Ok(self.store.get_block(cid).await?)
-    }
+        let store_size =
+            IntGauge::new("block_store_size", "Size in bytes of stored blocks").unwrap();
+        store_size.set(stats.size() as _);
+        family.push(store_size.collect()[0].clone());
 
-    pub async fn insert(&self, block: Block<S>, alias: Option<&AsyncTempPin>) -> Result<()> {
-        Ok(self.store.put_block(block, alias).await?)
+        family
     }
+}
 
-    pub async fn evict(&self) -> Result<()> {
-        while !self
-            .store
-            .incremental_gc(self.gc_min_blocks, self.gc_target_duration)
-            .await?
-        {}
-        while !self
-            .store
-            .incremental_delete_orphaned(self.gc_min_blocks, self.gc_target_duration)
-            .await?
-        {}
-        Ok(())
-    }
-
-    pub async fn alias(&self, alias: Vec<u8>, cid: Option<Cid>) -> Result<()> {
-        Ok(self.store.alias(alias, cid).await?)
-    }
-
-    pub async fn resolve(&self, alias: Vec<u8>) -> Result<Option<Cid>> {
-        Ok(self.store.resolve(alias).await?)
-    }
-
-    pub async fn pinned(&self, cid: Cid) -> Result<Option<Vec<Vec<u8>>>> {
-        Ok(self.store.reverse_alias(cid).await?)
-    }
-
-    pub async fn missing_blocks(&self, cid: Cid) -> Result<Vec<Cid>> {
-        Ok(self.store.get_missing_blocks(cid).await?)
-    }
-
-    pub async fn stats(&self) -> Result<StorageStats> {
-        let stats = self.store.get_store_stats().await?;
-        Ok(StorageStats {
-            count: stats.count(),
-            size: stats.size(),
-        })
+impl SqliteStoreCollector {
+    pub fn new(store: AsyncBlockStore<AsyncGlobalExecutor>) -> Self {
+        let desc = Desc::new(
+            "block_store_stats".into(),
+            ".".into(),
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap();
+        Self { store, desc }
     }
 }
 

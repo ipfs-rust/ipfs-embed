@@ -4,6 +4,7 @@ use libipld::multihash::Code;
 use libipld::{alias, Cid, DagCbor, DefaultParams, Result};
 use std::convert::TryFrom;
 use std::path::Path;
+use std::time::Duration;
 
 const TMP_ROOT: &str = alias!(tmp_root);
 const ROOT: &str = alias!(root);
@@ -218,12 +219,13 @@ impl BlockChain {
 }
 
 #[async_std::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     let mut local1 = BlockChain::open("/tmp/local1", 1000).await?;
     let mut local2 = BlockChain::open("/tmp/local2", 1000).await?;
+    ipfs_embed::telemetry("127.0.0.1:8080".parse()?, &local1.ipfs)?;
 
     for i in 0..20 {
         local1.push(vec![i + 1 as u8], true).await?;
@@ -250,5 +252,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let block = local1.get_by_id(2).await?;
     assert_eq!(block.unwrap().payload, b"another block".to_vec());*/
 
-    Ok(())
+    loop {
+        async_std::task::sleep(Duration::from_secs(10)).await;
+    }
 }

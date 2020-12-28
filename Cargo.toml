@@ -10,21 +10,17 @@ license = "MIT OR Apache-2.0"
 description = "small embeddable ipfs implementation"
 repository = "https://github.com/ipfs-rust/ipfs-embed"
 
-[features]
-default = ["db", "net"]
-#db = ["ipfs-embed-db", "sled"]
-db = ["ipfs-embed-sqlite"]
-net = ["ipfs-embed-net"]
-
 [dependencies]
 async-global-executor = "2.0.1"
 async-trait = "0.1.42"
 fnv = "1.0.7"
 futures = "0.3.8"
-#ipfs-embed-db = { version = "0.9.0", path = "db", optional = true }
-ipfs-embed-net = { version = "0.9.0", path = "net", optional = true }
-ipfs-embed-sqlite = { version = "0.9.0", path = "sqlite", optional = true }
+#ipfs-embed-db = { version = "0.9.0", path = "db" }
+ipfs-embed-net = { version = "0.9.0", path = "net" }
+ipfs-embed-sqlite = { version = "0.9.0", path = "sqlite" }
 libipld = { version = "0.9.0", default-features = false }
+prometheus = "0.11.0"
+tide = "0.15.0"
 tracing = "0.1.22"
 
 [dev-dependencies]

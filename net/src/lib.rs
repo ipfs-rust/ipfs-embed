@@ -12,7 +12,7 @@ use libp2p::noise::{Keypair, NoiseConfig, X25519Spec};
 use libp2p::swarm::{AddressScore, Swarm, SwarmBuilder, SwarmEvent};
 use libp2p::tcp::TcpConfig;
 use libp2p_bitswap::Channel;
-//use libp2p::yamux::Config as YamuxConfig;
+use prometheus::Registry;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -22,7 +22,7 @@ use std::time::Duration;
 mod behaviour;
 mod config;
 
-pub use crate::behaviour::{NetworkEvent, NetworkStats, QueryId};
+pub use crate::behaviour::{NetworkEvent, QueryId};
 pub use crate::config::NetworkConfig;
 pub use libp2p::swarm::AddressRecord;
 pub use libp2p::{Multiaddr, PeerId};
@@ -206,9 +206,9 @@ impl<P: StoreParams> NetworkService<P> {
         swarm.inject_missing_blocks(id, missing);
     }
 
-    pub fn stats(&self) -> NetworkStats {
+    pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
         let swarm = self.swarm.lock().unwrap();
-        swarm.stats()
+        swarm.register_metrics(registry)
     }
 }
 
