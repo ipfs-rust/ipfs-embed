@@ -9,7 +9,6 @@ async-global-executor = "2.0.1"
 async-io = "1.3.1"
 fnv = "1.0.7"
 futures = { version = "0.3.8", default-features = false }
-ipfs-embed-core = { path = "../core" }
 ipfs-sqlite-block-store = "0.1.6"
 libipld = { version = "0.9.0", default-features = false }
 

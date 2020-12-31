@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "net", "sqlite"]
+members = ["net", "sqlite"]
 
 [package]
 name = "ipfs-embed"
@@ -21,7 +21,6 @@ async-global-executor = "2.0.1"
 async-trait = "0.1.42"
 fnv = "1.0.7"
 futures = "0.3.8"
-ipfs-embed-core = { version = "0.9.0", path = "core" }
 #ipfs-embed-db = { version = "0.9.0", path = "db", optional = true }
 ipfs-embed-net = { version = "0.9.0", path = "net", optional = true }
 ipfs-embed-sqlite = { version = "0.9.0", path = "sqlite", optional = true }
@@ -30,15 +29,10 @@ tracing = "0.1.22"
 
 [dev-dependencies]
 async-std = { version = "1.8.0", features = ["attributes"] }
-#async-log = "2.0.0"
-#criterion = "0.3.3"
-env_logger = "0.8.2"
-#ipld-collections = "0.2.0"
 libipld = { version = "0.9.0", default-features = false, features = ["dag-cbor", "derive"] }
 multihash = { version = "0.13.2", default-features = false, features = ["blake3"] }
 sled = "0.34.6"
-#model = "0.1.2"
-#tempdir = "0.3.7"
+tracing-subscriber = "0.2.15"
 
 [profile.release]
 debug = true
