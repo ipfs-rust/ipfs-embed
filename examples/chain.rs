@@ -105,7 +105,9 @@ impl BlockChain {
     pub async fn open<P: AsRef<Path>>(path: P, cache_size: u64) -> Result<Self> {
         let index = sled::open(path.as_ref().join("index"))?;
         let config = Config::new(Some(path.as_ref().join("blocks")), cache_size);
+        //let config = Config::new(None, cache_size);
         let ipfs = Ipfs::new(config).await?;
+        ipfs.listen_on("/ip4/127.0.0.1/tcp/0".parse()?).await?;
         let root_cid = ipfs.resolve(ROOT).await?;
         let mut chain = Self {
             index,
@@ -157,12 +159,18 @@ impl BlockChain {
     }
 
     pub async fn push(&mut self, payload: Vec<u8>, import: bool) -> Result<Cid> {
+        if import {
+            tracing::trace!("chain: import");
+        } else {
+            tracing::trace!("chain: push");
+        }
         let id = if self.root_cid.is_none() {
             0
         } else {
             self.root_id + 1
         };
         let loopback = self.loopback_cid(id)?;
+        //let loopback = None;
         let block = Block {
             prev: self.root_cid,
             id,
@@ -171,7 +179,7 @@ impl BlockChain {
         };
         let ipld_block = libipld::Block::encode(DagCborCodec, Code::Blake3_256, &block)?;
         let cid = *ipld_block.cid();
-        self.ipfs.insert(ipld_block, None).await?;
+        let _ = self.ipfs.insert(ipld_block, None).await?;
         self.index_block(id, &cid)?;
         if !import {
             self.ipfs.alias(ROOT, Some(cid)).await?;
@@ -182,6 +190,7 @@ impl BlockChain {
     }
 
     pub async fn sync(&mut self, root: Cid) -> Result<()> {
+        tracing::trace!("chain: sync");
         //let syncer = ChainSyncer::new(self.index.clone(), self.ipfs.bitswap_storage());
         self.ipfs.alias(TMP_ROOT, Some(root)).await?;
 
@@ -210,12 +219,14 @@ impl BlockChain {
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
     let mut local1 = BlockChain::open("/tmp/local1", 1000).await?;
     let mut local2 = BlockChain::open("/tmp/local2", 1000).await?;
 
-    for i in 1..10 {
-        local1.push(vec![i as u8], true).await?;
+    for i in 0..20 {
+        local1.push(vec![i + 1 as u8], true).await?;
     }
 
     let root = *local1.root();

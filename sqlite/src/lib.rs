@@ -248,7 +248,10 @@ mod tests {
             .ok();
     }
 
-    fn create_store() -> (StorageService<DefaultParams>, mpsc::UnboundedReceiver<StorageEvent>) {
+    fn create_store() -> (
+        StorageService<DefaultParams>,
+        mpsc::UnboundedReceiver<StorageEvent>,
+    ) {
         let (tx, rx) = mpsc::unbounded();
         let config = StorageConfig::new(None, 2, Duration::from_secs(100));
         (StorageService::open(config, tx).unwrap(), rx)

@@ -1,7 +1,7 @@
 use crate::behaviour::NetworkBackendBehaviour;
-use async_mutex::Mutex;
 use futures::channel::{mpsc, oneshot};
-use futures::{future, pin_mut, FutureExt};
+use futures::stream::Stream;
+use futures::{future, pin_mut};
 use libipld::store::StoreParams;
 use libipld::{Cid, Result};
 use libp2p::core::transport::upgrade::Version;
@@ -9,13 +9,13 @@ use libp2p::core::transport::Transport;
 use libp2p::dns::DnsConfig;
 use libp2p::mplex::MplexConfig;
 use libp2p::noise::{Keypair, NoiseConfig, X25519Spec};
-use libp2p::swarm::{AddressScore, Swarm, SwarmBuilder};
+use libp2p::swarm::{AddressScore, Swarm, SwarmBuilder, SwarmEvent};
 use libp2p::tcp::TcpConfig;
 use libp2p_bitswap::Channel;
 //use libp2p::yamux::Config as YamuxConfig;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -51,38 +51,22 @@ impl<P: StoreParams> NetworkService<P> {
         )?;
 
         let peer_id = config.peer_id();
-        let behaviour = NetworkBackendBehaviour::<P>::new(config.clone()).await?;
-        let mut swarm = SwarmBuilder::new(transport.boxed(), behaviour, peer_id)
+        let behaviour = NetworkBackendBehaviour::<P>::new(config.clone(), tx).await?;
+        let swarm = SwarmBuilder::new(transport.boxed(), behaviour, peer_id)
             .executor(Box::new(|fut| {
                 async_global_executor::spawn(fut).detach();
             }))
             .build();
-        for addr in config.listen_addresses {
-            Swarm::listen_on(&mut swarm, addr)?;
-        }
-        for addr in config.public_addresses {
-            Swarm::add_external_address(&mut swarm, addr, AddressScore::Infinite);
-        }
-
-        while swarm.next_event().now_or_never().is_some() {}
 
         let swarm = Arc::new(Mutex::new(swarm));
         let swarm2 = swarm.clone();
-        async_global_executor::spawn(future::poll_fn(move |cx| {
-            let lock = swarm.lock();
-            pin_mut!(lock);
-            if let Poll::Ready(mut swarm) = lock.poll(cx) {
-                while let Poll::Ready(ev) = {
-                    let fut = swarm.next();
-                    pin_mut!(fut);
-                    fut.poll(cx)
-                } {
-                    if tx.unbounded_send(ev).is_err() {
-                        tracing::trace!("exiting swarm");
-                        return Poll::Ready(());
-                    }
-                }
-            }
+        async_global_executor::spawn::<_, ()>(future::poll_fn(move |cx| {
+            let mut guard = swarm.lock().unwrap();
+            while let Poll::Ready(_) = {
+                let swarm = &mut *guard;
+                pin_mut!(swarm);
+                swarm.poll_next(cx)
+            } {}
             Poll::Pending
         }))
         .detach();
@@ -90,80 +74,140 @@ impl<P: StoreParams> NetworkService<P> {
         Ok(Self { swarm: swarm2 })
     }
 
-    pub async fn local_peer_id(&self) -> PeerId {
-        let swarm = self.swarm.lock().await;
+    pub fn local_peer_id(&self) -> PeerId {
+        let swarm = self.swarm.lock().unwrap();
         *Swarm::local_peer_id(&swarm)
     }
 
-    pub async fn listeners(&self) -> Vec<Multiaddr> {
-        let swarm = self.swarm.lock().await;
+    pub async fn listen_on(&self, addr: Multiaddr) -> Result<Multiaddr> {
+        let mut swarm = self.swarm.lock().unwrap();
+        Swarm::listen_on(&mut swarm, addr)?;
+        loop {
+            match swarm.next_event().await {
+                SwarmEvent::NewListenAddr(addr) => {
+                    tracing::info!("listening on {}", addr);
+                    return Ok(addr);
+                }
+                SwarmEvent::ListenerClosed {
+                    reason: Err(err), ..
+                } => return Err(err.into()),
+                _ => continue,
+            }
+        }
+    }
+
+    pub fn listeners(&self) -> Vec<Multiaddr> {
+        let swarm = self.swarm.lock().unwrap();
         Swarm::listeners(&swarm).cloned().collect()
     }
 
-    pub async fn external_addresses(&self) -> Vec<AddressRecord> {
-        let swarm = self.swarm.lock().await;
+    pub fn add_external_address(&self, addr: Multiaddr) {
+        let mut swarm = self.swarm.lock().unwrap();
+        Swarm::add_external_address(&mut swarm, addr, AddressScore::Infinite);
+    }
+
+    pub fn external_addresses(&self) -> Vec<AddressRecord> {
+        let swarm = self.swarm.lock().unwrap();
         Swarm::external_addresses(&swarm).cloned().collect()
     }
 
-    pub async fn get(&self, cid: Cid) -> Result<()> {
-        let mut swarm = self.swarm.lock().await;
-        let (rx, id) = swarm.get(cid);
-        QueryFuture {
-            swarm: Some(self.swarm.clone()),
-            id,
-            rx,
-        }
-        .await
+    pub fn add_address(&self, peer: &PeerId, addr: Multiaddr) {
+        let mut swarm = self.swarm.lock().unwrap();
+        swarm.add_address(peer, addr);
     }
 
-    pub async fn sync(&self, cid: Cid, missing: impl Iterator<Item = Cid>) -> Result<()> {
-        let mut swarm = self.swarm.lock().await;
-        let (rx, id) = swarm.sync(cid, missing);
-        QueryFuture {
-            swarm: Some(self.swarm.clone()),
-            id,
-            rx,
-        }
-        .await
+    pub fn remove_address(&self, peer: &PeerId, addr: &Multiaddr) {
+        let mut swarm = self.swarm.lock().unwrap();
+        swarm.remove_address(peer, addr);
     }
 
-    pub async fn bootstrap(&self) -> Result<()> {
-        tracing::trace!("starting bootstrap");
-        let mut swarm = self.swarm.lock().await;
-        let rx = swarm.bootstrap();
-        drop(swarm);
+    pub fn dial(&self, peer: &PeerId) -> Result<()> {
+        let mut swarm = self.swarm.lock().unwrap();
+        Ok(Swarm::dial(&mut swarm, peer)?)
+    }
+
+    pub fn ban(&self, peer: PeerId) {
+        let mut swarm = self.swarm.lock().unwrap();
+        Swarm::ban_peer_id(&mut swarm, peer)
+    }
+
+    pub fn unban(&self, peer: PeerId) {
+        let mut swarm = self.swarm.lock().unwrap();
+        Swarm::unban_peer_id(&mut swarm, peer)
+    }
+
+    pub async fn bootstrap(&self, peers: &[(PeerId, Multiaddr)]) -> Result<()> {
+        for (peer, addr) in peers {
+            self.add_address(peer, addr.clone());
+            self.dial(peer)?;
+        }
+        let rx = {
+            let mut swarm = self.swarm.lock().unwrap();
+            swarm.bootstrap()
+        };
+        tracing::trace!("started bootstrap");
         rx.await??;
         tracing::trace!("boostrap complete");
         Ok(())
     }
 
-    pub async fn provide(&self, cid: Cid) -> oneshot::Receiver<Result<()>> {
-        let mut swarm = self.swarm.lock().await;
-        swarm.provide(cid)
+    pub async fn get(&self, cid: Cid) -> Result<()> {
+        let query = {
+            let mut swarm = self.swarm.lock().unwrap();
+            let (rx, id) = swarm.get(cid);
+            QueryFuture {
+                swarm: Some(self.swarm.clone()),
+                id,
+                rx,
+            }
+        };
+        query.await
     }
 
-    pub async fn unprovide(&self, cid: Cid) {
-        let mut swarm = self.swarm.lock().await;
+    pub async fn sync(&self, cid: Cid, missing: impl Iterator<Item = Cid>) -> Result<()> {
+        let query = {
+            let mut swarm = self.swarm.lock().unwrap();
+            let (rx, id) = swarm.sync(cid, missing);
+            QueryFuture {
+                swarm: Some(self.swarm.clone()),
+                id,
+                rx,
+            }
+        };
+        query.await
+    }
+
+    pub async fn provide(&self, cid: Cid) -> Result<()> {
+        let rx = {
+            let mut swarm = self.swarm.lock().unwrap();
+            swarm.provide(cid)
+        };
+        rx.await??;
+        Ok(())
+    }
+
+    pub fn unprovide(&self, cid: Cid) {
+        let mut swarm = self.swarm.lock().unwrap();
         swarm.unprovide(cid)
     }
 
-    pub async fn inject_have(&self, ch: Channel, have: bool) {
-        let mut swarm = self.swarm.lock().await;
+    pub fn inject_have(&self, ch: Channel, have: bool) {
+        let mut swarm = self.swarm.lock().unwrap();
         swarm.inject_have(ch, have);
     }
 
-    pub async fn inject_block(&self, ch: Channel, block: Option<Vec<u8>>) {
-        let mut swarm = self.swarm.lock().await;
+    pub fn inject_block(&self, ch: Channel, block: Option<Vec<u8>>) {
+        let mut swarm = self.swarm.lock().unwrap();
         swarm.inject_block(ch, block);
     }
 
-    pub async fn inject_missing_blocks(&self, id: QueryId, missing: Vec<Cid>) {
-        let mut swarm = self.swarm.lock().await;
+    pub fn inject_missing_blocks(&self, id: QueryId, missing: Vec<Cid>) {
+        let mut swarm = self.swarm.lock().unwrap();
         swarm.inject_missing_blocks(id, missing);
     }
 
-    pub async fn stats(&self) -> NetworkStats {
-        let swarm = self.swarm.lock().await;
+    pub fn stats(&self) -> NetworkStats {
+        let swarm = self.swarm.lock().unwrap();
         swarm.stats()
     }
 }
@@ -189,11 +233,7 @@ impl<P: StoreParams> Future for QueryFuture<P> {
 impl<P: StoreParams> Drop for QueryFuture<P> {
     fn drop(&mut self) {
         let swarm = self.swarm.take().unwrap();
-        let id = self.id;
-        async_global_executor::spawn(async move {
-            let mut swarm = swarm.lock().await;
-            swarm.cancel(id);
-        })
-        .detach();
+        let mut swarm = swarm.lock().unwrap();
+        swarm.cancel(self.id);
     }
 }
