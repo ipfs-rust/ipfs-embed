@@ -213,6 +213,11 @@ where
         self.network.dial(peer)
     }
 
+    pub fn dial_address(&self, peer: &PeerId, addr: Multiaddr) -> Result<()> {
+        self.network.add_address(peer, addr);
+        self.network.dial(peer)
+    }
+
     pub fn ban(&self, peer: PeerId) {
         self.network.ban(peer)
     }
@@ -595,6 +600,84 @@ mod tests {
         assert_unpinned!(&local1, &c1);
         assert_unpinned!(&local1, &b2);
         assert_unpinned!(&local1, &c2);
+        Ok(())
+    }
+
+    #[async_std::test]
+    async fn test_dht_record() -> Result<()> {
+        tracing_try_init();
+        let stores = [create_store(false).await?, create_store(false).await?];
+        stores[0]
+            .bootstrap(&[(stores[1].local_peer_id(), stores[1].listeners()[0].clone())])
+            .await?;
+        stores[1]
+            .bootstrap(&[(stores[0].local_peer_id(), stores[0].listeners()[0].clone())])
+            .await?;
+        let key: Key = b"key".to_vec().into();
+
+        stores[0]
+            .put_record(
+                Record::new(key.clone(), b"hello world".to_vec()),
+                Quorum::One,
+            )
+            .await?;
+        let records = stores[1].get_record(&key, Quorum::One).await?;
+        assert_eq!(records.len(), 1);
+        Ok(())
+    }
+
+    #[async_std::test]
+    async fn test_gossip() -> Result<()> {
+        tracing_try_init();
+        let mut stores = [
+            create_store(false).await?,
+            create_store(false).await?,
+            create_store(false).await?,
+            create_store(false).await?,
+            create_store(false).await?,
+            create_store(false).await?,
+        ];
+        let topic = Topic::new("topic".to_string());
+        for store in &stores {
+            for other in &stores {
+                if store.local_peer_id() != other.local_peer_id() {
+                    store.dial_address(&other.local_peer_id(), other.listeners()[0].clone())?;
+                }
+            }
+            store.subscribe(topic.clone());
+        }
+
+        for store in &mut stores {
+            assert!(matches!(
+                store.next().await,
+                Some(GossipsubEvent::Subscribed { .. })
+            ));
+            assert!(matches!(
+                store.next().await,
+                Some(GossipsubEvent::Subscribed { .. })
+            ));
+            assert!(matches!(
+                store.next().await,
+                Some(GossipsubEvent::Subscribed { .. })
+            ));
+            assert!(matches!(
+                store.next().await,
+                Some(GossipsubEvent::Subscribed { .. })
+            ));
+            assert!(matches!(
+                store.next().await,
+                Some(GossipsubEvent::Subscribed { .. })
+            ));
+        }
+
+        stores[0].publish(&topic, b"hello world".to_vec()).unwrap();
+
+        for store in &mut stores[1..] {
+            assert!(matches!(
+                store.next().await,
+                Some(GossipsubEvent::Message(_, _, _))
+            ));
+        }
         Ok(())
     }
 }

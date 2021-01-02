@@ -14,7 +14,7 @@ use libp2p::kad::{
 };
 use libp2p::mdns::{Mdns, MdnsEvent};
 use libp2p::multiaddr::Protocol;
-use libp2p::ping::{Ping, PingEvent};
+use libp2p::ping::{Ping, PingEvent, PingFailure, PingSuccess};
 use libp2p::swarm::toggle::Toggle;
 use libp2p::swarm::NetworkBehaviourEventProcess;
 use libp2p::NetworkBehaviour;
@@ -259,8 +259,34 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<BitswapEvent<P>> for NetworkBa
 }
 
 impl<P: StoreParams> NetworkBehaviourEventProcess<PingEvent> for NetworkBackendBehaviour<P> {
-    fn inject_event(&mut self, _event: PingEvent) {
+    fn inject_event(&mut self, event: PingEvent) {
         // Don't really need to do anything here as ping handles disconnecting automatically.
+        match event {
+            PingEvent {
+                peer,
+                result: Result::Ok(PingSuccess::Ping { rtt }),
+            } => {
+                tracing::trace!("ping: rtt to {} is {} ms", peer, rtt.as_millis());
+            }
+            PingEvent {
+                peer,
+                result: Result::Ok(PingSuccess::Pong),
+            } => {
+                tracing::trace!("ping: pong from {}", peer);
+            }
+            PingEvent {
+                peer,
+                result: Result::Err(PingFailure::Timeout),
+            } => {
+                tracing::trace!("ping: timeout to {}", peer);
+            }
+            PingEvent {
+                peer,
+                result: Result::Err(PingFailure::Other { error }),
+            } => {
+                tracing::trace!("ping: failure with {}: {}", peer, error);
+            }
+        }
     }
 }
 
@@ -440,7 +466,9 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
     }
 
     pub fn publish(&mut self, topic: &Topic, msg: Vec<u8>) -> Result<()> {
-        self.gossipsub.publish(topic, msg).map_err(GossipsubPublishError)?;
+        self.gossipsub
+            .publish(topic, msg)
+            .map_err(GossipsubPublishError)?;
         Ok(())
     }
 
