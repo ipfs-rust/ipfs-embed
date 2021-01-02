@@ -13,10 +13,12 @@ use async_trait::async_trait;
 use futures::channel::mpsc;
 use futures::stream::FuturesUnordered;
 use futures::{select, stream::FusedStream, FutureExt, Stream, StreamExt};
-use ipfs_embed_net::{
-    AddressRecord, Multiaddr, NetworkConfig, NetworkEvent, NetworkService, PeerId,
+pub use ipfs_embed_net::{
+    AddressRecord, Key, Multiaddr, NetworkConfig, PeerId, PeerRecord, Quorum, Record,
 };
-use ipfs_embed_sqlite::{AsyncTempPin, StorageConfig, StorageEvent, StorageService};
+use ipfs_embed_net::{NetworkEvent, NetworkService};
+pub use ipfs_embed_sqlite::{AsyncTempPin, StorageConfig};
+use ipfs_embed_sqlite::{StorageEvent, StorageService};
 use libipld::codec::References;
 use libipld::error::BlockNotFound;
 pub use libipld::store::DefaultParams;
@@ -218,6 +220,18 @@ where
             let _ = self.network.provide(cid);
         }
         Ok(())
+    }
+
+    pub async fn get_record(&self, key: &Key, quorum: Quorum) -> Result<Vec<PeerRecord>> {
+        self.network.get_record(key, quorum).await
+    }
+
+    pub async fn put_record(&self, record: Record, quorum: Quorum) -> Result<()> {
+        self.network.put_record(record, quorum).await
+    }
+
+    pub fn remove_record(&self, key: &Key) {
+        self.network.remove_record(key)
     }
 
     pub async fn temp_pin(&self) -> Result<AsyncTempPin> {

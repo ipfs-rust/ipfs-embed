@@ -22,8 +22,10 @@ use std::time::Duration;
 mod behaviour;
 mod config;
 
-pub use crate::behaviour::{NetworkEvent, QueryId};
+pub use crate::behaviour::{NetworkEvent, QueryId, QueryOk};
 pub use crate::config::NetworkConfig;
+pub use libp2p::kad::record::{Key, Record};
+pub use libp2p::kad::{PeerRecord, Quorum};
 pub use libp2p::swarm::AddressRecord;
 pub use libp2p::{Multiaddr, PeerId};
 
@@ -151,6 +153,32 @@ impl<P: StoreParams> NetworkService<P> {
         Ok(())
     }
 
+    pub async fn get_record(&self, key: &Key, quorum: Quorum) -> Result<Vec<PeerRecord>> {
+        let rx = {
+            let mut swarm = self.swarm.lock().unwrap();
+            swarm.get_record(key, quorum)
+        };
+        if let QueryOk::Records(records) = rx.await?? {
+            Ok(records)
+        } else {
+            unreachable!()
+        }
+    }
+
+    pub async fn put_record(&self, record: Record, quorum: Quorum) -> Result<()> {
+        let rx = {
+            let mut swarm = self.swarm.lock().unwrap();
+            swarm.put_record(record, quorum)
+        };
+        rx.await??;
+        Ok(())
+    }
+
+    pub fn remove_record(&self, key: &Key) {
+        let mut swarm = self.swarm.lock().unwrap();
+        swarm.remove_record(key)
+    }
+
     pub async fn get(&self, cid: Cid) -> Result<()> {
         let query = {
             let mut swarm = self.swarm.lock().unwrap();
@@ -215,7 +243,7 @@ impl<P: StoreParams> NetworkService<P> {
 pub struct QueryFuture<P: StoreParams> {
     swarm: Option<Arc<Mutex<Swarm<NetworkBackendBehaviour<P>>>>>,
     id: QueryId,
-    rx: oneshot::Receiver<Result<()>>,
+    rx: oneshot::Receiver<Result<QueryOk>>,
 }
 
 impl<P: StoreParams> Future for QueryFuture<P> {
@@ -223,7 +251,7 @@ impl<P: StoreParams> Future for QueryFuture<P> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         match Pin::new(&mut self.rx).poll(cx) {
-            Poll::Ready(Ok(res)) => Poll::Ready(res),
+            Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
             Poll::Ready(Err(err)) => Poll::Ready(Err(err.into())),
             Poll::Pending => Poll::Pending,
         }

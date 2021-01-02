@@ -6,9 +6,10 @@ use libipld::store::StoreParams;
 use libipld::{Block, Cid, Result};
 use libp2p::identify::{Identify, IdentifyEvent};
 use libp2p::kad::record::store::MemoryStore;
-use libp2p::kad::record::Key;
+use libp2p::kad::record::{Key, Record};
 use libp2p::kad::{
-    AddProviderOk, BootstrapOk, GetProvidersOk, Kademlia, KademliaEvent, QueryResult,
+    AddProviderOk, BootstrapOk, GetProvidersOk, GetRecordOk, Kademlia, KademliaEvent, PeerRecord,
+    PutRecordOk, QueryResult, Quorum,
 };
 use libp2p::mdns::{Mdns, MdnsEvent};
 use libp2p::multiaddr::Protocol;
@@ -50,6 +51,13 @@ impl From<libp2p::kad::QueryId> for QueryId {
     }
 }
 
+pub enum QueryOk {
+    Records(Vec<PeerRecord>),
+    Empty,
+}
+
+pub type QueryChannel = oneshot::Receiver<Result<QueryOk>>;
+
 /// Behaviour type.
 #[derive(NetworkBehaviour)]
 pub struct NetworkBackendBehaviour<P: StoreParams> {
@@ -69,7 +77,7 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     #[behaviour(ignore)]
     provider_queries: FnvHashMap<libp2p::kad::QueryId, libp2p_bitswap::QueryId>,
     #[behaviour(ignore)]
-    queries: FnvHashMap<QueryId, oneshot::Sender<Result<()>>>,
+    queries: FnvHashMap<QueryId, oneshot::Sender<Result<QueryOk>>>,
     #[behaviour(ignore)]
     mdns_peers: FnvHashSet<PeerId>,
     #[behaviour(ignore)]
@@ -111,6 +119,14 @@ pub struct KadAddProviderError(pub libp2p::kad::AddProviderError);
 
 #[derive(Debug, Error)]
 #[error("{0:?}")]
+pub struct KadGetRecordError(pub libp2p::kad::GetRecordError);
+
+#[derive(Debug, Error)]
+#[error("{0:?}")]
+pub struct KadPutRecordError(pub libp2p::kad::PutRecordError);
+
+#[derive(Debug, Error)]
+#[error("{0:?}")]
 pub struct KadBootstrapError(pub libp2p::kad::BootstrapError);
 
 impl<P: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBackendBehaviour<P> {
@@ -135,7 +151,7 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBack
                     if num_remaining == 0 {
                         self.bootstrap_complete = true;
                         if let Some(ch) = self.queries.remove(&id.into()) {
-                            ch.send(Ok(())).ok();
+                            ch.send(Ok(QueryOk::Empty)).ok();
                         }
                     }
                 }
@@ -147,7 +163,7 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBack
                 }
                 QueryResult::StartProviding(Ok(AddProviderOk { .. })) => {
                     if let Some(ch) = self.queries.remove(&id.into()) {
-                        ch.send(Ok(())).ok();
+                        ch.send(Ok(QueryOk::Empty)).ok();
                     }
                 }
                 QueryResult::StartProviding(Err(err)) => {
@@ -156,7 +172,41 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBack
                         ch.send(Err(KadAddProviderError(err).into())).ok();
                     }
                 }
-                _ => {}
+                QueryResult::RepublishProvider(Ok(_)) => {}
+                QueryResult::RepublishProvider(Err(err)) => {
+                    tracing::trace!("{:?}", err);
+                }
+                QueryResult::GetRecord(Ok(GetRecordOk { records })) => {
+                    // TODO send records
+                    if let Some(ch) = self.queries.remove(&id.into()) {
+                        ch.send(Ok(QueryOk::Records(records))).ok();
+                    }
+                }
+                QueryResult::GetRecord(Err(err)) => {
+                    tracing::trace!("{:?}", err);
+                    if let Some(ch) = self.queries.remove(&id.into()) {
+                        ch.send(Err(KadGetRecordError(err).into())).ok();
+                    }
+                }
+                QueryResult::PutRecord(Ok(PutRecordOk { .. })) => {
+                    if let Some(ch) = self.queries.remove(&id.into()) {
+                        ch.send(Ok(QueryOk::Empty)).ok();
+                    }
+                }
+                QueryResult::PutRecord(Err(err)) => {
+                    tracing::trace!("{:?}", err);
+                    if let Some(ch) = self.queries.remove(&id.into()) {
+                        ch.send(Err(KadPutRecordError(err).into())).ok();
+                    }
+                }
+                QueryResult::RepublishRecord(Ok(_)) => {}
+                QueryResult::RepublishRecord(Err(err)) => {
+                    tracing::trace!("{:?}", err);
+                }
+                QueryResult::GetClosestPeers(Ok(_)) => {}
+                QueryResult::GetClosestPeers(Err(err)) => {
+                    tracing::trace!("{:?}", err);
+                }
             }
         }
     }
@@ -177,7 +227,8 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<BitswapEvent<P>> for NetworkBa
             }
             BitswapEvent::Complete(id, result) => {
                 if let Some(ch) = self.queries.remove(&id.into()) {
-                    ch.send(result.map_err(Into::into)).ok();
+                    ch.send(result.map(|_| QueryOk::Empty).map_err(Into::into))
+                        .ok();
                 }
             }
             BitswapEvent::Have(ch, peer, cid) => {
@@ -293,7 +344,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         self.kad.remove_address(peer_id, addr);
     }
 
-    pub fn get(&mut self, cid: Cid) -> (oneshot::Receiver<Result<()>>, QueryId) {
+    pub fn get(&mut self, cid: Cid) -> (QueryChannel, QueryId) {
         let (tx, rx) = oneshot::channel();
         let id = self.bitswap.get(cid, self.mdns_peers.iter().copied());
         self.queries.insert(id.into(), tx);
@@ -304,7 +355,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         &mut self,
         cid: Cid,
         missing: impl Iterator<Item = Cid>,
-    ) -> (oneshot::Receiver<Result<()>>, QueryId) {
+    ) -> (QueryChannel, QueryId) {
         let (tx, rx) = oneshot::channel();
         let id = self.bitswap.sync(cid, missing);
         self.queries.insert(id.into(), tx);
@@ -332,7 +383,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         self.bitswap.inject_block(ch, block);
     }
 
-    pub fn bootstrap(&mut self) -> oneshot::Receiver<Result<()>> {
+    pub fn bootstrap(&mut self) -> QueryChannel {
         let (tx, rx) = oneshot::channel();
         match self.kad.bootstrap() {
             Ok(id) => {
@@ -345,7 +396,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         rx
     }
 
-    pub fn provide(&mut self, cid: Cid) -> oneshot::Receiver<Result<()>> {
+    pub fn provide(&mut self, cid: Cid) -> QueryChannel {
         let (tx, rx) = oneshot::channel();
         if self.bootstrap_complete {
             let key = Key::new(&cid.to_bytes());
@@ -371,5 +422,37 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
     pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
         self.bitswap.register_metrics(registry)?;
         Ok(())
+    }
+
+    pub fn get_record(&mut self, key: &Key, quorum: Quorum) -> QueryChannel {
+        let (tx, rx) = oneshot::channel();
+        if self.bootstrap_complete {
+            let id = self.kad.get_record(key, quorum);
+            self.queries.insert(id.into(), tx);
+        } else {
+            tx.send(Err(NotBootstrapped.into())).ok();
+        }
+        rx
+    }
+
+    pub fn put_record(&mut self, record: Record, quorum: Quorum) -> QueryChannel {
+        let (tx, rx) = oneshot::channel();
+        if self.bootstrap_complete {
+            match self.kad.put_record(record, quorum) {
+                Ok(id) => {
+                    self.queries.insert(id.into(), tx);
+                }
+                Err(err) => {
+                    tx.send(Err(KadStoreError(err).into())).ok();
+                }
+            }
+        } else {
+            tx.send(Err(NotBootstrapped.into())).ok();
+        }
+        rx
+    }
+
+    pub fn remove_record(&mut self, key: &Key) {
+        self.kad.remove_record(key);
     }
 }
