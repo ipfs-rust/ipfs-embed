@@ -4,6 +4,7 @@ use futures::channel::{mpsc, oneshot};
 use ip_network::IpNetwork;
 use libipld::store::StoreParams;
 use libipld::{Block, Cid, Result};
+use libp2p::gossipsub::{Gossipsub, GossipsubConfig, GossipsubEvent, MessageAuthenticity, Topic};
 use libp2p::identify::{Identify, IdentifyEvent};
 use libp2p::kad::record::store::MemoryStore;
 use libp2p::kad::record::{Key, Record};
@@ -28,6 +29,7 @@ pub enum NetworkEvent<S: StoreParams> {
     Have(Channel, PeerId, Cid),
     Block(Channel, PeerId, Cid),
     Received(QueryId, PeerId, Block<S>),
+    Gossip(GossipsubEvent),
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -73,6 +75,7 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     ping: Ping,
     identify: Identify,
     bitswap: Bitswap<P>,
+    gossipsub: Gossipsub,
 
     #[behaviour(ignore)]
     provider_queries: FnvHashMap<libp2p::kad::QueryId, libp2p_bitswap::QueryId>,
@@ -281,6 +284,16 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<IdentifyEvent> for NetworkBack
     }
 }
 
+#[derive(Debug, Error)]
+#[error("{0:?}")]
+pub struct GossipsubPublishError(pub libp2p::gossipsub::error::PublishError);
+
+impl<P: StoreParams> NetworkBehaviourEventProcess<GossipsubEvent> for NetworkBackendBehaviour<P> {
+    fn inject_event(&mut self, event: GossipsubEvent) {
+        self.events.unbounded_send(NetworkEvent::Gossip(event)).ok();
+    }
+}
+
 impl<P: StoreParams> NetworkBackendBehaviour<P> {
     /// Create a Kademlia behaviour with the IPFS bootstrap nodes.
     pub async fn new(
@@ -306,6 +319,11 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         bitswap_config.receive_limit = config.bitswap_receive_limit;
         let bitswap = Bitswap::new(bitswap_config);
 
+        let gossipsub = Gossipsub::new(
+            MessageAuthenticity::Signed(config.node_key.clone()),
+            GossipsubConfig::default(),
+        );
+
         Ok(Self {
             peer_id,
             allow_non_globals_in_dht: config.allow_non_globals_in_dht,
@@ -315,6 +333,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             ping,
             identify,
             bitswap,
+            gossipsub,
             events,
             mdns_peers: Default::default(),
             provider_queries: Default::default(),
@@ -342,6 +361,87 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
     pub fn remove_address(&mut self, peer_id: &PeerId, addr: &Multiaddr) {
         tracing::trace!("removing address {}", addr);
         self.kad.remove_address(peer_id, addr);
+    }
+
+    pub fn bootstrap(&mut self) -> QueryChannel {
+        let (tx, rx) = oneshot::channel();
+        match self.kad.bootstrap() {
+            Ok(id) => {
+                self.queries.insert(id.into(), tx);
+            }
+            Err(err) => {
+                tx.send(Err(err.into())).ok();
+            }
+        }
+        rx
+    }
+
+    pub fn provide(&mut self, cid: Cid) -> QueryChannel {
+        let (tx, rx) = oneshot::channel();
+        if self.bootstrap_complete {
+            let key = Key::new(&cid.to_bytes());
+            match self.kad.start_providing(key) {
+                Ok(id) => {
+                    self.queries.insert(id.into(), tx);
+                }
+                Err(err) => {
+                    tx.send(Err(KadStoreError(err).into())).ok();
+                }
+            }
+        } else {
+            tx.send(Err(NotBootstrapped.into())).ok();
+        }
+        rx
+    }
+
+    pub fn unprovide(&mut self, cid: Cid) {
+        let key = Key::new(&cid.to_bytes());
+        self.kad.stop_providing(&key);
+    }
+
+    pub fn get_record(&mut self, key: &Key, quorum: Quorum) -> QueryChannel {
+        let (tx, rx) = oneshot::channel();
+        if self.bootstrap_complete {
+            let id = self.kad.get_record(key, quorum);
+            self.queries.insert(id.into(), tx);
+        } else {
+            tx.send(Err(NotBootstrapped.into())).ok();
+        }
+        rx
+    }
+
+    pub fn put_record(&mut self, record: Record, quorum: Quorum) -> QueryChannel {
+        let (tx, rx) = oneshot::channel();
+        if self.bootstrap_complete {
+            match self.kad.put_record(record, quorum) {
+                Ok(id) => {
+                    self.queries.insert(id.into(), tx);
+                }
+                Err(err) => {
+                    tx.send(Err(KadStoreError(err).into())).ok();
+                }
+            }
+        } else {
+            tx.send(Err(NotBootstrapped.into())).ok();
+        }
+        rx
+    }
+
+    pub fn remove_record(&mut self, key: &Key) {
+        self.kad.remove_record(key);
+    }
+
+    pub fn subscribe(&mut self, topic: Topic) {
+        self.gossipsub.subscribe(topic);
+    }
+
+    pub fn unsubscribe(&mut self, topic: Topic) {
+        self.gossipsub.unsubscribe(topic);
+    }
+
+    pub fn publish(&mut self, topic: &Topic, msg: Vec<u8>) -> Result<()> {
+        self.gossipsub.publish(topic, msg).map_err(GossipsubPublishError)?;
+        Ok(())
     }
 
     pub fn get(&mut self, cid: Cid) -> (QueryChannel, QueryId) {
@@ -383,76 +483,8 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         self.bitswap.inject_block(ch, block);
     }
 
-    pub fn bootstrap(&mut self) -> QueryChannel {
-        let (tx, rx) = oneshot::channel();
-        match self.kad.bootstrap() {
-            Ok(id) => {
-                self.queries.insert(id.into(), tx);
-            }
-            Err(err) => {
-                tx.send(Err(err.into())).ok();
-            }
-        }
-        rx
-    }
-
-    pub fn provide(&mut self, cid: Cid) -> QueryChannel {
-        let (tx, rx) = oneshot::channel();
-        if self.bootstrap_complete {
-            let key = Key::new(&cid.to_bytes());
-            match self.kad.start_providing(key) {
-                Ok(id) => {
-                    self.queries.insert(id.into(), tx);
-                }
-                Err(err) => {
-                    tx.send(Err(KadStoreError(err).into())).ok();
-                }
-            }
-        } else {
-            tx.send(Err(NotBootstrapped.into())).ok();
-        }
-        rx
-    }
-
-    pub fn unprovide(&mut self, cid: Cid) {
-        let key = Key::new(&cid.to_bytes());
-        self.kad.stop_providing(&key);
-    }
-
     pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
         self.bitswap.register_metrics(registry)?;
         Ok(())
-    }
-
-    pub fn get_record(&mut self, key: &Key, quorum: Quorum) -> QueryChannel {
-        let (tx, rx) = oneshot::channel();
-        if self.bootstrap_complete {
-            let id = self.kad.get_record(key, quorum);
-            self.queries.insert(id.into(), tx);
-        } else {
-            tx.send(Err(NotBootstrapped.into())).ok();
-        }
-        rx
-    }
-
-    pub fn put_record(&mut self, record: Record, quorum: Quorum) -> QueryChannel {
-        let (tx, rx) = oneshot::channel();
-        if self.bootstrap_complete {
-            match self.kad.put_record(record, quorum) {
-                Ok(id) => {
-                    self.queries.insert(id.into(), tx);
-                }
-                Err(err) => {
-                    tx.send(Err(KadStoreError(err).into())).ok();
-                }
-            }
-        } else {
-            tx.send(Err(NotBootstrapped.into())).ok();
-        }
-        rx
-    }
-
-    pub fn remove_record(&mut self, key: &Key) {
-        self.kad.remove_record(key);
     }
 }

@@ -24,6 +24,7 @@ mod config;
 
 pub use crate::behaviour::{NetworkEvent, QueryId, QueryOk};
 pub use crate::config::NetworkConfig;
+pub use libp2p::gossipsub::{GossipsubEvent, GossipsubMessage, MessageId, Topic, TopicHash};
 pub use libp2p::kad::record::{Key, Record};
 pub use libp2p::kad::{PeerRecord, Quorum};
 pub use libp2p::swarm::AddressRecord;
@@ -172,6 +173,21 @@ impl<P: StoreParams> NetworkService<P> {
         };
         rx.await??;
         Ok(())
+    }
+
+    pub fn subscribe(&self, topic: Topic) {
+        let mut swarm = self.swarm.lock().unwrap();
+        swarm.subscribe(topic)
+    }
+
+    pub fn unsubscribe(&self, topic: Topic) {
+        let mut swarm = self.swarm.lock().unwrap();
+        swarm.unsubscribe(topic)
+    }
+
+    pub fn publish(&self, topic: &Topic, msg: Vec<u8>) -> Result<()> {
+        let mut swarm = self.swarm.lock().unwrap();
+        swarm.publish(topic, msg)
     }
 
     pub fn remove_record(&self, key: &Key) {

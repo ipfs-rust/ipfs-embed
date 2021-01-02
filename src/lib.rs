@@ -16,6 +16,7 @@ use futures::{select, stream::FusedStream, FutureExt, Stream, StreamExt};
 pub use ipfs_embed_net::{
     AddressRecord, Key, Multiaddr, NetworkConfig, PeerId, PeerRecord, Quorum, Record,
 };
+pub use ipfs_embed_net::{GossipsubEvent, GossipsubMessage, MessageId, Topic, TopicHash};
 use ipfs_embed_net::{NetworkEvent, NetworkService};
 pub use ipfs_embed_sqlite::{AsyncTempPin, StorageConfig};
 use ipfs_embed_sqlite::{StorageEvent, StorageService};
@@ -49,6 +50,7 @@ impl Config {
 pub struct Ipfs<P: StoreParams> {
     storage: StorageService<P>,
     network: NetworkService<P>,
+    rx: async_channel::Receiver<GossipsubEvent>,
 }
 
 struct Forever<S>(S);
@@ -95,6 +97,7 @@ where
         let (tx, mut network_events) = mpsc::unbounded();
         let network = NetworkService::new(config.network, tx).await?;
         let network2 = network.clone();
+        let (tx, rx) = async_channel::unbounded();
         async_global_executor::spawn(async move {
             let mut missing_blocks = Forever(FuturesUnordered::new());
             let mut contains = Forever(FuturesUnordered::new());
@@ -119,6 +122,9 @@ where
                                 }
                                 NetworkEvent::Received(_, _, block) => {
                                     insert.push(storage.insert(block, None));
+                                }
+                                NetworkEvent::Gossip(ev) => {
+                                    tx.try_send(ev).ok();
                                 }
                             }
                         }
@@ -171,6 +177,7 @@ where
         Ok(Self {
             storage: storage2,
             network: network2,
+            rx,
         })
     }
 
@@ -232,6 +239,18 @@ where
 
     pub fn remove_record(&self, key: &Key) {
         self.network.remove_record(key)
+    }
+
+    pub fn subscribe(&self, topic: Topic) {
+        self.network.subscribe(topic)
+    }
+
+    pub fn unsubscribe(&self, topic: Topic) {
+        self.network.unsubscribe(topic)
+    }
+
+    pub fn publish(&self, topic: &Topic, msg: Vec<u8>) -> Result<()> {
+        self.network.publish(topic, msg)
     }
 
     pub async fn temp_pin(&self) -> Result<AsyncTempPin> {
@@ -319,6 +338,14 @@ where
         self.storage.register_metrics(registry)?;
         self.network.register_metrics(registry)?;
         Ok(())
+    }
+}
+
+impl<P: StoreParams> Stream for Ipfs<P> {
+    type Item = GossipsubEvent;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.rx).poll_next(cx)
     }
 }
 

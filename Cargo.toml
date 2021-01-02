@@ -22,6 +22,7 @@ libipld = { version = "0.9.0", default-features = false }
 prometheus = "0.11.0"
 tide = "0.15.0"
 tracing = "0.1.22"
+async-channel = "1.5.1"
 
 [dev-dependencies]
 async-std = { version = "1.8.0", features = ["attributes"] }

@@ -24,6 +24,7 @@ version = "0.33.0"
 default-features = false
 features = [
     "dns",
+    "gossipsub",
     "identify",
     "kad",
     "mdns",
