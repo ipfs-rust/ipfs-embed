@@ -6,7 +6,6 @@ use std::convert::TryFrom;
 use std::path::Path;
 use std::time::Duration;
 
-const TMP_ROOT: &str = alias!(tmp_root);
 const ROOT: &str = alias!(root);
 
 #[derive(Debug, Default, DagCbor)]
@@ -193,7 +192,8 @@ impl BlockChain {
     pub async fn sync(&mut self, root: Cid) -> Result<()> {
         tracing::trace!("chain: sync");
         //let syncer = ChainSyncer::new(self.index.clone(), self.ipfs.bitswap_storage());
-        self.ipfs.alias(TMP_ROOT, Some(root)).await?;
+        let tmp = self.ipfs.temp_pin().await?;
+        self.ipfs.sync(root, Some(&tmp)).await?;
 
         let mut cid = root;
         let mut block = self.get_by_cid(root).await?;
