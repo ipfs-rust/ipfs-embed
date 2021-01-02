@@ -133,7 +133,7 @@ impl BlockChain {
     }
 
     pub async fn get_by_cid(&self, cid: Cid) -> Result<Block> {
-        let block = self.ipfs.get(cid).await?;
+        let block = self.ipfs.get(cid, None).await?;
         let block = block.decode::<DagCborCodec, Block>()?;
         Ok(block)
     }

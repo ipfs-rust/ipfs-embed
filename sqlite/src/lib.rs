@@ -90,6 +90,14 @@ where
         observe_query("temp_pin", self.store.temp_pin()).await
     }
 
+    pub async fn assign_temp_pin(
+        &self,
+        temp: AsyncTempPin,
+        iter: impl IntoIterator<Item = Cid> + Send + 'static,
+    ) -> Result<()> {
+        observe_query("assign_temp_pin", self.store.assign_temp_pin(temp, iter)).await
+    }
+
     pub async fn iter(&self) -> Result<std::vec::IntoIter<Cid>> {
         let fut = self.store.get_block_cids::<Vec<Cid>>();
         let cids = observe_query("iter", fut).await?;
@@ -172,11 +180,11 @@ struct IpfsCacheTracker<T> {
 }
 
 impl<T: CacheTracker> CacheTracker for IpfsCacheTracker<T> {
-    fn blocks_accessed(&mut self, blocks: Vec<BlockInfo>) {
+    fn blocks_accessed(&self, blocks: Vec<BlockInfo>) {
         self.tracker.blocks_accessed(blocks)
     }
 
-    fn blocks_deleted(&mut self, blocks: Vec<BlockInfo>) {
+    fn blocks_deleted(&self, blocks: Vec<BlockInfo>) {
         for block in &blocks {
             self.tx
                 .unbounded_send(StorageEvent::Remove(*block.cid()))
@@ -185,7 +193,7 @@ impl<T: CacheTracker> CacheTracker for IpfsCacheTracker<T> {
         self.tracker.blocks_deleted(blocks)
     }
 
-    fn retain_ids(&mut self, ids: &[i64]) {
+    fn retain_ids(&self, ids: &[i64]) {
         self.tracker.retain_ids(ids)
     }
 

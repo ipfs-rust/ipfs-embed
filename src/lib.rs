@@ -232,7 +232,12 @@ where
         self.storage.contains(cid).await
     }
 
-    pub async fn get(&self, cid: Cid) -> Result<Block<P>> {
+    pub async fn get(&self, cid: Cid, tmp: Option<&AsyncTempPin>) -> Result<Block<P>> {
+        if let Some(tmp) = tmp {
+            self.storage
+                .assign_temp_pin(tmp.clone(), std::iter::once(cid))
+                .await?;
+        }
         if let Some(data) = self.storage.get(cid).await? {
             let block = Block::new_unchecked(cid, data);
             return Ok(block);
@@ -242,7 +247,10 @@ where
             let block = Block::new_unchecked(cid, data);
             return Ok(block);
         }
-        tracing::error!("block evicted too soon");
+        tracing::error!(
+            "block evicted too soon. use a temp pin to keep the block around. {}",
+            tmp.is_some()
+        );
         Err(BlockNotFound(cid).into())
     }
 
@@ -260,19 +268,25 @@ where
         self.storage.evict().await
     }
 
+    pub async fn sync(&self, cid: Cid, tmp: Option<&AsyncTempPin>) -> Result<()> {
+        if let Some(tmp) = tmp {
+            self.storage
+                .assign_temp_pin(tmp.clone(), std::iter::once(cid))
+                .await?;
+        }
+        let missing = self.storage.missing_blocks(cid).await?;
+        if !missing.is_empty() {
+            self.network.sync(cid, missing.into_iter()).await?;
+        }
+        Ok(())
+    }
+
     pub async fn alias<T: AsRef<[u8]> + Send + Sync>(
         &self,
         alias: T,
         cid: Option<Cid>,
     ) -> Result<()> {
-        self.storage.alias(alias.as_ref().to_vec(), cid).await?;
-        if let Some(cid) = cid {
-            let missing = self.storage.missing_blocks(cid).await?;
-            if !missing.is_empty() {
-                self.network.sync(cid, missing.into_iter()).await?;
-            }
-        }
-        Ok(())
+        self.storage.alias(alias.as_ref().to_vec(), cid).await
     }
 
     pub async fn resolve<T: AsRef<[u8]> + Send + Sync>(&self, alias: T) -> Result<Option<Cid>> {
@@ -281,6 +295,10 @@ where
 
     pub async fn pinned(&self, cid: Cid) -> Result<Option<Vec<Vec<u8>>>> {
         self.storage.pinned(cid).await
+    }
+
+    pub async fn flush(&self) -> Result<()> {
+        Ok(())
     }
 
     pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
@@ -327,7 +345,7 @@ where
     type Params = P;
 
     async fn get(&self, cid: &Cid) -> Result<Block<P>> {
-        Ipfs::get(self, *cid).await
+        Ipfs::get(self, *cid, None).await
     }
 
     async fn insert(&self, block: &Block<P>) -> Result<()> {
@@ -362,54 +380,56 @@ mod tests {
             .ok();
     }
 
-    async fn create_store(enable_mdns: bool) -> Ipfs<DefaultParams> {
-        let cache_size = 10;
+    async fn create_store(enable_mdns: bool) -> Result<Ipfs<DefaultParams>> {
         let sweep_interval = Duration::from_millis(10000);
-        let storage = StorageConfig::new(None, cache_size, sweep_interval);
+        let storage = StorageConfig::new(None, 10, sweep_interval);
 
         let mut network = NetworkConfig::new();
         network.enable_mdns = enable_mdns;
         network.allow_non_globals_in_dht = true;
 
-        let ipfs = Ipfs::new(Config { storage, network }).await.unwrap();
-        ipfs.listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())
-            .await
-            .unwrap();
-        ipfs
+        let ipfs = Ipfs::new(Config { storage, network }).await?;
+        ipfs.listen_on("/ip4/127.0.0.1/tcp/0".parse()?).await?;
+        Ok(ipfs)
     }
 
-    fn create_block(bytes: &[u8]) -> Block<DefaultParams> {
-        Block::encode(RawCodec, Code::Blake3_256, bytes).unwrap()
+    fn create_block(bytes: &[u8]) -> Result<Block<DefaultParams>> {
+        Block::encode(RawCodec, Code::Blake3_256, bytes)
     }
 
     #[async_std::test]
-    async fn test_local_store() {
+    async fn test_local_store() -> Result<()> {
         tracing_try_init();
-        let store = create_store(false).await;
-        let block = create_block(b"test_local_store");
-        let _ = store.insert(block.clone(), None).await.unwrap();
-        let block2 = store.get(*block.cid()).await.unwrap();
+        let store = create_store(false).await?;
+        let block = create_block(b"test_local_store")?;
+        let tmp = store.temp_pin().await?;
+        let _ = store.insert(block.clone(), Some(&tmp)).await?;
+        let block2 = store.get(*block.cid(), None).await?;
         assert_eq!(block.data(), block2.data());
+        Ok(())
     }
 
     #[async_std::test]
     #[cfg(not(target_os = "macos"))] // mdns doesn't work on macos in github actions
-    async fn test_exchange_mdns() {
+    async fn test_exchange_mdns() -> Result<()> {
         tracing_try_init();
-        let store1 = create_store(true).await;
-        let store2 = create_store(true).await;
-        let block = create_block(b"test_exchange_mdns");
-        let _ = store1.insert(block.clone(), None).await.unwrap();
-        let block2 = store2.get(*block.cid()).await.unwrap();
+        let store1 = create_store(true).await?;
+        let store2 = create_store(true).await?;
+        let block = create_block(b"test_exchange_mdns")?;
+        let tmp1 = store1.temp_pin().await?;
+        let _ = store1.insert(block.clone(), Some(&tmp1)).await?;
+        let tmp2 = store2.temp_pin().await?;
+        let block2 = store2.get(*block.cid(), Some(&tmp2)).await?;
         assert_eq!(block.data(), block2.data());
+        Ok(())
     }
 
     #[async_std::test]
-    async fn test_exchange_kad() {
+    async fn test_exchange_kad() -> Result<()> {
         tracing_try_init();
-        let store = create_store(false).await;
-        let store1 = create_store(false).await;
-        let store2 = create_store(false).await;
+        let store = create_store(false).await?;
+        let store1 = create_store(false).await?;
+        let store2 = create_store(false).await?;
 
         let addr = store.listeners()[0].clone();
         let peer_id = store.local_peer_id();
@@ -421,25 +441,23 @@ mod tests {
         r1.unwrap();
         r2.unwrap();
 
-        let block = create_block(b"test_exchange_kad");
-        store1
-            .insert(block.clone(), None)
-            .await
-            .unwrap()
-            .await
-            .unwrap();
+        let block = create_block(b"test_exchange_kad")?;
+        let tmp1 = store1.temp_pin().await?;
+        store1.insert(block.clone(), Some(&tmp1)).await?.await?;
 
-        let block2 = store2.get(*block.cid()).await.unwrap();
+        let tmp2 = store2.temp_pin().await?;
+        let block2 = store2.get(*block.cid(), Some(&tmp2)).await?;
         assert_eq!(block.data(), block2.data());
+        Ok(())
     }
 
     #[async_std::test]
-    async fn test_provider_not_found() {
+    async fn test_provider_not_found() -> Result<()> {
         tracing_try_init();
-        let store1 = create_store(true).await;
-        let block = create_block(b"test_provider_not_found");
+        let store1 = create_store(true).await?;
+        let block = create_block(b"test_provider_not_found")?;
         if store1
-            .get(*block.cid())
+            .get(*block.cid(), None)
             .await
             .unwrap_err()
             .downcast_ref::<BlockNotFound>()
@@ -447,6 +465,7 @@ mod tests {
         {
             panic!("expected block not found error");
         }
+        Ok(())
     }
 
     macro_rules! assert_pinned {
@@ -475,63 +494,66 @@ mod tests {
         };
     }
 
-    fn create_ipld_block(ipld: &Ipld) -> Block<DefaultParams> {
-        Block::encode(DagCborCodec, Code::Blake3_256, ipld).unwrap()
+    fn create_ipld_block(ipld: &Ipld) -> Result<Block<DefaultParams>> {
+        Block::encode(DagCborCodec, Code::Blake3_256, ipld)
     }
 
     #[async_std::test]
-    async fn test_sync() {
+    async fn test_sync() -> Result<()> {
         tracing_try_init();
-        let local1 = create_store(true).await;
-        let local2 = create_store(true).await;
-        let a1 = create_ipld_block(&ipld!({ "a": 0 }));
-        let b1 = create_ipld_block(&ipld!({ "b": 0 }));
-        let c1 = create_ipld_block(&ipld!({ "c": [a1.cid(), b1.cid()] }));
-        let b2 = create_ipld_block(&ipld!({ "b": 1 }));
-        let c2 = create_ipld_block(&ipld!({ "c": [a1.cid(), b2.cid()] }));
+        let local1 = create_store(true).await?;
+        let local2 = create_store(true).await?;
+        let a1 = create_ipld_block(&ipld!({ "a": 0 }))?;
+        let b1 = create_ipld_block(&ipld!({ "b": 0 }))?;
+        let c1 = create_ipld_block(&ipld!({ "c": [a1.cid(), b1.cid()] }))?;
+        let b2 = create_ipld_block(&ipld!({ "b": 1 }))?;
+        let c2 = create_ipld_block(&ipld!({ "c": [a1.cid(), b2.cid()] }))?;
         let x = alias!(x);
 
-        let _ = local1.insert(a1.clone(), None).await.unwrap();
-        let _ = local1.insert(b1.clone(), None).await.unwrap();
-        let _ = local1.insert(c1.clone(), None).await.unwrap();
-        local1.alias(x, Some(*c1.cid())).await.unwrap();
+        let _ = local1.insert(a1.clone(), None).await?;
+        let _ = local1.insert(b1.clone(), None).await?;
+        let _ = local1.insert(c1.clone(), None).await?;
+        local1.alias(x, Some(*c1.cid())).await?;
         assert_pinned!(&local1, &a1);
         assert_pinned!(&local1, &b1);
         assert_pinned!(&local1, &c1);
 
-        local2.alias(x, Some(*c1.cid())).await.unwrap();
+        local2.alias(x, Some(*c1.cid())).await?;
+        local2.sync(*c1.cid(), None).await?;
         assert_pinned!(&local2, &a1);
         assert_pinned!(&local2, &b1);
         assert_pinned!(&local2, &c1);
 
-        let _ = local2.insert(b2.clone(), None).await.unwrap();
-        let _ = local2.insert(c2.clone(), None).await.unwrap();
-        local2.alias(x, Some(*c2.cid())).await.unwrap();
+        let _ = local2.insert(b2.clone(), None).await?;
+        let _ = local2.insert(c2.clone(), None).await?;
+        local2.alias(x, Some(*c2.cid())).await?;
         assert_pinned!(&local2, &a1);
         assert_unpinned!(&local2, &b1);
         assert_unpinned!(&local2, &c1);
         assert_pinned!(&local2, &b2);
         assert_pinned!(&local2, &c2);
 
-        local1.alias(x, Some(*c2.cid())).await.unwrap();
+        local1.alias(x, Some(*c2.cid())).await?;
+        local1.sync(*c2.cid(), None).await?;
         assert_pinned!(&local1, &a1);
         assert_unpinned!(&local1, &b1);
         assert_unpinned!(&local1, &c1);
         assert_pinned!(&local1, &b2);
         assert_pinned!(&local1, &c2);
 
-        local2.alias(x, None).await.unwrap();
+        local2.alias(x, None).await?;
         assert_unpinned!(&local2, &a1);
         assert_unpinned!(&local2, &b1);
         assert_unpinned!(&local2, &c1);
         assert_unpinned!(&local2, &b2);
         assert_unpinned!(&local2, &c2);
 
-        local1.alias(x, None).await.unwrap();
+        local1.alias(x, None).await?;
         assert_unpinned!(&local1, &a1);
         assert_unpinned!(&local1, &b1);
         assert_unpinned!(&local1, &c1);
         assert_unpinned!(&local1, &b2);
         assert_unpinned!(&local1, &c2);
+        Ok(())
     }
 }
