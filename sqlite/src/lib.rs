@@ -4,7 +4,7 @@ pub use ipfs_sqlite_block_store::async_block_store::AsyncTempPin;
 use ipfs_sqlite_block_store::{
     async_block_store::{AsyncBlockStore, GcConfig, RuntimeAdapter},
     cache::{BlockInfo, CacheTracker, SqliteCacheTracker},
-    BlockStore, Config, SizeTargets,
+    BlockStore, Config, SizeTargets, Synchronous,
 };
 use lazy_static::lazy_static;
 use libipld::codec::References;
@@ -60,7 +60,9 @@ where
 {
     pub fn open(config: StorageConfig, tx: mpsc::UnboundedSender<StorageEvent>) -> Result<Self> {
         let size = SizeTargets::new(config.cache_size_blocks, config.cache_size_bytes);
-        let store_config = Config::default().with_size_targets(size);
+        let store_config = Config::default()
+            .with_size_targets(size)
+            .with_pragma_synchronous(Synchronous::Normal);
         let gc_config = GcConfig {
             interval: config.gc_interval,
             min_blocks: config.gc_min_blocks,
@@ -138,12 +140,16 @@ where
         observe_query("resolve", self.store.resolve(alias)).await
     }
 
-    pub async fn pinned(&self, cid: Cid) -> Result<Option<Vec<Vec<u8>>>> {
-        observe_query("pinned", self.store.reverse_alias(cid)).await
+    pub async fn reverse_alias(&self, cid: Cid) -> Result<Option<Vec<Vec<u8>>>> {
+        observe_query("reverse_alias", self.store.reverse_alias(cid)).await
     }
 
     pub async fn missing_blocks(&self, cid: Cid) -> Result<Vec<Cid>> {
         observe_query("missing_blocks", self.store.get_missing_blocks(cid)).await
+    }
+
+    pub async fn flush(&self) -> Result<()> {
+        observe_query("flush", self.store.flush()).await
     }
 
     pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
@@ -294,7 +300,7 @@ mod tests {
 
     macro_rules! assert_evicted {
         ($store:expr, $block:expr) => {
-            assert_eq!($store.pinned(*$block.cid()).await.unwrap(), None);
+            assert_eq!($store.reverse_alias(*$block.cid()).await.unwrap(), None);
         };
     }
 
@@ -302,7 +308,7 @@ mod tests {
         ($store:expr, $block:expr) => {
             assert_eq!(
                 $store
-                    .pinned(*$block.cid())
+                    .reverse_alias(*$block.cid())
                     .await
                     .unwrap()
                     .map(|a| !a.is_empty()),
@@ -315,7 +321,7 @@ mod tests {
         ($store:expr, $block:expr) => {
             assert_eq!(
                 $store
-                    .pinned(*$block.cid())
+                    .reverse_alias(*$block.cid())
                     .await
                     .unwrap()
                     .map(|a| !a.is_empty()),

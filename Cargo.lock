@@ -1475,9 +1475,9 @@ dependencies = [
 
 [[package]]
 name = "ipfs-sqlite-block-store"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "408a421aaa9617db888f1c9e934043889fcaac4f0d9d520b6d8431978b8fdaa5"
+checksum = "302971bbe0fc09e9990d0cd2628decef16cd0e40197ac59f5de2073100cd3346"
 dependencies = [
  "anyhow",
  "derive_more",
@@ -1542,8 +1542,6 @@ checksum = "1482821306169ec4d07f6aca392a4681f66c75c9918aa49641a2595db64053cb"
 [[package]]
 name = "libipld"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11dd111df23ff5f0e1108dbcb607b72f0a51b7ff81781e45abff104f44252bbe"
 dependencies = [
  "async-lock",
  "async-trait",
@@ -1561,8 +1559,6 @@ dependencies = [
 [[package]]
 name = "libipld-cbor"
 version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eabf40e76c19673764409ea26bc12db8c313249939512ae47f705d74b2342666"
 dependencies = [
  "byteorder",
  "libipld-core",
@@ -1573,8 +1569,6 @@ dependencies = [
 [[package]]
 name = "libipld-cbor-derive"
 version = "0.9.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ab060b500ad9ef4e7b03ae5ed2412327055357a4ad101c6259855ceb933fa61"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1585,8 +1579,6 @@ dependencies = [
 [[package]]
 name = "libipld-core"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee56cc147154af8d64803f60a66644c0b58a9273a7dfcaca5b0462c94e825fbb"
 dependencies = [
  "anyhow",
  "cid",
@@ -1598,8 +1590,6 @@ dependencies = [
 [[package]]
 name = "libipld-macro"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bcb31ad397fa0b8b7d878b555c6cb0c3217e782d7b00554ccd5f791576ed00eb"
 dependencies = [
  "libipld-core",
 ]

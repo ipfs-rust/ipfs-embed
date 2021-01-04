@@ -331,12 +331,12 @@ where
         self.storage.resolve(alias.as_ref().to_vec()).await
     }
 
-    pub async fn pinned(&self, cid: Cid) -> Result<Option<Vec<Vec<u8>>>> {
-        self.storage.pinned(cid).await
+    pub async fn reverse_alias(&self, cid: Cid) -> Result<Option<Vec<Vec<u8>>>> {
+        self.storage.reverse_alias(cid).await
     }
 
     pub async fn flush(&self) -> Result<()> {
-        Ok(())
+        self.storage.flush().await
     }
 
     pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
@@ -389,14 +389,27 @@ where
     Ipld: References<P::Codecs>,
 {
     type Params = P;
+    type TempPin = AsyncTempPin;
 
-    async fn get(&self, cid: &Cid) -> Result<Block<P>> {
-        Ipfs::get(self, *cid, None).await
+    async fn temp_pin(&self) -> Result<Self::TempPin> {
+        Ipfs::temp_pin(self).await
     }
 
-    async fn insert(&self, block: &Block<P>) -> Result<()> {
-        let _ = Ipfs::insert(self, block.clone(), None).await?;
+    async fn contains(&self, cid: &Cid) -> Result<bool> {
+        Ipfs::contains(self, cid).await
+    }
+
+    async fn get(&self, cid: &Cid, tmp: Option<&Self::TempPin>) -> Result<Block<P>> {
+        Ipfs::get(self, *cid, tmp).await
+    }
+
+    async fn insert(&self, block: &Block<P>, tmp: Option<&Self::TempPin>) -> Result<()> {
+        let _ = Ipfs::insert(self, block.clone(), tmp).await?;
         Ok(())
+    }
+
+    async fn sync(&self, cid: &Cid, tmp: Option<&Self::TempPin>) -> Result<()> {
+        Ipfs::sync(self, *cid, tmp).await
     }
 
     async fn alias<T: AsRef<[u8]> + Send + Sync>(&self, alias: T, cid: Option<&Cid>) -> Result<()> {
@@ -405,6 +418,14 @@ where
 
     async fn resolve<T: AsRef<[u8]> + Send + Sync>(&self, alias: T) -> Result<Option<Cid>> {
         Ipfs::resolve(self, alias).await
+    }
+
+    async fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
+        Ipfs::reverse_alias(self, *cid).await
+    }
+
+    async fn flush(&self) -> Result<()> {
+        Ipfs::flush(self).await
     }
 }
 
@@ -464,6 +485,7 @@ mod tests {
         let block = create_block(b"test_exchange_mdns")?;
         let tmp1 = store1.temp_pin().await?;
         let _ = store1.insert(block.clone(), Some(&tmp1)).await?;
+        store1.flush().await?;
         let tmp2 = store2.temp_pin().await?;
         let block2 = store2.get(*block.cid(), Some(&tmp2)).await?;
         assert_eq!(block.data(), block2.data());
@@ -490,6 +512,7 @@ mod tests {
         let block = create_block(b"test_exchange_kad")?;
         let tmp1 = store1.temp_pin().await?;
         store1.insert(block.clone(), Some(&tmp1)).await?.await?;
+        store1.flush().await?;
 
         let tmp2 = store2.temp_pin().await?;
         let block2 = store2.get(*block.cid(), Some(&tmp2)).await?;
@@ -518,7 +541,7 @@ mod tests {
         ($store:expr, $block:expr) => {
             assert_eq!(
                 $store
-                    .pinned(*$block.cid())
+                    .reverse_alias(*$block.cid())
                     .await
                     .unwrap()
                     .map(|a| !a.is_empty()),
@@ -531,7 +554,7 @@ mod tests {
         ($store:expr, $block:expr) => {
             assert_eq!(
                 $store
-                    .pinned(*$block.cid())
+                    .reverse_alias(*$block.cid())
                     .await
                     .unwrap()
                     .map(|a| !a.is_empty()),
@@ -560,12 +583,14 @@ mod tests {
         let _ = local1.insert(b1.clone(), None).await?;
         let _ = local1.insert(c1.clone(), None).await?;
         local1.alias(x, Some(*c1.cid())).await?;
+        local1.flush().await?;
         assert_pinned!(&local1, &a1);
         assert_pinned!(&local1, &b1);
         assert_pinned!(&local1, &c1);
 
         local2.alias(x, Some(*c1.cid())).await?;
         local2.sync(*c1.cid(), None).await?;
+        local2.flush().await?;
         assert_pinned!(&local2, &a1);
         assert_pinned!(&local2, &b1);
         assert_pinned!(&local2, &c1);
@@ -573,6 +598,7 @@ mod tests {
         let _ = local2.insert(b2.clone(), None).await?;
         let _ = local2.insert(c2.clone(), None).await?;
         local2.alias(x, Some(*c2.cid())).await?;
+        local2.flush().await?;
         assert_pinned!(&local2, &a1);
         assert_unpinned!(&local2, &b1);
         assert_unpinned!(&local2, &c1);
@@ -581,6 +607,7 @@ mod tests {
 
         local1.alias(x, Some(*c2.cid())).await?;
         local1.sync(*c2.cid(), None).await?;
+        local1.flush().await?;
         assert_pinned!(&local1, &a1);
         assert_unpinned!(&local1, &b1);
         assert_unpinned!(&local1, &c1);
@@ -588,6 +615,7 @@ mod tests {
         assert_pinned!(&local1, &c2);
 
         local2.alias(x, None).await?;
+        local2.flush().await?;
         assert_unpinned!(&local2, &a1);
         assert_unpinned!(&local2, &b1);
         assert_unpinned!(&local2, &c1);
@@ -595,6 +623,7 @@ mod tests {
         assert_unpinned!(&local2, &c2);
 
         local1.alias(x, None).await?;
+        local2.flush().await?;
         assert_unpinned!(&local1, &a1);
         assert_unpinned!(&local1, &b1);
         assert_unpinned!(&local1, &c1);

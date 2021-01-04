@@ -41,3 +41,4 @@ harness = false
 [patch.crates-io]
 libp2p = { path = "../rust-libp2p" }
 libp2p-bitswap = { path = "../libp2p-bitswap" }
+libipld = { path = "../libipld" }
