@@ -3,7 +3,7 @@ members = ["core", "db", "net"]
 
 [package]
 name = "ipfs-embed"
-version = "0.9.0"
+version = "0.10.0"
 authors = ["David Craven <david@craven.ch>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
@@ -20,9 +20,9 @@ async-std = "1.8.0"
 async-trait = "0.1.42"
 fnv = "1.0.7"
 futures = "0.3.8"
-ipfs-embed-core = { version = "0.9.0", path = "core" }
-ipfs-embed-db = { version = "0.9.0", path = "db", optional = true }
-ipfs-embed-net = { version = "0.9.0", path = "net", optional = true }
+ipfs-embed-core = { version = "0.10.0", path = "core" }
+ipfs-embed-db = { version = "0.10.0", path = "db", optional = true }
+ipfs-embed-net = { version = "0.10.0", path = "net", optional = true }
 libipld = { version = "0.8.2", default-features = false }
 log = "0.4.11"
 sled = { version = "0.34.6", optional = true }
