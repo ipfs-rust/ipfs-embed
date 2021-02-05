@@ -107,7 +107,7 @@ impl BlockChain {
         //let config = Config::new(None, cache_size);
         let ipfs = Ipfs::new(config).await?;
         ipfs.listen_on("/ip4/127.0.0.1/tcp/0".parse()?).await?;
-        let root_cid = ipfs.resolve(ROOT).await?;
+        let root_cid = ipfs.resolve(ROOT)?;
         let mut chain = Self {
             index,
             ipfs,
@@ -116,9 +116,9 @@ impl BlockChain {
         };
         if root_cid.is_none() {
             // insert the genesis block
-            chain.push(vec![], false).await?;
+            chain.push(vec![], false)?;
         }
-        chain.root_id = chain.get_by_cid(chain.root_cid.unwrap()).await?.id;
+        chain.root_id = chain.get_by_cid(chain.root_cid.as_ref().unwrap())?.id;
         Ok(chain)
     }
 
@@ -130,15 +130,15 @@ impl BlockChain {
         }
     }
 
-    pub async fn get_by_cid(&self, cid: Cid) -> Result<Block> {
-        let block = self.ipfs.get(cid, None).await?;
+    pub fn get_by_cid(&self, cid: &Cid) -> Result<Block> {
+        let block = self.ipfs.get(cid)?;
         let block = block.decode::<DagCborCodec, Block>()?;
         Ok(block)
     }
 
-    pub async fn get_by_id(&self, id: u32) -> Result<Option<Block>> {
+    pub fn get_by_id(&self, id: u32) -> Result<Option<Block>> {
         if let Some(cid) = self.lookup_cid(id)? {
-            Ok(Some(self.get_by_cid(cid).await?))
+            Ok(Some(self.get_by_cid(&cid)?))
         } else {
             Ok(None)
         }
@@ -157,7 +157,7 @@ impl BlockChain {
         Ok(())
     }
 
-    pub async fn push(&mut self, payload: Vec<u8>, import: bool) -> Result<Cid> {
+    pub fn push(&mut self, payload: Vec<u8>, import: bool) -> Result<Cid> {
         if import {
             tracing::trace!("chain: import");
         } else {
@@ -178,10 +178,10 @@ impl BlockChain {
         };
         let ipld_block = libipld::Block::encode(DagCborCodec, Code::Blake3_256, &block)?;
         let cid = *ipld_block.cid();
-        let _ = self.ipfs.insert(ipld_block, None).await?;
+        let _ = self.ipfs.insert(&ipld_block)?;
         self.index_block(id, &cid)?;
         if !import {
-            self.ipfs.alias(ROOT, Some(cid)).await?;
+            self.ipfs.alias(ROOT, Some(&cid))?;
         }
         self.root_id = id;
         self.root_cid = Some(cid);
@@ -191,21 +191,23 @@ impl BlockChain {
     pub async fn sync(&mut self, root: Cid) -> Result<()> {
         tracing::trace!("chain: sync");
         //let syncer = ChainSyncer::new(self.index.clone(), self.ipfs.bitswap_storage());
-        let tmp = self.ipfs.temp_pin().await?;
-        self.ipfs.sync(root, Some(&tmp)).await?;
+        let tmp = self.ipfs.create_temp_pin()?;
+        self.ipfs.temp_pin(&tmp, &root)?;
+        self.ipfs.sync(&root).await?;
 
         let mut cid = root;
-        let mut block = self.get_by_cid(root).await?;
+        let mut block = self.get_by_cid(&root)?;
         let prev_root_id = self.root_id;
         let new_root_id = block.id;
 
         for _ in prev_root_id..new_root_id {
             self.index_block(block.id, &cid)?;
             cid = block.prev.unwrap();
-            block = self.get_by_cid(cid).await?;
+            block = self.get_by_cid(&cid)?;
         }
 
-        self.ipfs.alias(ROOT, Some(root)).await?;
+        self.ipfs.alias(ROOT, Some(&root))?;
+        self.ipfs.flush().await?;
         self.root_id = block.id;
         self.root_cid = Some(cid);
 
@@ -227,7 +229,7 @@ async fn main() -> Result<()> {
     ipfs_embed::telemetry("127.0.0.1:8080".parse()?, &local1.ipfs)?;
 
     for i in 0..10 {
-        local1.push(vec![i + 1 as u8], true).await?;
+        local1.push(vec![i + 1 as u8], true)?;
     }
 
     let root = *local1.root();

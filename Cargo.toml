@@ -11,22 +11,21 @@ description = "small embeddable ipfs implementation"
 repository = "https://github.com/ipfs-rust/ipfs-embed"
 
 [dependencies]
-async-global-executor = "2.0.1"
+async-global-executor = "2.0.2"
 async-trait = "0.1.42"
 fnv = "1.0.7"
-futures = "0.3.8"
+futures = "0.3.12"
 #ipfs-embed-db = { version = "0.9.0", path = "db" }
 ipfs-embed-net = { version = "0.9.0", path = "net" }
 ipfs-embed-sqlite = { version = "0.9.0", path = "sqlite" }
-libipld = { version = "0.9.0", default-features = false }
+libipld = { version = "0.10.0", default-features = false }
 prometheus = "0.11.0"
-tide = "0.15.0"
-tracing = "0.1.22"
-async-channel = "1.5.1"
+tide = "0.16.0"
+tracing = "0.1.23"
 
 [dev-dependencies]
-async-std = { version = "1.8.0", features = ["attributes"] }
-libipld = { version = "0.9.0", default-features = false, features = ["dag-cbor", "derive"] }
+async-std = { version = "1.9.0", features = ["attributes"] }
+libipld = { version = "0.10.0", default-features = false, features = ["dag-cbor", "derive"] }
 multihash = { version = "0.13.2", default-features = false, features = ["blake3"] }
 sled = "0.34.6"
 tracing-subscriber = "0.2.15"
@@ -37,8 +36,3 @@ debug = true
 [[bench]]
 name = "list"
 harness = false
-
-[patch.crates-io]
-libp2p = { path = "../rust-libp2p" }
-libp2p-bitswap = { path = "../libp2p-bitswap" }
-libipld = { path = "../libipld" }

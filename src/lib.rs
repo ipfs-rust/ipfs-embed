@@ -11,14 +11,13 @@
 //! ```
 use async_trait::async_trait;
 use futures::channel::mpsc;
-use futures::stream::FuturesUnordered;
-use futures::{select, stream::FusedStream, FutureExt, Stream, StreamExt};
+use futures::stream::{Stream, StreamExt};
+pub use ipfs_embed_net::SyncEvent;
 pub use ipfs_embed_net::{
     AddressRecord, Key, Multiaddr, NetworkConfig, PeerId, PeerRecord, Quorum, Record,
 };
-pub use ipfs_embed_net::{GossipsubEvent, GossipsubMessage, MessageId, Topic, TopicHash};
-use ipfs_embed_net::{NetworkEvent, NetworkService};
-pub use ipfs_embed_sqlite::{AsyncTempPin, StorageConfig};
+use ipfs_embed_net::{BitswapStore, NetworkService};
+pub use ipfs_embed_sqlite::{StorageConfig, TempPin};
 use ipfs_embed_sqlite::{StorageEvent, StorageService};
 use libipld::codec::References;
 use libipld::error::BlockNotFound;
@@ -28,9 +27,7 @@ use libipld::{Block, Cid, Ipld, Result};
 use prometheus::{Encoder, Registry};
 use std::future::Future;
 use std::net::SocketAddr;
-use std::ops::{Deref, DerefMut};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::sync::Arc;
 
 pub struct Config {
     pub storage: StorageConfig,
@@ -50,39 +47,30 @@ impl Config {
 pub struct Ipfs<P: StoreParams> {
     storage: StorageService<P>,
     network: NetworkService<P>,
-    rx: async_channel::Receiver<GossipsubEvent>,
 }
 
-struct Forever<S>(S);
+struct BitswapStorage<P: StoreParams>(StorageService<P>);
 
-impl<S> Deref for Forever<S> {
-    type Target = S;
+impl<P: StoreParams> BitswapStore for BitswapStorage<P>
+where
+    Ipld: References<P::Codecs>,
+{
+    type Params = P;
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    fn contains(&mut self, cid: &Cid) -> Result<bool> {
+        self.0.contains(cid)
     }
-}
 
-impl<S> DerefMut for Forever<S> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+    fn get(&mut self, cid: &Cid) -> Result<Option<Vec<u8>>> {
+        self.0.get(cid)
     }
-}
 
-impl<S: Stream + Unpin> Stream for Forever<S> {
-    type Item = S::Item;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        match Pin::new(&mut self.0).poll_next(cx) {
-            Poll::Ready(None) => Poll::Pending,
-            p => p,
-        }
+    fn insert(&mut self, block: &Block<P>) -> Result<()> {
+        self.0.insert(block)
     }
-}
 
-impl<S: Stream + Unpin> FusedStream for Forever<S> {
-    fn is_terminated(&self) -> bool {
-        false
+    fn missing_blocks(&mut self, cid: &Cid) -> Result<Vec<Cid>> {
+        self.0.missing_blocks(cid)
     }
 }
 
@@ -93,92 +81,16 @@ where
     pub async fn new(config: Config) -> Result<Self> {
         let (tx, mut storage_events) = mpsc::unbounded();
         let storage = StorageService::open(config.storage, tx)?;
-        let storage2 = storage.clone();
-        let (tx, mut network_events) = mpsc::unbounded();
-        let network = NetworkService::new(config.network, tx).await?;
+        let bitswap = BitswapStorage(storage.clone());
+        let network = NetworkService::new(config.network, bitswap).await?;
         let network2 = network.clone();
-        let (tx, rx) = async_channel::unbounded();
         async_global_executor::spawn(async move {
-            let mut missing_blocks = Forever(FuturesUnordered::new());
-            let mut contains = Forever(FuturesUnordered::new());
-            let mut get = Forever(FuturesUnordered::new());
-            let mut insert = Forever(FuturesUnordered::new());
-            loop {
-                select! {
-                    ev = network_events.next() => {
-                        if let Some(ev) = ev {
-                            match ev {
-                                NetworkEvent::MissingBlocks(id, cid) => {
-                                    missing_blocks.push(storage.missing_blocks(cid).map(move |res| (res, id)));
-                                }
-                                NetworkEvent::Have(ch, _, cid) => {
-                                    let storage = storage.clone();
-                                    contains.push(async move {
-                                        (storage.contains(&cid).await, ch)
-                                    });
-                                }
-                                NetworkEvent::Block(ch, _, cid) => {
-                                    get.push(storage.get(cid).map(move |res| (res, ch)));
-                                }
-                                NetworkEvent::Received(_, _, block) => {
-                                    insert.push(storage.insert(block, None));
-                                }
-                                NetworkEvent::Gossip(ev) => {
-                                    tx.try_send(ev).ok();
-                                }
-                            }
-                        }
-                    }
-                    ev = storage_events.next() => {
-                        if let Some(ev) = ev {
-                            match ev {
-                                StorageEvent::Remove(cid) => {
-                                    network.unprovide(cid);
-                                }
-                            }
-                        }
-                    }
-                    ev = missing_blocks.next() => {
-                        if let Some((res, id)) = ev {
-                            match res {
-                                Ok(missing) => { network.inject_missing_blocks(id, missing); }
-                                Err(err) => { tracing::error!("{}", err); }
-                            }
-                        }
-                    }
-                    ev = contains.next() => {
-                        if let Some((res, ch)) = ev {
-                            match res {
-                                Ok(have) => { network.inject_have(ch, have); }
-                                Err(err) => { tracing::error!("{}", err); }
-                            }
-                        }
-                    }
-                    ev = get.next() => {
-                        if let Some((res, ch)) = ev {
-                            match res {
-                                Ok(block) => { network.inject_block(ch, block); }
-                                Err(err) => { tracing::error!("{}", err); }
-                            }
-                        }
-                    }
-                    ev = insert.next() => {
-                        if let Some(res) = ev {
-                            match res {
-                                Ok(()) => {}
-                                Err(err) => { tracing::error!("{}", err); }
-                            }
-                        }
-                    }
-                }
+            while let Some(StorageEvent::Remove(cid)) = storage_events.next().await {
+                network2.unprovide(cid);
             }
         })
         .detach();
-        Ok(Self {
-            storage: storage2,
-            network: network2,
-            rx,
-        })
+        Ok(Self { storage, network })
     }
 
     pub fn local_peer_id(&self) -> PeerId {
@@ -228,7 +140,7 @@ where
 
     pub async fn bootstrap(&self, nodes: &[(PeerId, Multiaddr)]) -> Result<()> {
         self.network.bootstrap(nodes).await?;
-        for cid in self.storage.iter().await? {
+        for cid in self.storage.iter()? {
             let _ = self.network.provide(cid);
         }
         Ok(())
@@ -246,59 +158,56 @@ where
         self.network.remove_record(key)
     }
 
-    pub fn subscribe(&self, topic: Topic) {
+    pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = Vec<u8>>> {
         self.network.subscribe(topic)
     }
 
-    pub fn unsubscribe(&self, topic: Topic) {
-        self.network.unsubscribe(topic)
-    }
-
-    pub fn publish(&self, topic: &Topic, msg: Vec<u8>) -> Result<()> {
+    pub fn publish(&self, topic: &str, msg: Vec<u8>) -> Result<()> {
         self.network.publish(topic, msg)
     }
 
-    pub async fn temp_pin(&self) -> Result<AsyncTempPin> {
-        self.storage.temp_pin().await
+    pub fn create_temp_pin(&self) -> Result<TempPin> {
+        self.storage.create_temp_pin()
     }
 
-    pub async fn iter(&self) -> Result<std::vec::IntoIter<Cid>> {
-        self.storage.iter().await
+    pub fn temp_pin(&self, tmp: &TempPin, cid: &Cid) -> Result<()> {
+        self.storage.temp_pin(tmp, std::iter::once(*cid))
     }
 
-    pub async fn contains(&self, cid: &Cid) -> Result<bool> {
-        self.storage.contains(cid).await
+    pub fn iter(&self) -> Result<impl Iterator<Item = Cid>> {
+        self.storage.iter()
     }
 
-    pub async fn get(&self, cid: Cid, tmp: Option<&AsyncTempPin>) -> Result<Block<P>> {
-        if let Some(tmp) = tmp {
-            self.storage
-                .assign_temp_pin(tmp.clone(), std::iter::once(cid))
-                .await?;
+    pub fn contains(&self, cid: &Cid) -> Result<bool> {
+        self.storage.contains(cid)
+    }
+
+    pub fn get(&self, cid: &Cid) -> Result<Block<P>> {
+        if let Some(data) = self.storage.get(cid)? {
+            let block = Block::new_unchecked(*cid, data);
+            Ok(block)
+        } else {
+            Err(BlockNotFound(*cid).into())
         }
-        if let Some(data) = self.storage.get(cid).await? {
-            let block = Block::new_unchecked(cid, data);
+    }
+
+    pub async fn fetch(&self, cid: &Cid) -> Result<Block<P>> {
+        if let Some(data) = self.storage.get(cid)? {
+            let block = Block::new_unchecked(*cid, data);
             return Ok(block);
         }
-        self.network.get(cid).await?;
-        if let Some(data) = self.storage.get(cid).await? {
-            let block = Block::new_unchecked(cid, data);
+        self.network.get(*cid).await?;
+        if let Some(data) = self.storage.get(cid)? {
+            let block = Block::new_unchecked(*cid, data);
             return Ok(block);
         }
-        tracing::error!(
-            "block evicted too soon. use a temp pin to keep the block around. {}",
-            tmp.is_some()
-        );
-        Err(BlockNotFound(cid).into())
+        tracing::error!("block evicted too soon. use a temp pin to keep the block around.");
+        Err(BlockNotFound(*cid).into())
     }
 
-    pub async fn insert(
-        &self,
-        block: Block<P>,
-        tmp: Option<&AsyncTempPin>,
-    ) -> Result<impl Future<Output = Result<()>> + '_> {
+    pub fn insert(&self, block: &Block<P>) -> Result<impl Future<Output = Result<()>> + '_> {
         let cid = *block.cid();
-        self.storage.insert(block, tmp).await?;
+        self.storage.insert(block)?;
         Ok(self.network.provide(cid))
     }
 
@@ -306,33 +215,21 @@ where
         self.storage.evict().await
     }
 
-    pub async fn sync(&self, cid: Cid, tmp: Option<&AsyncTempPin>) -> Result<()> {
-        if let Some(tmp) = tmp {
-            self.storage
-                .assign_temp_pin(tmp.clone(), std::iter::once(cid))
-                .await?;
-        }
-        let missing = self.storage.missing_blocks(cid).await?;
-        if !missing.is_empty() {
-            self.network.sync(cid, missing.into_iter()).await?;
-        }
-        Ok(())
+    pub fn sync(&self, cid: &Cid) -> Result<impl Stream<Item = SyncEvent>> {
+        let missing = self.storage.missing_blocks(cid)?;
+        Ok(self.network.sync(*cid, missing.into_iter()))
     }
 
-    pub async fn alias<T: AsRef<[u8]> + Send + Sync>(
-        &self,
-        alias: T,
-        cid: Option<Cid>,
-    ) -> Result<()> {
-        self.storage.alias(alias.as_ref().to_vec(), cid).await
+    pub fn alias<T: AsRef<[u8]> + Send + Sync>(&self, alias: T, cid: Option<&Cid>) -> Result<()> {
+        self.storage.alias(alias.as_ref(), cid)
     }
 
-    pub async fn resolve<T: AsRef<[u8]> + Send + Sync>(&self, alias: T) -> Result<Option<Cid>> {
-        self.storage.resolve(alias.as_ref().to_vec()).await
+    pub fn resolve<T: AsRef<[u8]> + Send + Sync>(&self, alias: T) -> Result<Option<Cid>> {
+        self.storage.resolve(alias.as_ref())
     }
 
-    pub async fn reverse_alias(&self, cid: Cid) -> Result<Option<Vec<Vec<u8>>>> {
-        self.storage.reverse_alias(cid).await
+    pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
+        self.storage.reverse_alias(cid)
     }
 
     pub async fn flush(&self) -> Result<()> {
@@ -343,14 +240,6 @@ where
         self.storage.register_metrics(registry)?;
         self.network.register_metrics(registry)?;
         Ok(())
-    }
-}
-
-impl<P: StoreParams> Stream for Ipfs<P> {
-    type Item = GossipsubEvent;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.rx).poll_next(cx)
     }
 }
 
@@ -389,43 +278,57 @@ where
     Ipld: References<P::Codecs>,
 {
     type Params = P;
-    type TempPin = AsyncTempPin;
+    type TempPin = Arc<TempPin>;
 
-    async fn temp_pin(&self) -> Result<Self::TempPin> {
-        Ipfs::temp_pin(self).await
+    fn create_temp_pin(&self) -> Result<Self::TempPin> {
+        Ok(Arc::new(Ipfs::create_temp_pin(self)?))
     }
 
-    async fn contains(&self, cid: &Cid) -> Result<bool> {
-        Ipfs::contains(self, cid).await
+    fn temp_pin(&self, tmp: &Self::TempPin, cid: &Cid) -> Result<()> {
+        Ipfs::temp_pin(self, tmp, cid)
     }
 
-    async fn get(&self, cid: &Cid, tmp: Option<&Self::TempPin>) -> Result<Block<P>> {
-        Ipfs::get(self, *cid, tmp).await
+    fn contains(&self, cid: &Cid) -> Result<bool> {
+        Ipfs::contains(self, cid)
     }
 
-    async fn insert(&self, block: &Block<P>, tmp: Option<&Self::TempPin>) -> Result<()> {
-        let _ = Ipfs::insert(self, block.clone(), tmp).await?;
+    fn get(&self, cid: &Cid) -> Result<Block<P>> {
+        Ipfs::get(self, cid)
+    }
+
+    fn insert(&self, block: &Block<P>) -> Result<()> {
+        let _ = Ipfs::insert(self, block)?;
         Ok(())
     }
 
-    async fn sync(&self, cid: &Cid, tmp: Option<&Self::TempPin>) -> Result<()> {
-        Ipfs::sync(self, *cid, tmp).await
+    fn alias<T: AsRef<[u8]> + Send + Sync>(&self, alias: T, cid: Option<&Cid>) -> Result<()> {
+        Ipfs::alias(self, alias, cid)
     }
 
-    async fn alias<T: AsRef<[u8]> + Send + Sync>(&self, alias: T, cid: Option<&Cid>) -> Result<()> {
-        Ipfs::alias(self, alias, cid.copied()).await
+    fn resolve<T: AsRef<[u8]> + Send + Sync>(&self, alias: T) -> Result<Option<Cid>> {
+        Ipfs::resolve(self, alias)
     }
 
-    async fn resolve<T: AsRef<[u8]> + Send + Sync>(&self, alias: T) -> Result<Option<Cid>> {
-        Ipfs::resolve(self, alias).await
-    }
-
-    async fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
-        Ipfs::reverse_alias(self, *cid).await
+    fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
+        Ipfs::reverse_alias(self, cid)
     }
 
     async fn flush(&self) -> Result<()> {
         Ipfs::flush(self).await
+    }
+
+    async fn fetch(&self, cid: &Cid) -> Result<Block<Self::Params>> {
+        Ipfs::fetch(self, cid).await
+    }
+
+    async fn sync(&self, cid: &Cid) -> Result<()> {
+        let mut stream = Ipfs::sync(self, cid)?;
+        while let Some(ev) = stream.next().await {
+            if let SyncEvent::Complete(result) = ev {
+                return result;
+            }
+        }
+        Err(BlockNotFound(*cid).into())
     }
 }
 
@@ -469,9 +372,10 @@ mod tests {
         tracing_try_init();
         let store = create_store(false).await?;
         let block = create_block(b"test_local_store")?;
-        let tmp = store.temp_pin().await?;
-        let _ = store.insert(block.clone(), Some(&tmp)).await?;
-        let block2 = store.get(*block.cid(), None).await?;
+        let tmp = store.create_temp_pin()?;
+        store.temp_pin(&tmp, block.cid())?;
+        let _ = store.insert(&block)?;
+        let block2 = store.get(block.cid())?;
         assert_eq!(block.data(), block2.data());
         Ok(())
     }
@@ -483,11 +387,13 @@ mod tests {
         let store1 = create_store(true).await?;
         let store2 = create_store(true).await?;
         let block = create_block(b"test_exchange_mdns")?;
-        let tmp1 = store1.temp_pin().await?;
-        let _ = store1.insert(block.clone(), Some(&tmp1)).await?;
+        let tmp1 = store1.create_temp_pin()?;
+        store1.temp_pin(&tmp1, block.cid())?;
+        let _ = store1.insert(&block)?;
         store1.flush().await?;
-        let tmp2 = store2.temp_pin().await?;
-        let block2 = store2.get(*block.cid(), Some(&tmp2)).await?;
+        let tmp2 = store2.create_temp_pin()?;
+        store2.temp_pin(&tmp2, block.cid())?;
+        let block2 = store2.fetch(block.cid()).await?;
         assert_eq!(block.data(), block2.data());
         Ok(())
     }
@@ -510,12 +416,14 @@ mod tests {
         r2.unwrap();
 
         let block = create_block(b"test_exchange_kad")?;
-        let tmp1 = store1.temp_pin().await?;
-        store1.insert(block.clone(), Some(&tmp1)).await?.await?;
+        let tmp1 = store1.create_temp_pin()?;
+        store1.temp_pin(&tmp1, block.cid())?;
+        store1.insert(&block)?.await?;
         store1.flush().await?;
 
-        let tmp2 = store2.temp_pin().await?;
-        let block2 = store2.get(*block.cid(), Some(&tmp2)).await?;
+        let tmp2 = store2.create_temp_pin()?;
+        store2.temp_pin(&tmp2, block.cid())?;
+        let block2 = store2.fetch(block.cid()).await?;
         assert_eq!(block.data(), block2.data());
         Ok(())
     }
@@ -526,7 +434,7 @@ mod tests {
         let store1 = create_store(true).await?;
         let block = create_block(b"test_provider_not_found")?;
         if store1
-            .get(*block.cid(), None)
+            .fetch(block.cid())
             .await
             .unwrap_err()
             .downcast_ref::<BlockNotFound>()
@@ -541,8 +449,7 @@ mod tests {
         ($store:expr, $block:expr) => {
             assert_eq!(
                 $store
-                    .reverse_alias(*$block.cid())
-                    .await
+                    .reverse_alias($block.cid())
                     .unwrap()
                     .map(|a| !a.is_empty()),
                 Some(true)
@@ -554,8 +461,7 @@ mod tests {
         ($store:expr, $block:expr) => {
             assert_eq!(
                 $store
-                    .reverse_alias(*$block.cid())
-                    .await
+                    .reverse_alias($block.cid())
                     .unwrap()
                     .map(|a| !a.is_empty()),
                 Some(false)
@@ -579,25 +485,25 @@ mod tests {
         let c2 = create_ipld_block(&ipld!({ "c": [a1.cid(), b2.cid()] }))?;
         let x = alias!(x);
 
-        let _ = local1.insert(a1.clone(), None).await?;
-        let _ = local1.insert(b1.clone(), None).await?;
-        let _ = local1.insert(c1.clone(), None).await?;
-        local1.alias(x, Some(*c1.cid())).await?;
+        let _ = local1.insert(&a1)?;
+        let _ = local1.insert(&b1)?;
+        let _ = local1.insert(&c1)?;
+        local1.alias(x, Some(c1.cid()))?;
         local1.flush().await?;
         assert_pinned!(&local1, &a1);
         assert_pinned!(&local1, &b1);
         assert_pinned!(&local1, &c1);
 
-        local2.alias(x, Some(*c1.cid())).await?;
-        local2.sync(*c1.cid(), None).await?;
+        local2.alias(&x, Some(c1.cid()))?;
+        local2.sync(c1.cid()).await?;
         local2.flush().await?;
         assert_pinned!(&local2, &a1);
         assert_pinned!(&local2, &b1);
         assert_pinned!(&local2, &c1);
 
-        let _ = local2.insert(b2.clone(), None).await?;
-        let _ = local2.insert(c2.clone(), None).await?;
-        local2.alias(x, Some(*c2.cid())).await?;
+        let _ = local2.insert(&b2)?;
+        let _ = local2.insert(&c2)?;
+        local2.alias(x, Some(c2.cid()))?;
         local2.flush().await?;
         assert_pinned!(&local2, &a1);
         assert_unpinned!(&local2, &b1);
@@ -605,8 +511,8 @@ mod tests {
         assert_pinned!(&local2, &b2);
         assert_pinned!(&local2, &c2);
 
-        local1.alias(x, Some(*c2.cid())).await?;
-        local1.sync(*c2.cid(), None).await?;
+        local1.alias(x, Some(c2.cid()))?;
+        local1.sync(c2.cid()).await?;
         local1.flush().await?;
         assert_pinned!(&local1, &a1);
         assert_unpinned!(&local1, &b1);
@@ -614,7 +520,7 @@ mod tests {
         assert_pinned!(&local1, &b2);
         assert_pinned!(&local1, &c2);
 
-        local2.alias(x, None).await?;
+        local2.alias(x, None)?;
         local2.flush().await?;
         assert_unpinned!(&local2, &a1);
         assert_unpinned!(&local2, &b1);
@@ -622,7 +528,7 @@ mod tests {
         assert_unpinned!(&local2, &b2);
         assert_unpinned!(&local2, &c2);
 
-        local1.alias(x, None).await?;
+        local1.alias(x, None)?;
         local2.flush().await?;
         assert_unpinned!(&local1, &a1);
         assert_unpinned!(&local1, &b1);
@@ -666,46 +572,23 @@ mod tests {
             create_store(false).await?,
             create_store(false).await?,
         ];
-        let topic = Topic::new("topic".to_string());
+        let mut subscriptions = vec![];
+        let topic = "topic";
         for store in &stores {
             for other in &stores {
                 if store.local_peer_id() != other.local_peer_id() {
                     store.dial_address(&other.local_peer_id(), other.listeners()[0].clone())?;
                 }
             }
-            store.subscribe(topic.clone());
-        }
-
-        for store in &mut stores {
-            assert!(matches!(
-                store.next().await,
-                Some(GossipsubEvent::Subscribed { .. })
-            ));
-            assert!(matches!(
-                store.next().await,
-                Some(GossipsubEvent::Subscribed { .. })
-            ));
-            assert!(matches!(
-                store.next().await,
-                Some(GossipsubEvent::Subscribed { .. })
-            ));
-            assert!(matches!(
-                store.next().await,
-                Some(GossipsubEvent::Subscribed { .. })
-            ));
-            assert!(matches!(
-                store.next().await,
-                Some(GossipsubEvent::Subscribed { .. })
-            ));
+            subscriptions.push(store.subscribe(topic)?);
         }
 
         stores[0].publish(&topic, b"hello world".to_vec()).unwrap();
 
-        for store in &mut stores[1..] {
-            assert!(matches!(
-                store.next().await,
-                Some(GossipsubEvent::Message(_, _, _))
-            ));
+        for subscription in &mut subscriptions[1..] {
+            if let Some(msg) = subscription.next().await {
+                assert_eq!(msg.as_slice(), &b"hello world"[..]);
+            }
         }
         Ok(())
     }
