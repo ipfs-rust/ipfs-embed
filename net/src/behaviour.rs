@@ -327,7 +327,8 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<GossipsubEvent> for NetworkBac
                     }
                 }
             }
-            _ => {}
+            GossipsubEvent::Subscribed { .. } => {}
+            GossipsubEvent::Unsubscribed { .. } => {}
         }
     }
 }

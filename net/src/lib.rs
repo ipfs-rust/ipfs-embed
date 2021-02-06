@@ -78,6 +78,7 @@ impl<P: StoreParams> NetworkService<P> {
         *Swarm::local_peer_id(&swarm)
     }
 
+    #[allow(clippy::await_holding_lock)]
     pub async fn listen_on(&self, addr: Multiaddr) -> Result<Multiaddr> {
         let mut swarm = self.swarm.lock().unwrap();
         Swarm::listen_on(&mut swarm, addr)?;

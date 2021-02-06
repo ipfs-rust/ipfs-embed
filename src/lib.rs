@@ -533,6 +533,7 @@ mod tests {
     }
 
     #[async_std::test]
+    #[allow(clippy::eval_order_dependence)]
     async fn test_dht_record() -> Result<()> {
         tracing_try_init();
         let stores = [create_store(false).await?, create_store(false).await?];
@@ -556,6 +557,7 @@ mod tests {
     }
 
     #[async_std::test]
+    #[allow(clippy::eval_order_dependence)]
     async fn test_gossip() -> Result<()> {
         tracing_try_init();
         let stores = [

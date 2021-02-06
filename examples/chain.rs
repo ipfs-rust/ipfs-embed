@@ -228,8 +228,8 @@ async fn main() -> Result<()> {
     let mut local2 = BlockChain::open("/tmp/local2", 1000).await?;
     ipfs_embed::telemetry("127.0.0.1:8080".parse()?, &local1.ipfs)?;
 
-    for i in 0..1000 {
-        local1.push(vec![i + 1 as u8], true)?;
+    for i in 0..100 {
+        local1.push((i + 1usize).to_ne_bytes().to_vec(), true)?;
     }
 
     let root = *local1.root();
