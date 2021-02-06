@@ -1,22 +1,22 @@
 # ipfs-embed
-A small embeddable ipfs implementation compatible with libipld and with a concurrent garbage
-collector. It supports
+A small, fast and reliable ipfs implementation designed for embedding in to complex p2p
+applications.
+
 * node discovery via mdns
 * provider discovery via kademlia
 * exchange blocks via bitswap
 * lru eviction policy
-* aliases, an abstraction of recursively named pins with customizable syncing of dags
+* aliases, an abstraction of recursively named pins
+* temporary recursive pins for building dags, preventing races with the garbage collector
+* efficiently syncing large dags of blocks
+
+It does *not* aim at being compatible in any way with `go-ipfs`.
 
 ## Getting started
 ```rust
-use ipfs_embed::Ipfs;
-use ipfs_embed::core::BitswapStorage;
-use ipfs_embed::db::StorageService;
-use ipfs_embed::net::{NetworkConfig, NetworkService};
+use ipfs_embed::{Config, DefaultParams, Ipfs};
 use libipld::DagCbor;
-use libipld::store::{DefaultParams, Store};
-use std::sync::Arc;
-use std::time::Duration;
+use libipld::store::Store;
 
 #[derive(Clone, DagCbor, Debug, Eq, PartialEq)]
 struct Identity {
@@ -27,28 +27,25 @@ struct Identity {
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let sled_config = sled::Config::new().temporary(true);
     let cache_size = 10;
-    let sweep_interval = Duration::from_millis(10000);
-    let net_config = NetworkConfig::new();
-    let storage = Arc::new(StorageService::open(&sled_config, cache_size, sweep_interval).unwrap());
-    let bitswap_storage = BitswapStorage::new(storage.clone());
-    let network = Arc::new(NetworkService::new(net_config, bitswap_storage).unwrap());
-    let ipfs = Ipfs::<DefaultParams, _, _>::new(storage, network);
+    let ipfs = Ipfs::<DefaultParams>::new(Config::new(None, cache_size)).await?;
+    ipfs.listen_on("/ip4/0.0.0.0/tcp/0".parse()?).await?;
 
     let identity = Identity {
         id: 0,
         name: "David Craven".into(),
         age: 26,
     };
-    let cid = ipfs.insert(&identity).await?;
-    let identity2 = ipfs.get(&cid).await?;
+    let cid = ipfs.insert(&identity)?;
+    let identity2 = ipfs.get(&cid)?;
     assert_eq!(identity, identity2);
     println!("identity cid is {}", cid);
 
     Ok(())
 }
 ```
+
+# Below is some notes on the history of ipfs-embed. The information is no longer accurrate for the current implementation.
 
 ## What is ipfs?
 
