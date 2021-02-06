@@ -1,4 +1,4 @@
-use crate::behaviour::NetworkBackendBehaviour;
+use crate::behaviour::{GetChannel, NetworkBackendBehaviour, SyncChannel};
 use futures::stream::Stream;
 use futures::{future, pin_mut};
 use libipld::store::StoreParams;
@@ -182,35 +182,24 @@ impl<P: StoreParams> NetworkService<P> {
         swarm.remove_record(key)
     }
 
-    pub async fn get(&self, cid: Cid) -> Result<()> {
-        let query = {
-            let mut swarm = self.swarm.lock().unwrap();
-            let (rx, id) = swarm.get(cid);
-            Query {
-                swarm: Some(self.swarm.clone()),
-                id,
-                rx,
-            }
-        };
-        query.await??;
-        Ok(())
+    pub fn get(&self, cid: Cid) -> GetQuery<P> {
+        let mut swarm = self.swarm.lock().unwrap();
+        let (rx, id) = swarm.get(cid);
+        GetQuery {
+            swarm: Some(self.swarm.clone()),
+            id,
+            rx,
+        }
     }
 
-    pub fn sync(
-        &self,
-        cid: Cid,
-        missing: impl Iterator<Item = Cid>,
-    ) -> impl Stream<Item = SyncEvent> {
-        let query = {
-            let mut swarm = self.swarm.lock().unwrap();
-            let (rx, id) = swarm.sync(cid, missing);
-            Query {
-                swarm: Some(self.swarm.clone()),
-                id,
-                rx,
-            }
-        };
-        query
+    pub fn sync(&self, cid: Cid, missing: impl Iterator<Item = Cid>) -> SyncQuery<P> {
+        let mut swarm = self.swarm.lock().unwrap();
+        let (rx, id) = swarm.sync(cid, missing);
+        SyncQuery {
+            swarm: Some(self.swarm.clone()),
+            id,
+            rx,
+        }
     }
 
     pub async fn provide(&self, cid: Cid) -> Result<()> {
@@ -233,29 +222,61 @@ impl<P: StoreParams> NetworkService<P> {
     }
 }
 
-pub struct Query<P: StoreParams, T> {
+pub struct GetQuery<P: StoreParams> {
     swarm: Option<Arc<Mutex<Swarm<NetworkBackendBehaviour<P>>>>>,
     id: QueryId,
-    rx: T,
+    rx: GetChannel,
 }
 
-impl<P: StoreParams, T: Future + Unpin> Future for Query<P, T> {
-    type Output = T::Output;
+impl<P: StoreParams> Future for GetQuery<P> {
+    type Output = Result<()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        Pin::new(&mut self.rx).poll(cx)
+        match Pin::new(&mut self.rx).poll(cx) {
+            Poll::Ready(Ok(result)) => Poll::Ready(result),
+            Poll::Ready(Err(err)) => Poll::Ready(Err(err.into())),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
-impl<P: StoreParams, T: Stream + Unpin> Stream for Query<P, T> {
-    type Item = T::Item;
+impl<P: StoreParams> Drop for GetQuery<P> {
+    fn drop(&mut self) {
+        let swarm = self.swarm.take().unwrap();
+        let mut swarm = swarm.lock().unwrap();
+        swarm.cancel(self.id);
+    }
+}
+
+pub struct SyncQuery<P: StoreParams> {
+    swarm: Option<Arc<Mutex<Swarm<NetworkBackendBehaviour<P>>>>>,
+    id: QueryId,
+    rx: SyncChannel,
+}
+
+impl<P: StoreParams> Future for SyncQuery<P> {
+    type Output = Result<()>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        loop {
+            match Pin::new(&mut self.rx).poll_next(cx) {
+                Poll::Ready(Some(SyncEvent::Complete(result))) => return Poll::Ready(result),
+                Poll::Ready(_) => continue,
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
+impl<P: StoreParams> Stream for SyncQuery<P> {
+    type Item = SyncEvent;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         Pin::new(&mut self.rx).poll_next(cx)
     }
 }
 
-impl<P: StoreParams, T> Drop for Query<P, T> {
+impl<P: StoreParams> Drop for SyncQuery<P> {
     fn drop(&mut self) {
         let swarm = self.swarm.take().unwrap();
         let mut swarm = swarm.lock().unwrap();

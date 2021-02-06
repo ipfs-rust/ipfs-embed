@@ -14,7 +14,7 @@ use futures::channel::mpsc;
 use futures::stream::{Stream, StreamExt};
 pub use ipfs_embed_net::SyncEvent;
 pub use ipfs_embed_net::{
-    AddressRecord, Key, Multiaddr, NetworkConfig, PeerId, PeerRecord, Quorum, Record,
+    AddressRecord, Key, Multiaddr, NetworkConfig, PeerId, PeerRecord, Quorum, Record, SyncQuery,
 };
 use ipfs_embed_net::{BitswapStore, NetworkService};
 pub use ipfs_embed_sqlite::{StorageConfig, TempPin};
@@ -215,9 +215,9 @@ where
         self.storage.evict().await
     }
 
-    pub fn sync(&self, cid: &Cid) -> Result<impl Stream<Item = SyncEvent>> {
-        let missing = self.storage.missing_blocks(cid)?;
-        Ok(self.network.sync(*cid, missing.into_iter()))
+    pub fn sync(&self, cid: &Cid) -> SyncQuery<P> {
+        let missing = self.storage.missing_blocks(cid).ok().unwrap_or_default();
+        self.network.sync(*cid, missing.into_iter())
     }
 
     pub fn alias<T: AsRef<[u8]> + Send + Sync>(&self, alias: T, cid: Option<&Cid>) -> Result<()> {
@@ -322,13 +322,7 @@ where
     }
 
     async fn sync(&self, cid: &Cid) -> Result<()> {
-        let mut stream = Ipfs::sync(self, cid)?;
-        while let Some(ev) = stream.next().await {
-            if let SyncEvent::Complete(result) = ev {
-                return result;
-            }
-        }
-        Err(BlockNotFound(*cid).into())
+        Ipfs::sync(self, cid).await
     }
 }
 
@@ -564,7 +558,7 @@ mod tests {
     #[async_std::test]
     async fn test_gossip() -> Result<()> {
         tracing_try_init();
-        let mut stores = [
+        let stores = [
             create_store(false).await?,
             create_store(false).await?,
             create_store(false).await?,
@@ -582,6 +576,8 @@ mod tests {
             }
             subscriptions.push(store.subscribe(topic)?);
         }
+
+        async_std::task::sleep(Duration::from_millis(500)).await;
 
         stores[0].publish(&topic, b"hello world".to_vec()).unwrap();
 
