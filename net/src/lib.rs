@@ -249,6 +249,7 @@ impl<P: StoreParams> Drop for GetQuery<P> {
     }
 }
 
+/// A `bitswap` sync query.
 pub struct SyncQuery<P: StoreParams> {
     swarm: Option<Arc<Mutex<Swarm<NetworkBackendBehaviour<P>>>>>,
     id: QueryId,
