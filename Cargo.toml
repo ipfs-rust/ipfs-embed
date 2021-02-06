@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "db", "net"]
+members = ["net", "sqlite"]
 
 [package]
 name = "ipfs-embed"
@@ -10,32 +10,25 @@ license = "MIT OR Apache-2.0"
 description = "small embeddable ipfs implementation"
 repository = "https://github.com/ipfs-rust/ipfs-embed"
 
-[features]
-default = ["db", "net"]
-db = ["ipfs-embed-db", "sled"]
-net = ["ipfs-embed-net"]
-
 [dependencies]
-async-std = "1.8.0"
+async-global-executor = "2.0.2"
 async-trait = "0.1.42"
 fnv = "1.0.7"
-futures = "0.3.8"
-ipfs-embed-core = { version = "0.10.0", path = "core" }
-ipfs-embed-db = { version = "0.10.0", path = "db", optional = true }
-ipfs-embed-net = { version = "0.10.0", path = "net", optional = true }
-libipld = { version = "0.8.2", default-features = false }
-log = "0.4.11"
-sled = { version = "0.34.6", optional = true }
+futures = "0.3.12"
+#ipfs-embed-db = { version = "0.10.0", path = "db" }
+ipfs-embed-net = { version = "0.10.0", path = "net" }
+ipfs-embed-sqlite = { version = "0.10.0", path = "sqlite" }
+libipld = { version = "0.10.0", default-features = false }
+prometheus = "0.11.0"
+tide = "0.16.0"
+tracing = "0.1.23"
 
 [dev-dependencies]
-async-std = { version = "1.8.0", features = ["attributes"] }
-#async-log = "2.0.0"
-#criterion = "0.3.3"
-env_logger = "0.8.2"
-#ipld-collections = "0.2.0"
-libipld = { version = "0.8.2", default-features = false, features = ["dag-cbor", "derive"] }
-#model = "0.1.2"
-#tempdir = "0.3.7"
+async-std = { version = "1.9.0", features = ["attributes"] }
+libipld = { version = "0.10.0", default-features = false, features = ["dag-cbor", "derive"] }
+multihash = { version = "0.13.2", default-features = false, features = ["blake3"] }
+sled = "0.34.6"
+tracing-subscriber = "0.2.15"
 
 [profile.release]
 debug = true

@@ -1,38 +1,41 @@
-use async_std::task;
-use futures::channel::{mpsc, oneshot};
-use futures::future::Future;
+use crate::behaviour::{GetChannel, NetworkBackendBehaviour, SyncChannel};
 use futures::stream::Stream;
-use ipfs_embed_core::{
-    BitswapStore, BitswapSync, Cid, Multiaddr, Network, NetworkEvent, PeerId, Result, StoreParams,
-};
+use futures::{future, pin_mut};
+use libipld::store::StoreParams;
+use libipld::{Cid, Result};
 use libp2p::core::transport::upgrade::Version;
 use libp2p::core::transport::Transport;
 use libp2p::dns::DnsConfig;
 use libp2p::mplex::MplexConfig;
 use libp2p::noise::{Keypair, NoiseConfig, X25519Spec};
-use libp2p::swarm::{AddressRecord, AddressScore, Swarm, SwarmBuilder};
+use libp2p::swarm::{AddressScore, Swarm, SwarmBuilder, SwarmEvent};
 use libp2p::tcp::TcpConfig;
-//use libp2p::yamux::Config as YamuxConfig;
-use std::marker::PhantomData;
+use prometheus::Registry;
+use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
 mod behaviour;
 mod config;
 
-use behaviour::NetworkBackendBehaviour;
-pub use config::NetworkConfig;
+pub use crate::behaviour::{QueryId, SyncEvent};
+pub use crate::config::NetworkConfig;
+pub use libp2p::gossipsub::{GossipsubEvent, GossipsubMessage, MessageId, Topic, TopicHash};
+pub use libp2p::kad::record::{Key, Record};
+pub use libp2p::kad::{PeerRecord, Quorum};
+pub use libp2p::swarm::AddressRecord;
+pub use libp2p::{Multiaddr, PeerId};
+pub use libp2p_bitswap::BitswapStore;
 
+#[derive(Clone)]
 pub struct NetworkService<P: StoreParams> {
-    _marker: PhantomData<P>,
-    tx: mpsc::UnboundedSender<SwarmMsg>,
-    local_peer_id: PeerId,
+    swarm: Arc<Mutex<Swarm<NetworkBackendBehaviour<P>>>>,
 }
 
 impl<P: StoreParams> NetworkService<P> {
-    pub async fn new<S: BitswapStore<P>>(config: NetworkConfig, store: S) -> Result<Self> {
+    pub async fn new<S: BitswapStore<Params = P>>(config: NetworkConfig, store: S) -> Result<Self> {
         let dh_key = Keypair::<X25519Spec>::new()
             .into_authentic(&config.node_key)
             .unwrap();
@@ -48,140 +51,236 @@ impl<P: StoreParams> NetworkService<P> {
 
         let peer_id = config.peer_id();
         let behaviour = NetworkBackendBehaviour::<P>::new(config.clone(), store).await?;
-        let mut swarm = SwarmBuilder::new(transport.boxed(), behaviour, peer_id.clone())
+        let swarm = SwarmBuilder::new(transport.boxed(), behaviour, peer_id)
             .executor(Box::new(|fut| {
-                async_std::task::spawn(fut);
+                async_global_executor::spawn(fut).detach();
             }))
             .build();
-        for addr in config.listen_addresses {
-            Swarm::listen_on(&mut swarm, addr)?;
-        }
-        for addr in config.public_addresses {
-            Swarm::add_external_address(&mut swarm, addr, AddressScore::Infinite);
-        }
 
-        let (tx, rx) = mpsc::unbounded();
-        task::spawn(NetworkWorker {
-            swarm,
+        let swarm = Arc::new(Mutex::new(swarm));
+        let swarm2 = swarm.clone();
+        async_global_executor::spawn::<_, ()>(future::poll_fn(move |cx| {
+            let mut guard = swarm.lock().unwrap();
+            while let Poll::Ready(_) = {
+                let swarm = &mut *guard;
+                pin_mut!(swarm);
+                swarm.poll_next(cx)
+            } {}
+            Poll::Pending
+        }))
+        .detach();
+
+        Ok(Self { swarm: swarm2 })
+    }
+
+    pub fn local_peer_id(&self) -> PeerId {
+        let swarm = self.swarm.lock().unwrap();
+        *Swarm::local_peer_id(&swarm)
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    pub async fn listen_on(&self, addr: Multiaddr) -> Result<Multiaddr> {
+        let mut swarm = self.swarm.lock().unwrap();
+        Swarm::listen_on(&mut swarm, addr)?;
+        loop {
+            match swarm.next_event().await {
+                SwarmEvent::NewListenAddr(addr) => {
+                    tracing::info!("listening on {}", addr);
+                    return Ok(addr);
+                }
+                SwarmEvent::ListenerClosed {
+                    reason: Err(err), ..
+                } => return Err(err.into()),
+                _ => continue,
+            }
+        }
+    }
+
+    pub fn listeners(&self) -> Vec<Multiaddr> {
+        let swarm = self.swarm.lock().unwrap();
+        Swarm::listeners(&swarm).cloned().collect()
+    }
+
+    pub fn add_external_address(&self, addr: Multiaddr) {
+        let mut swarm = self.swarm.lock().unwrap();
+        Swarm::add_external_address(&mut swarm, addr, AddressScore::Infinite);
+    }
+
+    pub fn external_addresses(&self) -> Vec<AddressRecord> {
+        let swarm = self.swarm.lock().unwrap();
+        Swarm::external_addresses(&swarm).cloned().collect()
+    }
+
+    pub fn add_address(&self, peer: &PeerId, addr: Multiaddr) {
+        let mut swarm = self.swarm.lock().unwrap();
+        swarm.add_address(peer, addr);
+    }
+
+    pub fn remove_address(&self, peer: &PeerId, addr: &Multiaddr) {
+        let mut swarm = self.swarm.lock().unwrap();
+        swarm.remove_address(peer, addr);
+    }
+
+    pub fn dial(&self, peer: &PeerId) -> Result<()> {
+        let mut swarm = self.swarm.lock().unwrap();
+        Ok(Swarm::dial(&mut swarm, peer)?)
+    }
+
+    pub fn ban(&self, peer: PeerId) {
+        let mut swarm = self.swarm.lock().unwrap();
+        Swarm::ban_peer_id(&mut swarm, peer)
+    }
+
+    pub fn unban(&self, peer: PeerId) {
+        let mut swarm = self.swarm.lock().unwrap();
+        Swarm::unban_peer_id(&mut swarm, peer)
+    }
+
+    pub async fn bootstrap(&self, peers: &[(PeerId, Multiaddr)]) -> Result<()> {
+        for (peer, addr) in peers {
+            self.add_address(peer, addr.clone());
+            self.dial(peer)?;
+        }
+        let rx = {
+            let mut swarm = self.swarm.lock().unwrap();
+            swarm.bootstrap()
+        };
+        tracing::trace!("started bootstrap");
+        rx.await??;
+        tracing::trace!("boostrap complete");
+        Ok(())
+    }
+
+    pub async fn get_record(&self, key: &Key, quorum: Quorum) -> Result<Vec<PeerRecord>> {
+        let rx = {
+            let mut swarm = self.swarm.lock().unwrap();
+            swarm.get_record(key, quorum)
+        };
+        Ok(rx.await??)
+    }
+
+    pub async fn put_record(&self, record: Record, quorum: Quorum) -> Result<()> {
+        let rx = {
+            let mut swarm = self.swarm.lock().unwrap();
+            swarm.put_record(record, quorum)
+        };
+        rx.await??;
+        Ok(())
+    }
+
+    pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = Vec<u8>>> {
+        let mut swarm = self.swarm.lock().unwrap();
+        swarm.subscribe(topic)
+    }
+
+    pub fn publish(&self, topic: &str, msg: Vec<u8>) -> Result<()> {
+        let mut swarm = self.swarm.lock().unwrap();
+        swarm.publish(topic, msg)
+    }
+
+    pub fn remove_record(&self, key: &Key) {
+        let mut swarm = self.swarm.lock().unwrap();
+        swarm.remove_record(key)
+    }
+
+    pub fn get(&self, cid: Cid) -> GetQuery<P> {
+        let mut swarm = self.swarm.lock().unwrap();
+        let (rx, id) = swarm.get(cid);
+        GetQuery {
+            swarm: Some(self.swarm.clone()),
+            id,
             rx,
-            subscriptions: Default::default(),
-        });
+        }
+    }
 
-        Ok(Self {
-            _marker: PhantomData,
-            tx,
-            local_peer_id: peer_id,
-        })
+    pub fn sync(&self, cid: Cid, missing: impl Iterator<Item = Cid>) -> SyncQuery<P> {
+        let mut swarm = self.swarm.lock().unwrap();
+        let (rx, id) = swarm.sync(cid, missing);
+        SyncQuery {
+            swarm: Some(self.swarm.clone()),
+            id,
+            rx,
+        }
+    }
+
+    pub async fn provide(&self, cid: Cid) -> Result<()> {
+        let rx = {
+            let mut swarm = self.swarm.lock().unwrap();
+            swarm.provide(cid)
+        };
+        rx.await??;
+        Ok(())
+    }
+
+    pub fn unprovide(&self, cid: Cid) {
+        let mut swarm = self.swarm.lock().unwrap();
+        swarm.unprovide(cid)
+    }
+
+    pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
+        let swarm = self.swarm.lock().unwrap();
+        swarm.register_metrics(registry)
     }
 }
 
-enum SwarmMsg {
-    Get(Cid),
-    CancelGet(Cid),
-    Sync(Cid, Arc<dyn BitswapSync>),
-    CancelSync(Cid),
-    Provide(Cid),
-    Unprovide(Cid),
-    Listeners(oneshot::Sender<Vec<Multiaddr>>),
-    ExternalAddresses(oneshot::Sender<Vec<AddressRecord>>),
-    Subscribe(mpsc::UnboundedSender<NetworkEvent>),
+pub struct GetQuery<P: StoreParams> {
+    swarm: Option<Arc<Mutex<Swarm<NetworkBackendBehaviour<P>>>>>,
+    id: QueryId,
+    rx: GetChannel,
 }
 
-impl<P: StoreParams + 'static> Network<P> for NetworkService<P> {
-    type Subscription = mpsc::UnboundedReceiver<NetworkEvent>;
+impl<P: StoreParams> Future for GetQuery<P> {
+    type Output = Result<()>;
 
-    fn local_peer_id(&self) -> &PeerId {
-        &self.local_peer_id
-    }
-
-    fn listeners(&self, tx: oneshot::Sender<Vec<Multiaddr>>) {
-        self.tx.unbounded_send(SwarmMsg::Listeners(tx)).ok();
-    }
-
-    fn external_addresses(&self, tx: oneshot::Sender<Vec<AddressRecord>>) {
-        self.tx.unbounded_send(SwarmMsg::ExternalAddresses(tx)).ok();
-    }
-
-    fn get(&self, cid: Cid) {
-        self.tx.unbounded_send(SwarmMsg::Get(cid)).ok();
-    }
-
-    fn cancel_get(&self, cid: Cid) {
-        self.tx.unbounded_send(SwarmMsg::CancelGet(cid)).ok();
-    }
-
-    fn sync(&self, cid: Cid, syncer: Arc<dyn BitswapSync>) {
-        self.tx.unbounded_send(SwarmMsg::Sync(cid, syncer)).ok();
-    }
-
-    fn cancel_sync(&self, cid: Cid) {
-        self.tx.unbounded_send(SwarmMsg::CancelSync(cid)).ok();
-    }
-
-    fn provide(&self, cid: Cid) {
-        self.tx.unbounded_send(SwarmMsg::Provide(cid)).ok();
-    }
-
-    fn unprovide(&self, cid: Cid) {
-        self.tx.unbounded_send(SwarmMsg::Unprovide(cid)).ok();
-    }
-
-    fn subscribe(&self) -> Self::Subscription {
-        let (tx, rx) = mpsc::unbounded();
-        self.tx.unbounded_send(SwarmMsg::Subscribe(tx)).ok();
-        rx
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        match Pin::new(&mut self.rx).poll(cx) {
+            Poll::Ready(Ok(result)) => Poll::Ready(result),
+            Poll::Ready(Err(err)) => Poll::Ready(Err(err.into())),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
-struct NetworkWorker<P: StoreParams> {
-    swarm: Swarm<NetworkBackendBehaviour<P>>,
-    rx: mpsc::UnboundedReceiver<SwarmMsg>,
-    subscriptions: Vec<mpsc::UnboundedSender<NetworkEvent>>,
-}
-
-impl<P: StoreParams> NetworkWorker<P> {
-    fn send_event(&mut self, ev: NetworkEvent) {
-        self.subscriptions
-            .retain(|s| s.unbounded_send(ev.clone()).is_ok())
+impl<P: StoreParams> Drop for GetQuery<P> {
+    fn drop(&mut self) {
+        let swarm = self.swarm.take().unwrap();
+        let mut swarm = swarm.lock().unwrap();
+        swarm.cancel(self.id);
     }
 }
 
-impl<P: StoreParams> Future for NetworkWorker<P> {
-    type Output = ();
+pub struct SyncQuery<P: StoreParams> {
+    swarm: Option<Arc<Mutex<Swarm<NetworkBackendBehaviour<P>>>>>,
+    id: QueryId,
+    rx: SyncChannel,
+}
 
-    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Self::Output> {
+impl<P: StoreParams> Future for SyncQuery<P> {
+    type Output = Result<()>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
-            let cmd = match Pin::new(&mut self.rx).poll_next(ctx) {
-                Poll::Ready(Some(cmd)) => cmd,
-                Poll::Pending => break,
-                Poll::Ready(None) => return Poll::Ready(()),
-            };
-            match cmd {
-                SwarmMsg::Get(cid) => self.swarm.get(cid),
-                SwarmMsg::CancelGet(cid) => self.swarm.cancel_get(cid),
-                SwarmMsg::Sync(cid, syncer) => self.swarm.sync(cid, syncer),
-                SwarmMsg::CancelSync(cid) => self.swarm.cancel_sync(cid),
-                SwarmMsg::Provide(cid) => self.swarm.provide(cid),
-                SwarmMsg::Unprovide(cid) => self.swarm.unprovide(cid),
-                SwarmMsg::Listeners(tx) => {
-                    let listeners = Swarm::listeners(&self.swarm).cloned().collect();
-                    tx.send(listeners).ok();
-                }
-                SwarmMsg::ExternalAddresses(tx) => {
-                    let external_addresses =
-                        Swarm::external_addresses(&self.swarm).cloned().collect();
-                    tx.send(external_addresses).ok();
-                }
-                SwarmMsg::Subscribe(tx) => self.subscriptions.push(tx),
+            match Pin::new(&mut self.rx).poll_next(cx) {
+                Poll::Ready(Some(SyncEvent::Complete(result))) => return Poll::Ready(result),
+                Poll::Ready(_) => continue,
+                Poll::Pending => return Poll::Pending,
             }
         }
-        loop {
-            match Pin::new(&mut self.swarm).poll_next(ctx) {
-                Poll::Ready(Some(ev)) => self.send_event(ev),
-                Poll::Pending => break,
-                Poll::Ready(None) => return Poll::Ready(()),
-            }
-        }
-        Poll::Pending
+    }
+}
+
+impl<P: StoreParams> Stream for SyncQuery<P> {
+    type Item = SyncEvent;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.rx).poll_next(cx)
+    }
+}
+
+impl<P: StoreParams> Drop for SyncQuery<P> {
+    fn drop(&mut self) {
+        let swarm = self.swarm.take().unwrap();
+        let mut swarm = swarm.lock().unwrap();
+        swarm.cancel(self.id);
     }
 }

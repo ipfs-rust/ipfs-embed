@@ -1,3 +1,6 @@
 /target
-flamegraph.svg
+*.svg
+*.gdb_history
+*.stacks
 perf.data
+perf.data.old
