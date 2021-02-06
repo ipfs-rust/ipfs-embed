@@ -318,9 +318,12 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<GossipsubEvent> for NetworkBac
                 message: GossipsubMessage { data, topic, .. },
                 ..
             } => {
-                if let Some(subscribers) = self.subscriptions.get(topic.as_str()) {
-                    for subscriber in subscribers {
-                        subscriber.unbounded_send(data.clone()).ok();
+                if let Some(subscribers) = self.subscriptions.get_mut(topic.as_str()) {
+                    subscribers
+                        .retain(|subscriber| subscriber.unbounded_send(data.clone()).is_ok());
+                    if subscribers.is_empty() {
+                        self.unsubscribe(topic.as_str());
+                        self.subscriptions.remove(topic.as_str());
                     }
                 }
             }
