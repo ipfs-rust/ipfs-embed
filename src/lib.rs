@@ -1,4 +1,5 @@
-//! IpfsEmbed is an embeddable ipfs implementation.
+//! Ipfs embed is a small, fast and reliable ipfs implementation designed for embedding in to
+//! complex p2p applications.
 //!
 //! ```
 //! # #[async_std::main]
@@ -29,12 +30,18 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+/// Ipfs configuration.
+#[derive(Clone, Debug)]
 pub struct Config {
+    /// Storage configuration.
     pub storage: StorageConfig,
+    /// Network configuration.
     pub network: NetworkConfig,
 }
 
 impl Config {
+    /// Creates a default configuration from a `path` and a `cache_size`. If the `path` is `None`,
+    /// ipfs will use an in-memory block store.
     pub fn new(path: Option<std::path::PathBuf>, cache_size: u64) -> Self {
         let sweep_interval = std::time::Duration::from_millis(10000);
         let storage = StorageConfig::new(path, cache_size, sweep_interval);
@@ -43,6 +50,7 @@ impl Config {
     }
 }
 
+/// Ipfs node.
 #[derive(Clone)]
 pub struct Ipfs<P: StoreParams> {
     storage: StorageService<P>,
@@ -78,6 +86,10 @@ impl<P: StoreParams> Ipfs<P>
 where
     Ipld: References<P::Codecs>,
 {
+    /// Creates a new `Ipfs` from a `Config`.
+    ///
+    /// This starts three background tasks. The swarm, garbage collector and the dht cleanup
+    /// tasks run in the background.
     pub async fn new(config: Config) -> Result<Self> {
         let (tx, mut storage_events) = mpsc::unbounded();
         let storage = StorageService::open(config.storage, tx)?;
@@ -93,51 +105,65 @@ where
         Ok(Self { storage, network })
     }
 
+    /// Returns the local `PeerId`.
     pub fn local_peer_id(&self) -> PeerId {
         self.network.local_peer_id()
     }
 
+    /// Listens on a new `Multiaddr`.
     pub async fn listen_on(&self, addr: Multiaddr) -> Result<Multiaddr> {
         self.network.listen_on(addr).await
     }
 
+    /// Returns the currently active listener addresses.
     pub fn listeners(&self) -> Vec<Multiaddr> {
         self.network.listeners()
     }
 
+    /// Adds an external address.
     pub fn add_external_address(&self, addr: Multiaddr) {
         self.network.add_external_address(addr)
     }
 
+    /// Returns the currently used external addresses.
     pub fn external_addresses(&self) -> Vec<AddressRecord> {
         self.network.external_addresses()
     }
 
+    /// Adds a known `Multiaddr` for a `PeerId`.
     pub fn add_address(&self, peer: &PeerId, addr: Multiaddr) {
         self.network.add_address(peer, addr)
     }
 
+    /// Removes a `Multiaddr` for a `PeerId`.
     pub fn remove_address(&self, peer: &PeerId, addr: &Multiaddr) {
         self.network.remove_address(peer, addr)
     }
 
+    /// Dials a `PeerId` using a known address.
     pub fn dial(&self, peer: &PeerId) -> Result<()> {
         self.network.dial(peer)
     }
 
+    /// Dials a `PeerId` using `Multiaddr`.
     pub fn dial_address(&self, peer: &PeerId, addr: Multiaddr) -> Result<()> {
         self.network.add_address(peer, addr);
         self.network.dial(peer)
     }
 
+    /// Bans a `PeerId` from the swarm, dropping all existing connections and
+    /// preventing new connections from the peer.
     pub fn ban(&self, peer: PeerId) {
         self.network.ban(peer)
     }
 
+    /// Unbans a previously banned `PeerId`.
     pub fn unban(&self, peer: PeerId) {
         self.network.unban(peer)
     }
 
+    /// Bootstraps the dht using a set of bootstrap nodes. After bootstrap completes it
+    /// provides all blocks in the block store.
     pub async fn bootstrap(&self, nodes: &[(PeerId, Multiaddr)]) -> Result<()> {
         self.network.bootstrap(nodes).await?;
         for cid in self.storage.iter()? {
@@ -146,42 +172,54 @@ where
         Ok(())
     }
 
+    /// Gets a record from the dht.
     pub async fn get_record(&self, key: &Key, quorum: Quorum) -> Result<Vec<PeerRecord>> {
         self.network.get_record(key, quorum).await
     }
 
+    /// Puts a new record in the dht.
     pub async fn put_record(&self, record: Record, quorum: Quorum) -> Result<()> {
         self.network.put_record(record, quorum).await
     }
 
+    /// Removes a record from the dht.
     pub fn remove_record(&self, key: &Key) {
         self.network.remove_record(key)
     }
 
+    /// Subscribes to a `topic` returning a `Stream` of messages. If all `Stream`s for
+    /// a topic are dropped it unsubscribes from the `topic`.
     pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = Vec<u8>>> {
         self.network.subscribe(topic)
     }
 
+    /// Publishes a new message in a `topic`, sending the message to all subscribed peers.
     pub fn publish(&self, topic: &str, msg: Vec<u8>) -> Result<()> {
         self.network.publish(topic, msg)
     }
 
+    /// Creates a temporary pin in the block store. A temporary pin is not persisted to disk
+    /// and is released once it is dropped.
     pub fn create_temp_pin(&self) -> Result<TempPin> {
         self.storage.create_temp_pin()
     }
 
+    /// Adds a new root to a temporary pin.
     pub fn temp_pin(&self, tmp: &TempPin, cid: &Cid) -> Result<()> {
         self.storage.temp_pin(tmp, std::iter::once(*cid))
     }
 
+    /// Returns an `Iterator` of `Cid`s stored in the block store.
     pub fn iter(&self) -> Result<impl Iterator<Item = Cid>> {
         self.storage.iter()
     }
 
+    /// Checks if the block is in the block store.
     pub fn contains(&self, cid: &Cid) -> Result<bool> {
         self.storage.contains(cid)
     }
 
+    /// Returns a block from the block store.
     pub fn get(&self, cid: &Cid) -> Result<Block<P>> {
         if let Some(data) = self.storage.get(cid)? {
             let block = Block::new_unchecked(*cid, data);
@@ -191,6 +229,8 @@ where
         }
     }
 
+    /// Either returns a block if it's in the block store or tries to retrieve it from
+    /// a peer.
     pub async fn fetch(&self, cid: &Cid) -> Result<Block<P>> {
         if let Some(data) = self.storage.get(cid)? {
             let block = Block::new_unchecked(*cid, data);
@@ -205,12 +245,16 @@ where
         Err(BlockNotFound(*cid).into())
     }
 
+    /// Inserts a block in to the block store and announces it to peers.
     pub fn insert(&self, block: &Block<P>) -> Result<impl Future<Output = Result<()>> + '_> {
         let cid = *block.cid();
         self.storage.insert(block)?;
         Ok(self.network.provide(cid))
     }
 
+    /// Manually runs garbage collection to completion. This is mainly useful for testing and
+    /// administrative interfaces. During normal operation, the garbage collector automatically
+    /// runs in the background.
     pub async fn evict(&self) -> Result<()> {
         self.storage.evict().await
     }
@@ -220,22 +264,28 @@ where
         self.network.sync(*cid, missing.into_iter())
     }
 
+    /// Creates, updates or removes an alias with a new root `Cid`.
     pub fn alias<T: AsRef<[u8]> + Send + Sync>(&self, alias: T, cid: Option<&Cid>) -> Result<()> {
         self.storage.alias(alias.as_ref(), cid)
     }
 
+    /// Returns the root of an alias.
     pub fn resolve<T: AsRef<[u8]> + Send + Sync>(&self, alias: T) -> Result<Option<Cid>> {
         self.storage.resolve(alias.as_ref())
     }
 
+    /// Returns a list of aliases preventing a `Cid` from being garbage collected.
     pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
         self.storage.reverse_alias(cid)
     }
 
+    /// Flushes the block store. After `flush` completes successfully it is guaranteed that
+    /// all writes have been persisted to disk.
     pub async fn flush(&self) -> Result<()> {
         self.storage.flush().await
     }
 
+    /// Registers prometheus metrics in a registry.
     pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
         self.storage.register_metrics(registry)?;
         self.network.register_metrics(registry)?;

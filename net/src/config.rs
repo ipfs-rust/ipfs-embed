@@ -54,3 +54,20 @@ impl Default for NetworkConfig {
         Self::new()
     }
 }
+
+impl std::fmt::Debug for NetworkConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("NetworkConfig")
+            .field("node_key", &self.peer_id().to_string())
+            .field("node_name", &self.node_name)
+            .field("enable_mdns", &self.enable_mdns)
+            .field("allow_non_globals_in_dht", &self.allow_non_globals_in_dht)
+            .field("bitswap_request_timeout", &self.bitswap_request_timeout)
+            .field(
+                "bitswap_connection_keepalive",
+                &self.bitswap_connection_keepalive,
+            )
+            .field("bitswap_receive_limit", &self.bitswap_receive_limit)
+            .finish()
+    }
+}
