@@ -74,10 +74,10 @@ impl<P: StoreParams> NetworkService<P> {
         let swarm2 = swarm.clone();
         async_global_executor::spawn::<_, ()>(future::poll_fn(move |cx| {
             let mut guard = swarm.lock().unwrap();
-            while let Poll::Ready(_) = {
+            while {
                 let swarm = &mut *guard;
                 pin_mut!(swarm);
-                swarm.poll_next(cx)
+                swarm.poll_next(cx).is_ready()
             } {}
             Poll::Pending
         }))
