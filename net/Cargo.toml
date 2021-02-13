@@ -24,12 +24,14 @@ tracing = "0.1.23"
 version = "0.34.0"
 default-features = false
 features = [
+    # "deflate",
     "dns",
     "gossipsub",
     "identify",
     "kad",
     "mdns",
     "ping",
+    "pnet",
     # "quic",
     "mplex", "noise", "tcp-async-io", "yamux",
 ]

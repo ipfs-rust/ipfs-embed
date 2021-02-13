@@ -1,5 +1,6 @@
 use libp2p::core::PeerId;
 use libp2p::identity::{Keypair, PublicKey};
+use libp2p::pnet::PreSharedKey;
 use std::num::NonZeroU16;
 use std::time::Duration;
 
@@ -20,6 +21,8 @@ pub struct NetworkConfig {
     pub bitswap_connection_keepalive: Duration,
     /// Bitswap inbound requests per peer limit.
     pub bitswap_receive_limit: NonZeroU16,
+    /// Pre shared key for pnet.
+    pub psk: Option<PreSharedKey>,
 }
 
 impl NetworkConfig {
@@ -35,6 +38,7 @@ impl NetworkConfig {
             bitswap_request_timeout: Duration::from_secs(10),
             bitswap_connection_keepalive: Duration::from_secs(10),
             bitswap_receive_limit: NonZeroU16::new(20).expect("20 > 0"),
+            psk: None,
         }
     }
 
@@ -68,6 +72,7 @@ impl std::fmt::Debug for NetworkConfig {
                 &self.bitswap_connection_keepalive,
             )
             .field("bitswap_receive_limit", &self.bitswap_receive_limit)
+            .field("psk", &self.psk.is_some())
             .finish()
     }
 }

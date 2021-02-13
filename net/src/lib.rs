@@ -3,13 +3,16 @@ use futures::stream::Stream;
 use futures::{future, pin_mut};
 use libipld::store::StoreParams;
 use libipld::{Cid, Result};
-use libp2p::core::transport::upgrade::Version;
+use libp2p::core::either::EitherTransport;
 use libp2p::core::transport::Transport;
+use libp2p::core::upgrade::{SelectUpgrade, Version};
 use libp2p::dns::DnsConfig;
 use libp2p::mplex::MplexConfig;
 use libp2p::noise::{Keypair, NoiseConfig, X25519Spec};
+use libp2p::pnet::PnetConfig;
 use libp2p::swarm::{AddressScore, Swarm, SwarmBuilder, SwarmEvent};
 use libp2p::tcp::TcpConfig;
+use libp2p::yamux::YamuxConfig;
 use prometheus::Registry;
 use std::future::Future;
 use std::pin::Pin;
@@ -36,18 +39,26 @@ pub struct NetworkService<P: StoreParams> {
 
 impl<P: StoreParams> NetworkService<P> {
     pub async fn new<S: BitswapStore<Params = P>>(config: NetworkConfig, store: S) -> Result<Self> {
+        let transport = DnsConfig::new(TcpConfig::new().nodelay(true))?;
+        let transport = if let Some(psk) = config.psk {
+            EitherTransport::Left(
+                transport.and_then(move |socket, _| PnetConfig::new(psk).handshake(socket)),
+            )
+        } else {
+            EitherTransport::Right(transport)
+        };
         let dh_key = Keypair::<X25519Spec>::new()
             .into_authentic(&config.node_key)
             .unwrap();
-        let transport = DnsConfig::new(
-            TcpConfig::new()
-                .nodelay(true)
-                .upgrade(Version::V1)
-                .authenticate(NoiseConfig::xx(dh_key).into_authenticated())
-                .multiplex(MplexConfig::new())
-                .timeout(Duration::from_secs(5))
-                .boxed(),
-        )?;
+        let transport = transport
+            .upgrade(Version::V1)
+            .authenticate(NoiseConfig::xx(dh_key).into_authenticated())
+            .multiplex(SelectUpgrade::new(
+                YamuxConfig::default(),
+                MplexConfig::new(),
+            ))
+            .timeout(Duration::from_secs(5))
+            .boxed();
 
         let peer_id = config.peer_id();
         let behaviour = NetworkBackendBehaviour::<P>::new(config.clone(), store).await?;
