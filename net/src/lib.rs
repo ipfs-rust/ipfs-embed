@@ -22,9 +22,11 @@ use std::time::Duration;
 
 mod behaviour;
 mod config;
+mod peers;
 
 pub use crate::behaviour::{QueryId, SyncEvent};
 pub use crate::config::NetworkConfig;
+pub use crate::peers::{AddressSource, PeerInfo};
 pub use libp2p::gossipsub::{GossipsubEvent, GossipsubMessage, MessageId, Topic, TopicHash};
 pub use libp2p::kad::record::{Key, Record};
 pub use libp2p::kad::{PeerRecord, Quorum};
@@ -124,7 +126,7 @@ impl<P: StoreParams> NetworkService<P> {
 
     pub fn add_address(&self, peer: &PeerId, addr: Multiaddr) {
         let mut swarm = self.swarm.lock().unwrap();
-        swarm.add_address(peer, addr);
+        swarm.add_address(peer, addr, AddressSource::User);
     }
 
     pub fn remove_address(&self, peer: &PeerId, addr: &Multiaddr) {
@@ -145,6 +147,24 @@ impl<P: StoreParams> NetworkService<P> {
     pub fn unban(&self, peer: PeerId) {
         let mut swarm = self.swarm.lock().unwrap();
         Swarm::unban_peer_id(&mut swarm, peer)
+    }
+
+    pub fn peers(&self) -> Vec<PeerId> {
+        let swarm = self.swarm.lock().unwrap();
+        swarm.peers().copied().collect()
+    }
+
+    pub fn connections(&self) -> Vec<(PeerId, Multiaddr)> {
+        let swarm = self.swarm.lock().unwrap();
+        swarm
+            .connections()
+            .map(|(peer_id, addr)| (*peer_id, addr.clone()))
+            .collect()
+    }
+
+    pub fn peer_info(&self, peer: &PeerId) -> Option<PeerInfo> {
+        let swarm = self.swarm.lock().unwrap();
+        swarm.info(peer).cloned()
     }
 
     pub async fn bootstrap(&self, peers: &[(PeerId, Multiaddr)]) -> Result<()> {

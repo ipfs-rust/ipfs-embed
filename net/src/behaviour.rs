@@ -1,5 +1,6 @@
 use crate::config::NetworkConfig;
-use fnv::{FnvHashMap, FnvHashSet};
+use crate::peers::{AddressBook, AddressSource, PeerInfo};
+use fnv::FnvHashMap;
 use futures::channel::{mpsc, oneshot};
 use futures::stream::Stream;
 use ip_network::IpNetwork;
@@ -76,12 +77,11 @@ enum QueryChannel {
 #[derive(NetworkBehaviour)]
 pub struct NetworkBackendBehaviour<P: StoreParams> {
     #[behaviour(ignore)]
-    peer_id: PeerId,
-    #[behaviour(ignore)]
     allow_non_globals_in_dht: bool,
     #[behaviour(ignore)]
     bootstrap_complete: bool,
 
+    peers: AddressBook,
     kad: Toggle<Kademlia<MemoryStore>>,
     mdns: Toggle<Mdns>,
     ping: Ping,
@@ -95,26 +95,18 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     queries: FnvHashMap<QueryId, QueryChannel>,
     #[behaviour(ignore)]
     subscriptions: FnvHashMap<String, Vec<mpsc::UnboundedSender<Vec<u8>>>>,
-    #[behaviour(ignore)]
-    mdns_peers: FnvHashSet<PeerId>,
 }
 
 impl<P: StoreParams> NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendBehaviour<P> {
     fn inject_event(&mut self, event: MdnsEvent) {
         match event {
             MdnsEvent::Discovered(list) => {
-                for (peer_id, _addr) in list {
-                    if self.mdns_peers.insert(peer_id) {
-                        tracing::trace!("discovered {}", peer_id);
-                    }
+                for (peer_id, addr) in list {
+                    self.add_address(&peer_id, addr, AddressSource::Mdns);
                 }
             }
-            MdnsEvent::Expired(list) => {
-                for (peer_id, _addr) in list {
-                    if self.mdns_peers.remove(&peer_id) {
-                        tracing::trace!("expired {}", peer_id);
-                    }
-                }
+            MdnsEvent::Expired(_) => {
+                // Ignore expired addresses
             }
         }
     }
@@ -237,7 +229,7 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<BitswapEvent> for NetworkBacke
                     let kad_id = self.kad.as_mut().unwrap().get_providers(key);
                     self.provider_queries.insert(kad_id, id);
                 } else {
-                    let providers = self.mdns_peers.iter().copied().collect();
+                    let providers = self.peers().copied().collect();
                     self.bitswap.inject_providers(id, providers);
                 }
             }
@@ -268,6 +260,7 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<PingEvent> for NetworkBackendB
                 result: Result::Ok(PingSuccess::Ping { rtt }),
             } => {
                 tracing::trace!("ping: rtt to {} is {} ms", peer, rtt.as_millis());
+                self.peers.set_rtt(&peer, Some(rtt));
             }
             PingEvent {
                 peer,
@@ -280,12 +273,14 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<PingEvent> for NetworkBackendB
                 result: Result::Err(PingFailure::Timeout),
             } => {
                 tracing::trace!("ping: timeout to {}", peer);
+                self.peers.set_rtt(&peer, None);
             }
             PingEvent {
                 peer,
                 result: Result::Err(PingFailure::Other { error }),
             } => {
                 tracing::trace!("ping: failure with {}: {}", peer, error);
+                self.peers.set_rtt(&peer, None);
             }
         }
     }
@@ -296,17 +291,16 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<IdentifyEvent> for NetworkBack
         // When a peer opens a connection we only have it's outgoing address. The identify
         // protocol sends the listening address which needs to be registered with kademlia.
         if let IdentifyEvent::Received {
-            peer_id: _,
+            peer_id,
             info,
             observed_addr,
         } = event
         {
+            self.peers.set_info(&peer_id, info);
             tracing::debug!("has external address {}", observed_addr);
-            let peer_id = self.peer_id;
-            self.add_address(&peer_id, observed_addr);
-            for addr in info.listen_addrs {
-                self.add_address(&peer_id, addr);
-            }
+            let local_peer_id = *self.peers.local_peer_id();
+            // source doesn't matter as it won't be added to address book.
+            self.add_address(&local_peer_id, observed_addr, AddressSource::User);
         }
     }
 }
@@ -335,6 +329,10 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<GossipsubEvent> for NetworkBac
             GossipsubEvent::Unsubscribed { .. } => {}
         }
     }
+}
+
+impl<P: StoreParams> NetworkBehaviourEventProcess<void::Void> for NetworkBackendBehaviour<P> {
+    fn inject_event(&mut self, _event: void::Void) {}
 }
 
 impl<P: StoreParams> NetworkBackendBehaviour<P> {
@@ -371,23 +369,22 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         .map_err(|err| anyhow::anyhow!("{}", err))?;
 
         Ok(Self {
-            peer_id,
             allow_non_globals_in_dht: config.allow_non_globals_in_dht,
             bootstrap_complete: false,
+            peers: AddressBook::new(peer_id),
             mdns,
             kad,
             ping,
             identify,
             bitswap,
             gossipsub,
-            mdns_peers: Default::default(),
             provider_queries: Default::default(),
             queries: Default::default(),
             subscriptions: Default::default(),
         })
     }
 
-    pub fn add_address(&mut self, peer_id: &PeerId, addr: Multiaddr) {
+    pub fn add_address(&mut self, peer_id: &PeerId, addr: Multiaddr, source: AddressSource) {
         if let Some(kad) = self.kad.as_mut() {
             let is_global = match addr.iter().next() {
                 Some(Protocol::Ip4(ip)) => IpNetwork::from(ip).is_global(),
@@ -398,23 +395,31 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
                 _ => false,
             };
             if self.allow_non_globals_in_dht || is_global {
-                tracing::trace!("adding address {}", addr);
-                kad.add_address(&peer_id, addr);
+                kad.add_address(&peer_id, addr.clone());
             } else {
                 tracing::trace!("not adding local address {}", addr);
             }
-        } else {
-            self.bitswap.add_address(&peer_id, addr);
         }
+        self.peers.add_address(peer_id, addr, source);
     }
 
     pub fn remove_address(&mut self, peer_id: &PeerId, addr: &Multiaddr) {
-        tracing::trace!("removing address {}", addr);
+        self.peers.remove_address(peer_id, addr);
         if let Some(kad) = self.kad.as_mut() {
             kad.remove_address(peer_id, addr);
-        } else {
-            self.bitswap.remove_address(peer_id, addr);
         }
+    }
+
+    pub fn peers(&self) -> impl Iterator<Item = &PeerId> + '_ {
+        self.peers.peers()
+    }
+
+    pub fn info(&self, peer_id: &PeerId) -> Option<&PeerInfo> {
+        self.peers.info(peer_id)
+    }
+
+    pub fn connections(&self) -> impl Iterator<Item = (&PeerId, &Multiaddr)> + '_ {
+        self.peers.connections()
     }
 
     pub fn bootstrap(&mut self) -> BootstrapChannel {
@@ -531,7 +536,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
 
     pub fn get(&mut self, cid: Cid) -> (GetChannel, QueryId) {
         let (tx, rx) = oneshot::channel();
-        let id = self.bitswap.get(cid, self.mdns_peers.iter().copied());
+        let id = self.bitswap.get(cid, std::iter::empty());
         self.queries.insert(id.into(), QueryChannel::Get(tx));
         (rx, id.into())
     }

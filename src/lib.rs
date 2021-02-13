@@ -15,7 +15,8 @@ use futures::channel::mpsc;
 use futures::stream::{Stream, StreamExt};
 pub use ipfs_embed_net::SyncEvent;
 pub use ipfs_embed_net::{
-    AddressRecord, Key, Multiaddr, NetworkConfig, PeerId, PeerRecord, Quorum, Record, SyncQuery,
+    AddressRecord, AddressSource, Key, Multiaddr, NetworkConfig, PeerId, PeerInfo, PeerRecord,
+    Quorum, Record, SyncQuery,
 };
 use ipfs_embed_net::{BitswapStore, NetworkService};
 pub use ipfs_embed_sqlite::{StorageConfig, TempPin};
@@ -160,6 +161,21 @@ where
     /// Unbans a previously banned `PeerId`.
     pub fn unban(&self, peer: PeerId) {
         self.network.unban(peer)
+    }
+
+    /// Returns the known peers.
+    pub fn peers(&self) -> Vec<PeerId> {
+        self.network.peers()
+    }
+
+    /// Returns a list of connected peers.
+    pub fn connections(&self) -> Vec<(PeerId, Multiaddr)> {
+        self.network.connections()
+    }
+
+    /// Returns the `PeerInfo` of a peer.
+    pub fn peer_info(&self, peer: &PeerId) -> Option<PeerInfo> {
+        self.network.peer_info(peer)
     }
 
     /// Bootstraps the dht using a set of bootstrap nodes. After bootstrap completes it

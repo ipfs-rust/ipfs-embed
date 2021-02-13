@@ -1463,6 +1463,7 @@ dependencies = [
  "prometheus",
  "thiserror",
  "tracing",
+ "void",
 ]
 
 [[package]]
