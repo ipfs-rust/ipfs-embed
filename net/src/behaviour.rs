@@ -82,7 +82,7 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     #[behaviour(ignore)]
     bootstrap_complete: bool,
 
-    kad: Kademlia<MemoryStore>,
+    kad: Toggle<Kademlia<MemoryStore>>,
     mdns: Toggle<Mdns>,
     ping: Ping,
     identify: Identify,
@@ -234,7 +234,7 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<BitswapEvent> for NetworkBacke
             BitswapEvent::Providers(id, cid) => {
                 if self.bootstrap_complete {
                     let key = Key::new(&cid.to_bytes());
-                    let kad_id = self.kad.get_providers(key);
+                    let kad_id = self.kad.as_mut().unwrap().get_providers(key);
                     self.provider_queries.insert(kad_id, id);
                 } else {
                     let providers = self.mdns_peers.iter().copied().collect();
@@ -347,8 +347,13 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             None
         }
         .into();
-        let kad_store = MemoryStore::new(peer_id);
-        let kad = Kademlia::new(peer_id, kad_store);
+        let kad = if config.enable_kad {
+            let kad_store = MemoryStore::new(peer_id);
+            Some(Kademlia::new(peer_id, kad_store))
+        } else {
+            None
+        }
+        .into();
         let ping = Ping::default();
         let public = config.public();
         let identify = Identify::new("/ipfs-embed/1.0".into(), config.node_name.clone(), public);
@@ -383,36 +388,48 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
     }
 
     pub fn add_address(&mut self, peer_id: &PeerId, addr: Multiaddr) {
-        let is_global = match addr.iter().next() {
-            Some(Protocol::Ip4(ip)) => IpNetwork::from(ip).is_global(),
-            Some(Protocol::Ip6(ip)) => IpNetwork::from(ip).is_global(),
-            Some(Protocol::Dns(_)) => true,
-            Some(Protocol::Dns4(_)) => true,
-            Some(Protocol::Dns6(_)) => true,
-            _ => false,
-        };
-        if self.allow_non_globals_in_dht || is_global {
-            tracing::trace!("adding address {}", addr);
-            self.kad.add_address(&peer_id, addr);
+        if let Some(kad) = self.kad.as_mut() {
+            let is_global = match addr.iter().next() {
+                Some(Protocol::Ip4(ip)) => IpNetwork::from(ip).is_global(),
+                Some(Protocol::Ip6(ip)) => IpNetwork::from(ip).is_global(),
+                Some(Protocol::Dns(_)) => true,
+                Some(Protocol::Dns4(_)) => true,
+                Some(Protocol::Dns6(_)) => true,
+                _ => false,
+            };
+            if self.allow_non_globals_in_dht || is_global {
+                tracing::trace!("adding address {}", addr);
+                kad.add_address(&peer_id, addr);
+            } else {
+                tracing::trace!("not adding local address {}", addr);
+            }
         } else {
-            tracing::trace!("not adding local address {}", addr);
+            self.bitswap.add_address(&peer_id, addr);
         }
     }
 
     pub fn remove_address(&mut self, peer_id: &PeerId, addr: &Multiaddr) {
         tracing::trace!("removing address {}", addr);
-        self.kad.remove_address(peer_id, addr);
+        if let Some(kad) = self.kad.as_mut() {
+            kad.remove_address(peer_id, addr);
+        } else {
+            self.bitswap.remove_address(peer_id, addr);
+        }
     }
 
     pub fn bootstrap(&mut self) -> BootstrapChannel {
         let (tx, rx) = oneshot::channel();
-        match self.kad.bootstrap() {
-            Ok(id) => {
-                self.queries.insert(id.into(), QueryChannel::Bootstrap(tx));
+        if let Some(kad) = self.kad.as_mut() {
+            match kad.bootstrap() {
+                Ok(id) => {
+                    self.queries.insert(id.into(), QueryChannel::Bootstrap(tx));
+                }
+                Err(err) => {
+                    tx.send(Err(err.into())).ok();
+                }
             }
-            Err(err) => {
-                tx.send(Err(err.into())).ok();
-            }
+        } else {
+            tx.send(Err(NotBootstrapped.into())).ok();
         }
         rx
     }
@@ -420,14 +437,16 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
     pub fn provide(&mut self, cid: Cid) -> StartProvidingChannel {
         let (tx, rx) = oneshot::channel();
         if self.bootstrap_complete {
-            let key = Key::new(&cid.to_bytes());
-            match self.kad.start_providing(key) {
-                Ok(id) => {
-                    self.queries
-                        .insert(id.into(), QueryChannel::StartProviding(tx));
-                }
-                Err(err) => {
-                    tx.send(Err(KadStoreError(err).into())).ok();
+            if let Some(kad) = self.kad.as_mut() {
+                let key = Key::new(&cid.to_bytes());
+                match kad.start_providing(key) {
+                    Ok(id) => {
+                        self.queries
+                            .insert(id.into(), QueryChannel::StartProviding(tx));
+                    }
+                    Err(err) => {
+                        tx.send(Err(KadStoreError(err).into())).ok();
+                    }
                 }
             }
         } else {
@@ -437,15 +456,19 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
     }
 
     pub fn unprovide(&mut self, cid: Cid) {
-        let key = Key::new(&cid.to_bytes());
-        self.kad.stop_providing(&key);
+        if let Some(kad) = self.kad.as_mut() {
+            let key = Key::new(&cid.to_bytes());
+            kad.stop_providing(&key);
+        }
     }
 
     pub fn get_record(&mut self, key: &Key, quorum: Quorum) -> GetRecordChannel {
         let (tx, rx) = oneshot::channel();
         if self.bootstrap_complete {
-            let id = self.kad.get_record(key, quorum);
-            self.queries.insert(id.into(), QueryChannel::GetRecord(tx));
+            if let Some(kad) = self.kad.as_mut() {
+                let id = kad.get_record(key, quorum);
+                self.queries.insert(id.into(), QueryChannel::GetRecord(tx));
+            }
         } else {
             tx.send(Err(NotBootstrapped.into())).ok();
         }
@@ -455,12 +478,14 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
     pub fn put_record(&mut self, record: Record, quorum: Quorum) -> PutRecordChannel {
         let (tx, rx) = oneshot::channel();
         if self.bootstrap_complete {
-            match self.kad.put_record(record, quorum) {
-                Ok(id) => {
-                    self.queries.insert(id.into(), QueryChannel::PutRecord(tx));
-                }
-                Err(err) => {
-                    tx.send(Err(KadStoreError(err).into())).ok();
+            if let Some(kad) = self.kad.as_mut() {
+                match kad.put_record(record, quorum) {
+                    Ok(id) => {
+                        self.queries.insert(id.into(), QueryChannel::PutRecord(tx));
+                    }
+                    Err(err) => {
+                        tx.send(Err(KadStoreError(err).into())).ok();
+                    }
                 }
             }
         } else {
@@ -470,7 +495,9 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
     }
 
     pub fn remove_record(&mut self, key: &Key) {
-        self.kad.remove_record(key);
+        if let Some(kad) = self.kad.as_mut() {
+            kad.remove_record(key);
+        }
     }
 
     pub fn subscribe(&mut self, topic: &str) -> Result<impl Stream<Item = Vec<u8>>> {
