@@ -19,17 +19,20 @@ names = "0.11.0"
 prometheus = "0.11.0"
 thiserror = "1.0.23"
 tracing = "0.1.23"
+void = "1.0.2"
 
 [dependencies.libp2p]
 version = "0.34.0"
 default-features = false
 features = [
+    # "deflate",
     "dns",
     "gossipsub",
     "identify",
     "kad",
     "mdns",
     "ping",
+    "pnet",
     # "quic",
     "mplex", "noise", "tcp-async-io", "yamux",
 ]

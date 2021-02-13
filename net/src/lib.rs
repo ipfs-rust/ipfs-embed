@@ -3,13 +3,16 @@ use futures::stream::Stream;
 use futures::{future, pin_mut};
 use libipld::store::StoreParams;
 use libipld::{Cid, Result};
-use libp2p::core::transport::upgrade::Version;
+use libp2p::core::either::EitherTransport;
 use libp2p::core::transport::Transport;
+use libp2p::core::upgrade::{SelectUpgrade, Version};
 use libp2p::dns::DnsConfig;
 use libp2p::mplex::MplexConfig;
 use libp2p::noise::{Keypair, NoiseConfig, X25519Spec};
+use libp2p::pnet::PnetConfig;
 use libp2p::swarm::{AddressScore, Swarm, SwarmBuilder, SwarmEvent};
 use libp2p::tcp::TcpConfig;
+use libp2p::yamux::YamuxConfig;
 use prometheus::Registry;
 use std::future::Future;
 use std::pin::Pin;
@@ -19,9 +22,11 @@ use std::time::Duration;
 
 mod behaviour;
 mod config;
+mod peers;
 
 pub use crate::behaviour::{QueryId, SyncEvent};
 pub use crate::config::NetworkConfig;
+pub use crate::peers::{AddressSource, PeerInfo};
 pub use libp2p::gossipsub::{GossipsubEvent, GossipsubMessage, MessageId, Topic, TopicHash};
 pub use libp2p::kad::record::{Key, Record};
 pub use libp2p::kad::{PeerRecord, Quorum};
@@ -36,18 +41,26 @@ pub struct NetworkService<P: StoreParams> {
 
 impl<P: StoreParams> NetworkService<P> {
     pub async fn new<S: BitswapStore<Params = P>>(config: NetworkConfig, store: S) -> Result<Self> {
+        let transport = DnsConfig::new(TcpConfig::new().nodelay(true))?;
+        let transport = if let Some(psk) = config.psk {
+            EitherTransport::Left(
+                transport.and_then(move |socket, _| PnetConfig::new(psk).handshake(socket)),
+            )
+        } else {
+            EitherTransport::Right(transport)
+        };
         let dh_key = Keypair::<X25519Spec>::new()
             .into_authentic(&config.node_key)
             .unwrap();
-        let transport = DnsConfig::new(
-            TcpConfig::new()
-                .nodelay(true)
-                .upgrade(Version::V1)
-                .authenticate(NoiseConfig::xx(dh_key).into_authenticated())
-                .multiplex(MplexConfig::new())
-                .timeout(Duration::from_secs(5))
-                .boxed(),
-        )?;
+        let transport = transport
+            .upgrade(Version::V1)
+            .authenticate(NoiseConfig::xx(dh_key).into_authenticated())
+            .multiplex(SelectUpgrade::new(
+                YamuxConfig::default(),
+                MplexConfig::new(),
+            ))
+            .timeout(Duration::from_secs(5))
+            .boxed();
 
         let peer_id = config.peer_id();
         let behaviour = NetworkBackendBehaviour::<P>::new(config.clone(), store).await?;
@@ -61,10 +74,10 @@ impl<P: StoreParams> NetworkService<P> {
         let swarm2 = swarm.clone();
         async_global_executor::spawn::<_, ()>(future::poll_fn(move |cx| {
             let mut guard = swarm.lock().unwrap();
-            while let Poll::Ready(_) = {
+            while {
                 let swarm = &mut *guard;
                 pin_mut!(swarm);
-                swarm.poll_next(cx)
+                swarm.poll_next(cx).is_ready()
             } {}
             Poll::Pending
         }))
@@ -113,7 +126,7 @@ impl<P: StoreParams> NetworkService<P> {
 
     pub fn add_address(&self, peer: &PeerId, addr: Multiaddr) {
         let mut swarm = self.swarm.lock().unwrap();
-        swarm.add_address(peer, addr);
+        swarm.add_address(peer, addr, AddressSource::User);
     }
 
     pub fn remove_address(&self, peer: &PeerId, addr: &Multiaddr) {
@@ -134,6 +147,24 @@ impl<P: StoreParams> NetworkService<P> {
     pub fn unban(&self, peer: PeerId) {
         let mut swarm = self.swarm.lock().unwrap();
         Swarm::unban_peer_id(&mut swarm, peer)
+    }
+
+    pub fn peers(&self) -> Vec<PeerId> {
+        let swarm = self.swarm.lock().unwrap();
+        swarm.peers().copied().collect()
+    }
+
+    pub fn connections(&self) -> Vec<(PeerId, Multiaddr)> {
+        let swarm = self.swarm.lock().unwrap();
+        swarm
+            .connections()
+            .map(|(peer_id, addr)| (*peer_id, addr.clone()))
+            .collect()
+    }
+
+    pub fn peer_info(&self, peer: &PeerId) -> Option<PeerInfo> {
+        let swarm = self.swarm.lock().unwrap();
+        swarm.info(peer).cloned()
     }
 
     pub async fn bootstrap(&self, peers: &[(PeerId, Multiaddr)]) -> Result<()> {

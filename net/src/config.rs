@@ -1,5 +1,6 @@
 use libp2p::core::PeerId;
 use libp2p::identity::{Keypair, PublicKey};
+use libp2p::pnet::PreSharedKey;
 use std::num::NonZeroU16;
 use std::time::Duration;
 
@@ -12,6 +13,8 @@ pub struct NetworkConfig {
     pub node_name: String,
     /// Enable mdns.
     pub enable_mdns: bool,
+    /// Enable kad.
+    pub enable_kad: bool,
     /// Should we insert non-global addresses into the DHT?
     pub allow_non_globals_in_dht: bool,
     /// Bitswap request timeout.
@@ -20,6 +23,8 @@ pub struct NetworkConfig {
     pub bitswap_connection_keepalive: Duration,
     /// Bitswap inbound requests per peer limit.
     pub bitswap_receive_limit: NonZeroU16,
+    /// Pre shared key for pnet.
+    pub psk: Option<PreSharedKey>,
 }
 
 impl NetworkConfig {
@@ -27,6 +32,7 @@ impl NetworkConfig {
     pub fn new() -> Self {
         Self {
             enable_mdns: true,
+            enable_kad: true,
             allow_non_globals_in_dht: false,
             node_key: Keypair::generate_ed25519(),
             node_name: names::Generator::with_naming(names::Name::Numbered)
@@ -35,6 +41,7 @@ impl NetworkConfig {
             bitswap_request_timeout: Duration::from_secs(10),
             bitswap_connection_keepalive: Duration::from_secs(10),
             bitswap_receive_limit: NonZeroU16::new(20).expect("20 > 0"),
+            psk: None,
         }
     }
 
@@ -61,6 +68,7 @@ impl std::fmt::Debug for NetworkConfig {
             .field("node_key", &self.peer_id().to_string())
             .field("node_name", &self.node_name)
             .field("enable_mdns", &self.enable_mdns)
+            .field("enable_kad", &self.enable_kad)
             .field("allow_non_globals_in_dht", &self.allow_non_globals_in_dht)
             .field("bitswap_request_timeout", &self.bitswap_request_timeout)
             .field(
@@ -68,6 +76,7 @@ impl std::fmt::Debug for NetworkConfig {
                 &self.bitswap_connection_keepalive,
             )
             .field("bitswap_receive_limit", &self.bitswap_receive_limit)
+            .field("psk", &self.psk.is_some())
             .finish()
     }
 }
