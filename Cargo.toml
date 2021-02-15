@@ -29,6 +29,7 @@ libipld = { version = "0.10.0", default-features = false, features = ["dag-cbor"
 multihash = { version = "0.13.2", default-features = false, features = ["blake3"] }
 sled = "0.34.6"
 tracing-subscriber = "0.2.15"
+anyhow = "1.0.38"
 
 [profile.release]
 debug = true

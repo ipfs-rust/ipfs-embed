@@ -1431,6 +1431,7 @@ checksum = "2ee15951c035f79eddbef745611ec962f63f4558f1dadf98ab723cc603487c6f"
 name = "ipfs-embed"
 version = "0.11.0"
 dependencies = [
+ "anyhow",
  "async-global-executor",
  "async-std",
  "async-trait",
@@ -1658,8 +1659,7 @@ dependencies = [
 [[package]]
 name = "libp2p-bitswap"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9faeb64ffd83838ab62ea45f52ddcc8bae164115af50563d5d1f2ae750676c7b"
+source = "git+http://github.com/ipfs-rust/libp2p-bitswap#b57e4fb378e4650679af23ed9e5f4eb2ceeaf38a"
 dependencies = [
  "async-trait",
  "fnv",
@@ -1668,6 +1668,8 @@ dependencies = [
  "libipld",
  "libp2p",
  "prometheus",
+ "prost",
+ "prost-build",
  "thiserror",
  "tracing",
  "unsigned-varint 0.7.0",
