@@ -1,5 +1,6 @@
 use libp2p::core::PeerId;
 use libp2p::identity::{Keypair, PublicKey};
+use libp2p::ping::PingConfig;
 use libp2p::pnet::PreSharedKey;
 use std::num::NonZeroU16;
 use std::time::Duration;
@@ -25,6 +26,8 @@ pub struct NetworkConfig {
     pub bitswap_receive_limit: NonZeroU16,
     /// Pre shared key for pnet.
     pub psk: Option<PreSharedKey>,
+    /// Ping config.
+    pub ping: PingConfig,
 }
 
 impl NetworkConfig {
@@ -42,6 +45,7 @@ impl NetworkConfig {
             bitswap_connection_keepalive: Duration::from_secs(10),
             bitswap_receive_limit: NonZeroU16::new(20).expect("20 > 0"),
             psk: None,
+            ping: PingConfig::new().with_keep_alive(true),
         }
     }
 
