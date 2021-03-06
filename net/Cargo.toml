@@ -16,6 +16,7 @@ ip_network = "0.3.4"
 libipld = { version = "0.11.0", default-features = false }
 libp2p-bitswap = "0.13.0"
 names = "0.11.0"
+parking_lot = "0.11.1"
 prometheus = "0.11.0"
 thiserror = "1.0.24"
 tracing = "0.1.25"

@@ -1428,6 +1428,7 @@ checksum = "2ee15951c035f79eddbef745611ec962f63f4558f1dadf98ab723cc603487c6f"
 name = "ipfs-embed"
 version = "0.11.0"
 dependencies = [
+ "anyhow",
  "async-global-executor",
  "async-std",
  "async-trait",
@@ -1438,6 +1439,7 @@ dependencies = [
  "libipld",
  "multihash",
  "prometheus",
+ "rand 0.8.3",
  "sled",
  "tide",
  "tracing",
@@ -1457,6 +1459,7 @@ dependencies = [
  "libp2p",
  "libp2p-bitswap",
  "names",
+ "parking_lot",
  "prometheus",
  "thiserror",
  "tracing",
