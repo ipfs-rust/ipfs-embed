@@ -1,5 +1,6 @@
 use crate::behaviour::{GetChannel, NetworkBackendBehaviour, SyncChannel};
 use futures::stream::Stream;
+use futures::task::AtomicWaker;
 use futures::{future, pin_mut};
 use libipld::store::StoreParams;
 use libipld::{Cid, Result};
@@ -38,6 +39,7 @@ pub use libp2p_bitswap::BitswapStore;
 #[derive(Clone)]
 pub struct NetworkService<P: StoreParams> {
     swarm: Arc<Mutex<Swarm<NetworkBackendBehaviour<P>>>>,
+    waker: Arc<AtomicWaker>,
 }
 
 impl<P: StoreParams> NetworkService<P> {
@@ -73,8 +75,11 @@ impl<P: StoreParams> NetworkService<P> {
 
         let swarm = Arc::new(Mutex::new(swarm));
         let swarm2 = swarm.clone();
+        let waker = Arc::new(AtomicWaker::new());
+        let waker2 = waker.clone();
         async_global_executor::spawn::<_, ()>(future::poll_fn(move |cx| {
-            let mut guard = swarm.lock().unwrap();
+            waker.register(cx.waker());
+            let mut guard = swarm.lock();
             while {
                 let swarm = &mut *guard;
                 pin_mut!(swarm);
@@ -84,7 +89,7 @@ impl<P: StoreParams> NetworkService<P> {
         }))
         .detach();
 
-        Ok(Self { swarm: swarm2 })
+        Ok(Self { swarm: swarm2, waker: waker2 })
     }
 
     pub fn local_peer_id(&self) -> PeerId {
@@ -218,6 +223,7 @@ impl<P: StoreParams> NetworkService<P> {
     pub fn get(&self, cid: Cid) -> GetQuery<P> {
         let mut swarm = self.swarm.lock();
         let (rx, id) = swarm.get(cid);
+        self.waker.wake();
         GetQuery {
             swarm: Some(self.swarm.clone()),
             id,
@@ -228,6 +234,7 @@ impl<P: StoreParams> NetworkService<P> {
     pub fn sync(&self, cid: Cid, missing: impl Iterator<Item = Cid>) -> SyncQuery<P> {
         let mut swarm = self.swarm.lock();
         let (rx, id) = swarm.sync(cid, missing);
+        self.waker.wake();
         SyncQuery {
             swarm: Some(self.swarm.clone()),
             id,
