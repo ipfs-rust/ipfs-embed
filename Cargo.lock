@@ -1395,6 +1395,7 @@ dependencies = [
  "ipfs-embed-net",
  "ipfs-embed-sqlite",
  "libipld",
+ "libp2p-bitswap",
  "multihash",
  "prometheus",
  "rand 0.8.3",
@@ -1528,6 +1529,7 @@ dependencies = [
  "libipld-cbor-derive",
  "libipld-core",
  "libipld-macro",
+ "libipld-pb",
  "log",
  "multihash",
  "parking_lot",
@@ -1581,6 +1583,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "libipld-pb"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65bafd670ca677df2d1c093b4bd47013876926215d980586fe95eaa9a1486fd5"
+dependencies = [
+ "libipld-core",
+ "prost",
+ "prost-build",
+ "thiserror",
+]
+
+[[package]]
 name = "libp2p"
 version = "0.35.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1625,6 +1639,8 @@ dependencies = [
  "libipld",
  "libp2p",
  "prometheus",
+ "prost",
+ "prost-build",
  "thiserror",
  "tracing",
  "unsigned-varint 0.7.0",
