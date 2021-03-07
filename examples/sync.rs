@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
 
     let tmp = a.create_temp_pin()?;
     let mut builder = NodeBuilder::default();
-    for _ in 0..10 {
+    for _ in 0..1000 {
         let block = builder.create()?;
         a.temp_pin(&tmp, block.cid())?;
         let _ = a.insert(&block)?;
