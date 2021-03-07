@@ -1,9 +1,9 @@
 use anyhow::Result;
-use libipld::{alias, DagCbor, Cid, Block};
+use ipfs_embed::{Config, Ipfs};
 use libipld::cbor::DagCborCodec;
 use libipld::multihash::Code;
 use libipld::store::DefaultParams;
-use ipfs_embed::{Config, Ipfs};
+use libipld::{alias, Block, Cid, DagCbor};
 use rand::RngCore;
 
 const ROOT: &str = alias!(root);

@@ -89,7 +89,10 @@ impl<P: StoreParams> NetworkService<P> {
         }))
         .detach();
 
-        Ok(Self { swarm: swarm2, waker: waker2 })
+        Ok(Self {
+            swarm: swarm2,
+            waker: waker2,
+        })
     }
 
     pub fn local_peer_id(&self) -> PeerId {
