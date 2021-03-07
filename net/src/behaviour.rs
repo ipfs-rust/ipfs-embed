@@ -49,6 +49,7 @@ impl From<libp2p::kad::QueryId> for QueryId {
 }
 
 /// An event of a sync query.
+#[derive(Debug)]
 pub enum SyncEvent {
     /// Signals that the sync query made progress and counts the amount of subtrees to
     /// sync. If it is syncing a linked list, it will always be 1.
