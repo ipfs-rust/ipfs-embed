@@ -1,5 +1,6 @@
 use crate::behaviour::{GetChannel, NetworkBackendBehaviour, SyncChannel};
 use futures::stream::Stream;
+use futures::task::AtomicWaker;
 use futures::{future, pin_mut};
 use libipld::store::StoreParams;
 use libipld::{Cid, Result};
@@ -13,10 +14,11 @@ use libp2p::pnet::PnetConfig;
 use libp2p::swarm::{AddressScore, Swarm, SwarmBuilder, SwarmEvent};
 use libp2p::tcp::TcpConfig;
 use libp2p::yamux::YamuxConfig;
+use parking_lot::Mutex;
 use prometheus::Registry;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -37,6 +39,7 @@ pub use libp2p_bitswap::BitswapStore;
 #[derive(Clone)]
 pub struct NetworkService<P: StoreParams> {
     swarm: Arc<Mutex<Swarm<NetworkBackendBehaviour<P>>>>,
+    waker: Arc<AtomicWaker>,
 }
 
 impl<P: StoreParams> NetworkService<P> {
@@ -72,8 +75,11 @@ impl<P: StoreParams> NetworkService<P> {
 
         let swarm = Arc::new(Mutex::new(swarm));
         let swarm2 = swarm.clone();
+        let waker = Arc::new(AtomicWaker::new());
+        let waker2 = waker.clone();
         async_global_executor::spawn::<_, ()>(future::poll_fn(move |cx| {
-            let mut guard = swarm.lock().unwrap();
+            waker.register(cx.waker());
+            let mut guard = swarm.lock();
             while {
                 let swarm = &mut *guard;
                 pin_mut!(swarm);
@@ -83,17 +89,20 @@ impl<P: StoreParams> NetworkService<P> {
         }))
         .detach();
 
-        Ok(Self { swarm: swarm2 })
+        Ok(Self {
+            swarm: swarm2,
+            waker: waker2,
+        })
     }
 
     pub fn local_peer_id(&self) -> PeerId {
-        let swarm = self.swarm.lock().unwrap();
+        let swarm = self.swarm.lock();
         *Swarm::local_peer_id(&swarm)
     }
 
     #[allow(clippy::await_holding_lock)]
     pub async fn listen_on(&self, addr: Multiaddr) -> Result<Multiaddr> {
-        let mut swarm = self.swarm.lock().unwrap();
+        let mut swarm = self.swarm.lock();
         Swarm::listen_on(&mut swarm, addr)?;
         loop {
             match swarm.next_event().await {
@@ -110,52 +119,52 @@ impl<P: StoreParams> NetworkService<P> {
     }
 
     pub fn listeners(&self) -> Vec<Multiaddr> {
-        let swarm = self.swarm.lock().unwrap();
+        let swarm = self.swarm.lock();
         Swarm::listeners(&swarm).cloned().collect()
     }
 
     pub fn add_external_address(&self, addr: Multiaddr) {
-        let mut swarm = self.swarm.lock().unwrap();
+        let mut swarm = self.swarm.lock();
         Swarm::add_external_address(&mut swarm, addr, AddressScore::Infinite);
     }
 
     pub fn external_addresses(&self) -> Vec<AddressRecord> {
-        let swarm = self.swarm.lock().unwrap();
+        let swarm = self.swarm.lock();
         Swarm::external_addresses(&swarm).cloned().collect()
     }
 
     pub fn add_address(&self, peer: &PeerId, addr: Multiaddr) {
-        let mut swarm = self.swarm.lock().unwrap();
+        let mut swarm = self.swarm.lock();
         swarm.add_address(peer, addr, AddressSource::User);
     }
 
     pub fn remove_address(&self, peer: &PeerId, addr: &Multiaddr) {
-        let mut swarm = self.swarm.lock().unwrap();
+        let mut swarm = self.swarm.lock();
         swarm.remove_address(peer, addr);
     }
 
     pub fn dial(&self, peer: &PeerId) -> Result<()> {
-        let mut swarm = self.swarm.lock().unwrap();
+        let mut swarm = self.swarm.lock();
         Ok(Swarm::dial(&mut swarm, peer)?)
     }
 
     pub fn ban(&self, peer: PeerId) {
-        let mut swarm = self.swarm.lock().unwrap();
+        let mut swarm = self.swarm.lock();
         Swarm::ban_peer_id(&mut swarm, peer)
     }
 
     pub fn unban(&self, peer: PeerId) {
-        let mut swarm = self.swarm.lock().unwrap();
+        let mut swarm = self.swarm.lock();
         Swarm::unban_peer_id(&mut swarm, peer)
     }
 
     pub fn peers(&self) -> Vec<PeerId> {
-        let swarm = self.swarm.lock().unwrap();
+        let swarm = self.swarm.lock();
         swarm.peers().copied().collect()
     }
 
     pub fn connections(&self) -> Vec<(PeerId, Multiaddr)> {
-        let swarm = self.swarm.lock().unwrap();
+        let swarm = self.swarm.lock();
         swarm
             .connections()
             .map(|(peer_id, addr)| (*peer_id, addr.clone()))
@@ -163,7 +172,7 @@ impl<P: StoreParams> NetworkService<P> {
     }
 
     pub fn peer_info(&self, peer: &PeerId) -> Option<PeerInfo> {
-        let swarm = self.swarm.lock().unwrap();
+        let swarm = self.swarm.lock();
         swarm.info(peer).cloned()
     }
 
@@ -173,7 +182,7 @@ impl<P: StoreParams> NetworkService<P> {
             self.dial(peer)?;
         }
         let rx = {
-            let mut swarm = self.swarm.lock().unwrap();
+            let mut swarm = self.swarm.lock();
             swarm.bootstrap()
         };
         tracing::trace!("started bootstrap");
@@ -184,7 +193,7 @@ impl<P: StoreParams> NetworkService<P> {
 
     pub async fn get_record(&self, key: &Key, quorum: Quorum) -> Result<Vec<PeerRecord>> {
         let rx = {
-            let mut swarm = self.swarm.lock().unwrap();
+            let mut swarm = self.swarm.lock();
             swarm.get_record(key, quorum)
         };
         Ok(rx.await??)
@@ -192,7 +201,7 @@ impl<P: StoreParams> NetworkService<P> {
 
     pub async fn put_record(&self, record: Record, quorum: Quorum) -> Result<()> {
         let rx = {
-            let mut swarm = self.swarm.lock().unwrap();
+            let mut swarm = self.swarm.lock();
             swarm.put_record(record, quorum)
         };
         rx.await??;
@@ -200,23 +209,24 @@ impl<P: StoreParams> NetworkService<P> {
     }
 
     pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = Vec<u8>>> {
-        let mut swarm = self.swarm.lock().unwrap();
+        let mut swarm = self.swarm.lock();
         swarm.subscribe(topic)
     }
 
     pub fn publish(&self, topic: &str, msg: Vec<u8>) -> Result<()> {
-        let mut swarm = self.swarm.lock().unwrap();
+        let mut swarm = self.swarm.lock();
         swarm.publish(topic, msg)
     }
 
     pub fn remove_record(&self, key: &Key) {
-        let mut swarm = self.swarm.lock().unwrap();
+        let mut swarm = self.swarm.lock();
         swarm.remove_record(key)
     }
 
     pub fn get(&self, cid: Cid) -> GetQuery<P> {
-        let mut swarm = self.swarm.lock().unwrap();
+        let mut swarm = self.swarm.lock();
         let (rx, id) = swarm.get(cid);
+        self.waker.wake();
         GetQuery {
             swarm: Some(self.swarm.clone()),
             id,
@@ -225,8 +235,9 @@ impl<P: StoreParams> NetworkService<P> {
     }
 
     pub fn sync(&self, cid: Cid, missing: impl Iterator<Item = Cid>) -> SyncQuery<P> {
-        let mut swarm = self.swarm.lock().unwrap();
+        let mut swarm = self.swarm.lock();
         let (rx, id) = swarm.sync(cid, missing);
+        self.waker.wake();
         SyncQuery {
             swarm: Some(self.swarm.clone()),
             id,
@@ -236,7 +247,7 @@ impl<P: StoreParams> NetworkService<P> {
 
     pub async fn provide(&self, cid: Cid) -> Result<()> {
         let rx = {
-            let mut swarm = self.swarm.lock().unwrap();
+            let mut swarm = self.swarm.lock();
             swarm.provide(cid)
         };
         rx.await??;
@@ -244,12 +255,12 @@ impl<P: StoreParams> NetworkService<P> {
     }
 
     pub fn unprovide(&self, cid: Cid) {
-        let mut swarm = self.swarm.lock().unwrap();
+        let mut swarm = self.swarm.lock();
         swarm.unprovide(cid)
     }
 
     pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
-        let swarm = self.swarm.lock().unwrap();
+        let swarm = self.swarm.lock();
         swarm.register_metrics(registry)
     }
 }
@@ -275,7 +286,7 @@ impl<P: StoreParams> Future for GetQuery<P> {
 impl<P: StoreParams> Drop for GetQuery<P> {
     fn drop(&mut self) {
         let swarm = self.swarm.take().unwrap();
-        let mut swarm = swarm.lock().unwrap();
+        let mut swarm = swarm.lock();
         swarm.cancel(self.id);
     }
 }
@@ -312,7 +323,7 @@ impl<P: StoreParams> Stream for SyncQuery<P> {
 impl<P: StoreParams> Drop for SyncQuery<P> {
     fn drop(&mut self) {
         let swarm = self.swarm.take().unwrap();
-        let mut swarm = swarm.lock().unwrap();
+        let mut swarm = swarm.lock();
         swarm.cancel(self.id);
     }
 }

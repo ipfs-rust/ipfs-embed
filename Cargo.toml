@@ -15,7 +15,6 @@ async-global-executor = "2.0.2"
 async-trait = "0.1.42"
 fnv = "1.0.7"
 futures = "0.3.13"
-#ipfs-embed-db = { version = "0.10.0", path = "db" }
 ipfs-embed-net = { version = "0.11.0", path = "net" }
 ipfs-embed-sqlite = { version = "0.11.0", path = "sqlite" }
 libipld = { version = "0.11.0", default-features = false }
@@ -24,15 +23,16 @@ tide = "0.16.0"
 tracing = "0.1.25"
 
 [dev-dependencies]
+anyhow = "1.0.38"
 async-std = { version = "1.9.0", features = ["attributes"] }
 libipld = { version = "0.11.0", default-features = false, features = ["dag-cbor", "derive"] }
 multihash = { version = "0.13.2", default-features = false, features = ["blake3"] }
-sled = "0.34.6"
+rand = "0.8.3"
 tracing-subscriber = "0.2.16"
 
 [profile.release]
 debug = true
 
-[[bench]]
-name = "list"
-harness = false
+#[[bench]]
+#name = "sync"
+#harness = false
