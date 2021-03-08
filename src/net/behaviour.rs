@@ -1,5 +1,5 @@
-use crate::config::NetworkConfig;
-use crate::peers::{AddressBook, AddressSource, PeerInfo};
+use crate::net::config::NetworkConfig;
+use crate::net::peers::{AddressBook, AddressSource, PeerInfo};
 use fnv::FnvHashMap;
 use futures::channel::{mpsc, oneshot};
 use futures::stream::Stream;

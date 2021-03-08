@@ -1,6 +1,3 @@
-[workspace]
-members = ["net", "sqlite"]
-
 [package]
 name = "ipfs-embed"
 version = "0.11.0"
@@ -11,16 +8,40 @@ description = "small embeddable ipfs implementation"
 repository = "https://github.com/ipfs-rust/ipfs-embed"
 
 [dependencies]
+anyhow = "1.0.38"
 async-global-executor = "2.0.2"
+async-io = "1.3.1"
 async-trait = "0.1.47"
 fnv = "1.0.7"
 futures = "0.3.13"
-ipfs-embed-net = { version = "0.11.0", path = "net" }
-ipfs-embed-sqlite = { version = "0.11.0", path = "sqlite" }
+ipfs-sqlite-block-store = "0.2.2"
+ip_network = "0.3.4"
+lazy_static = "1.4.0"
 libipld = { version = "0.11.0", default-features = false }
+libp2p-bitswap = "0.14.0"
+names = "0.11.0"
+parking_lot = "0.11.1"
 prometheus = "0.12.0"
+thiserror = "1.0.24"
 tide = "0.16.0"
 tracing = "0.1.25"
+void = "1.0.2"
+
+[dependencies.libp2p]
+version = "0.35.1"
+default-features = false
+features = [
+    # "deflate",
+    "dns",
+    "gossipsub",
+    "identify",
+    "kad",
+    "mdns",
+    "ping",
+    "pnet",
+    # "quic",
+    "mplex", "noise", "tcp-async-io", "yamux",
+]
 
 [dev-dependencies]
 anyhow = "1.0.38"

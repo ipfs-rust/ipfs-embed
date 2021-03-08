@@ -10,17 +10,16 @@
 //! ipfs.listen_on("/ip4/0.0.0.0/tcp/0".parse()?).await?;
 //! # Ok(()) }
 //! ```
+pub use crate::db::{StorageConfig, TempPin};
+use crate::db::{StorageEvent, StorageService};
+pub use crate::net::{
+    AddressRecord, AddressSource, Key, Multiaddr, NetworkConfig, PeerId, PeerInfo, PeerRecord,
+    Quorum, Record, SyncEvent, SyncQuery,
+};
+use crate::net::{BitswapStore, NetworkService};
 use async_trait::async_trait;
 use futures::channel::mpsc;
 use futures::stream::{Stream, StreamExt};
-pub use ipfs_embed_net::SyncEvent;
-pub use ipfs_embed_net::{
-    AddressRecord, AddressSource, Key, Multiaddr, NetworkConfig, PeerId, PeerInfo, PeerRecord,
-    Quorum, Record, SyncQuery,
-};
-use ipfs_embed_net::{BitswapStore, NetworkService};
-pub use ipfs_embed_sqlite::{StorageConfig, TempPin};
-use ipfs_embed_sqlite::{StorageEvent, StorageService};
 use libipld::codec::References;
 use libipld::error::BlockNotFound;
 pub use libipld::store::DefaultParams;
@@ -30,6 +29,9 @@ use prometheus::{Encoder, Registry};
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
+
+mod db;
+mod net;
 
 /// Ipfs configuration.
 #[derive(Clone, Debug)]
