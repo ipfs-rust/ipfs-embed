@@ -1,4 +1,4 @@
-use crate::behaviour::{GetChannel, NetworkBackendBehaviour, SyncChannel};
+use crate::net::behaviour::{GetChannel, NetworkBackendBehaviour, SyncChannel};
 use futures::stream::Stream;
 use futures::task::AtomicWaker;
 use futures::{future, pin_mut};
@@ -26,9 +26,9 @@ mod behaviour;
 mod config;
 mod peers;
 
-pub use crate::behaviour::{QueryId, SyncEvent};
-pub use crate::config::NetworkConfig;
-pub use crate::peers::{AddressSource, PeerInfo};
+pub use crate::net::behaviour::{QueryId, SyncEvent};
+pub use crate::net::config::NetworkConfig;
+pub use crate::net::peers::{AddressSource, PeerInfo};
 pub use libp2p::gossipsub::{GossipsubEvent, GossipsubMessage, MessageId, Topic, TopicHash};
 pub use libp2p::kad::record::{Key, Record};
 pub use libp2p::kad::{PeerRecord, Quorum};

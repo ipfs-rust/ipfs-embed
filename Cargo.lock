@@ -1400,59 +1400,26 @@ version = "0.11.0"
 dependencies = [
  "anyhow",
  "async-global-executor",
+ "async-io",
  "async-std",
  "async-trait",
  "fnv",
  "futures",
- "ipfs-embed-net",
- "ipfs-embed-sqlite",
- "libipld",
- "libp2p-bitswap",
- "multihash",
- "prometheus",
- "rand 0.8.3",
- "tide",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "ipfs-embed-net"
-version = "0.11.0"
-dependencies = [
- "anyhow",
- "async-global-executor",
- "fnv",
- "futures",
  "ip_network",
+ "ipfs-sqlite-block-store",
  "libipld",
  "libp2p",
  "libp2p-bitswap",
+ "multihash",
  "names",
  "parking_lot",
  "prometheus",
+ "rand 0.8.3",
  "thiserror",
- "tracing",
- "void",
-]
-
-[[package]]
-name = "ipfs-embed-sqlite"
-version = "0.11.0"
-dependencies = [
- "async-global-executor",
- "async-io",
- "async-std",
- "fnv",
- "futures",
- "ipfs-sqlite-block-store",
- "lazy_static",
- "libipld",
- "multihash",
- "parking_lot",
- "prometheus",
+ "tide",
  "tracing",
  "tracing-subscriber",
+ "void",
 ]
 
 [[package]]
