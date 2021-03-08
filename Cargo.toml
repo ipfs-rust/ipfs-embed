@@ -54,7 +54,3 @@ tracing-subscriber = "0.2.16"
 
 [profile.release]
 debug = true
-
-#[[bench]]
-#name = "sync"
-#harness = false
