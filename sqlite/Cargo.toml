@@ -16,7 +16,7 @@ ipfs-sqlite-block-store = "0.2.2"
 lazy_static = "1.4.0"
 libipld = { version = "0.11.0", default-features = false }
 parking_lot = "0.11.1"
-prometheus = "0.11.0"
+prometheus = "0.12.0"
 tracing = "0.1.25"
 
 [dev-dependencies]
