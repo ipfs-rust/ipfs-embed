@@ -2,8 +2,9 @@ use fnv::{FnvHashMap, FnvHashSet};
 use libp2p::core::connection::{ConnectedPoint, ConnectionId};
 use libp2p::identify::IdentifyInfo;
 use libp2p::swarm::protocols_handler::DummyProtocolsHandler;
-use libp2p::swarm::{NetworkBehaviour, NetworkBehaviourAction, PollParameters};
+use libp2p::swarm::{DialPeerCondition, NetworkBehaviour, NetworkBehaviourAction, PollParameters};
 use libp2p::{Multiaddr, PeerId};
+use std::collections::VecDeque;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -50,6 +51,7 @@ pub struct AddressBook {
     local_peer_id: PeerId,
     peers: FnvHashMap<PeerId, PeerInfo>,
     connections: FnvHashSet<(PeerId, Multiaddr)>,
+    events: VecDeque<PeerId>,
 }
 
 impl AddressBook {
@@ -58,6 +60,7 @@ impl AddressBook {
             local_peer_id,
             peers: Default::default(),
             connections: Default::default(),
+            events: Default::default(),
         }
     }
 
@@ -77,6 +80,7 @@ impl AddressBook {
         );
         let info = self.peers.entry(*peer).or_default();
         info.addresses.insert(address, source);
+        self.events.push_back(*peer);
     }
 
     pub fn remove_address(&mut self, peer: &PeerId, address: &Multiaddr) {
@@ -140,7 +144,14 @@ impl NetworkBehaviour for AddressBook {
         _cx: &mut Context,
         _params: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<void::Void, void::Void>> {
-        Poll::Pending
+        if let Some(peer_id) = self.events.pop_front() {
+            Poll::Ready(NetworkBehaviourAction::DialPeer {
+                peer_id,
+                condition: DialPeerCondition::Disconnected,
+            })
+        } else {
+            Poll::Pending
+        }
     }
 
     fn inject_connection_established(
