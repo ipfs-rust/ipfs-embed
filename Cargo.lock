@@ -1518,9 +1518,9 @@ dependencies = [
 
 [[package]]
 name = "libipld-cbor"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6e9d2fdfb493d491dd34337f25f18621de6a77f90ec943cfae49b50f3e85965"
+checksum = "d0786a9762c8f187d5671c8fb4a30300f00ee867553c7f136e384bf5a3afb64f"
 dependencies = [
  "byteorder",
  "libipld-core",
@@ -1608,9 +1608,9 @@ dependencies = [
 
 [[package]]
 name = "libp2p-bitswap"
-version = "0.14.0"
+version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77d10221aeaece6e3531e0268fa4caf8167df92a33664ace523e9cb805336918"
+checksum = "55fd75d1519fb5fb7eb82a57bc6b9d5e05b4252a9af12af48eaae382974811d9"
 dependencies = [
  "async-trait",
  "fnv",

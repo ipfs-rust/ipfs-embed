@@ -13,8 +13,8 @@
 pub use crate::db::{StorageConfig, TempPin};
 use crate::db::{StorageEvent, StorageService};
 pub use crate::net::{
-    AddressRecord, AddressSource, Key, Multiaddr, NetworkConfig, PeerId, PeerInfo, PeerRecord,
-    Quorum, Record, SyncEvent, SyncQuery,
+    AddressRecord, AddressSource, BitswapConfig, Key, Multiaddr, NetworkConfig, PeerId, PeerInfo,
+    PeerRecord, Quorum, Record, SyncEvent, SyncQuery,
 };
 use crate::net::{BitswapStore, NetworkService};
 use async_trait::async_trait;

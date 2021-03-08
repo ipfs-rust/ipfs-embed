@@ -34,7 +34,7 @@ pub use libp2p::kad::record::{Key, Record};
 pub use libp2p::kad::{PeerRecord, Quorum};
 pub use libp2p::swarm::AddressRecord;
 pub use libp2p::{Multiaddr, PeerId};
-pub use libp2p_bitswap::BitswapStore;
+pub use libp2p_bitswap::{BitswapConfig, BitswapStore};
 
 #[derive(Clone)]
 pub struct NetworkService<P: StoreParams> {
@@ -44,7 +44,7 @@ pub struct NetworkService<P: StoreParams> {
 
 impl<P: StoreParams> NetworkService<P> {
     pub async fn new<S: BitswapStore<Params = P>>(config: NetworkConfig, store: S) -> Result<Self> {
-        let transport = DnsConfig::new(TcpConfig::new().nodelay(true))?;
+        let transport = DnsConfig::new(TcpConfig::new().port_reuse(true).nodelay(true))?;
         let transport = if let Some(psk) = config.psk {
             EitherTransport::Left(
                 transport.and_then(move |socket, _| PnetConfig::new(psk).handshake(socket)),

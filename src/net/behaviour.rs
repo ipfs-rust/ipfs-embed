@@ -7,7 +7,7 @@ use ip_network::IpNetwork;
 use libipld::store::StoreParams;
 use libipld::{Cid, Result};
 use libp2p::gossipsub::{
-    Gossipsub, GossipsubConfig, GossipsubEvent, GossipsubMessage, IdentTopic, MessageAuthenticity,
+    Gossipsub, GossipsubEvent, GossipsubMessage, IdentTopic, MessageAuthenticity,
 };
 use libp2p::identify::{Identify, IdentifyEvent};
 use libp2p::kad::record::store::MemoryStore;
@@ -23,7 +23,7 @@ use libp2p::swarm::toggle::Toggle;
 use libp2p::swarm::NetworkBehaviourEventProcess;
 use libp2p::NetworkBehaviour;
 use libp2p::{Multiaddr, PeerId};
-use libp2p_bitswap::{Bitswap, BitswapConfig, BitswapEvent, BitswapStore};
+use libp2p_bitswap::{Bitswap, BitswapEvent, BitswapStore};
 use prometheus::Registry;
 use thiserror::Error;
 
@@ -353,19 +353,13 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             None
         }
         .into();
-        let ping = Ping::default();
         let public = config.public();
+        let ping = Ping::new(config.ping);
         let identify = Identify::new("/ipfs-embed/1.0".into(), config.node_name.clone(), public);
-
-        let mut bitswap_config = BitswapConfig::new();
-        bitswap_config.request_timeout = config.bitswap_request_timeout;
-        bitswap_config.connection_keep_alive = config.bitswap_connection_keepalive;
-        bitswap_config.receive_limit = config.bitswap_receive_limit;
-        let bitswap = Bitswap::new(bitswap_config, store);
-
+        let bitswap = Bitswap::new(config.bitswap, store);
         let gossipsub = Gossipsub::new(
             MessageAuthenticity::Signed(config.node_key.clone()),
-            GossipsubConfig::default(),
+            config.gossipsub,
         )
         .map_err(|err| anyhow::anyhow!("{}", err))?;
 

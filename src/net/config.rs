@@ -1,9 +1,9 @@
 use libp2p::core::PeerId;
+use libp2p::gossipsub::GossipsubConfig;
 use libp2p::identity::{Keypair, PublicKey};
 use libp2p::ping::PingConfig;
 use libp2p::pnet::PreSharedKey;
-use std::num::NonZeroU16;
-use std::time::Duration;
+use libp2p_bitswap::BitswapConfig;
 
 /// Network configuration.
 #[derive(Clone)]
@@ -18,16 +18,14 @@ pub struct NetworkConfig {
     pub enable_kad: bool,
     /// Should we insert non-global addresses into the DHT?
     pub allow_non_globals_in_dht: bool,
-    /// Bitswap request timeout.
-    pub bitswap_request_timeout: Duration,
-    /// Bitswap connection keep alive.
-    pub bitswap_connection_keepalive: Duration,
-    /// Bitswap inbound requests per peer limit.
-    pub bitswap_receive_limit: NonZeroU16,
     /// Pre shared key for pnet.
     pub psk: Option<PreSharedKey>,
     /// Ping config.
     pub ping: PingConfig,
+    /// Gossipsub config.
+    pub gossipsub: GossipsubConfig,
+    /// Bitswap config.
+    pub bitswap: BitswapConfig,
 }
 
 impl NetworkConfig {
@@ -41,11 +39,10 @@ impl NetworkConfig {
             node_name: names::Generator::with_naming(names::Name::Numbered)
                 .next()
                 .unwrap(),
-            bitswap_request_timeout: Duration::from_secs(10),
-            bitswap_connection_keepalive: Duration::from_secs(10),
-            bitswap_receive_limit: NonZeroU16::new(20).expect("20 > 0"),
             psk: None,
             ping: PingConfig::new().with_keep_alive(true),
+            gossipsub: GossipsubConfig::default(),
+            bitswap: BitswapConfig::default(),
         }
     }
 
@@ -74,13 +71,10 @@ impl std::fmt::Debug for NetworkConfig {
             .field("enable_mdns", &self.enable_mdns)
             .field("enable_kad", &self.enable_kad)
             .field("allow_non_globals_in_dht", &self.allow_non_globals_in_dht)
-            .field("bitswap_request_timeout", &self.bitswap_request_timeout)
-            .field(
-                "bitswap_connection_keepalive",
-                &self.bitswap_connection_keepalive,
-            )
-            .field("bitswap_receive_limit", &self.bitswap_receive_limit)
             .field("psk", &self.psk.is_some())
+            .field("ping", &self.ping)
+            .field("gossipsub", &self.gossipsub)
+            .field("bitswap", &self.bitswap)
             .finish()
     }
 }
