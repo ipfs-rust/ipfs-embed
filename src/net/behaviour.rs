@@ -24,6 +24,7 @@ use libp2p::swarm::NetworkBehaviourEventProcess;
 use libp2p::NetworkBehaviour;
 use libp2p::{Multiaddr, PeerId};
 use libp2p_bitswap::{Bitswap, BitswapEvent, BitswapStore};
+use libp2p_broadcast::{BroadcastBehaviour as Broadcast, BroadcastEvent, Topic};
 use prometheus::Registry;
 use thiserror::Error;
 
@@ -89,6 +90,7 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     identify: Identify,
     bitswap: Bitswap<P>,
     gossipsub: Gossipsub,
+    broadcast: Broadcast,
 
     #[behaviour(ignore)]
     provider_queries: FnvHashMap<libp2p::kad::QueryId, libp2p_bitswap::QueryId>,
@@ -332,6 +334,26 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<GossipsubEvent> for NetworkBac
     }
 }
 
+impl<P: StoreParams> NetworkBehaviourEventProcess<BroadcastEvent> for NetworkBackendBehaviour<P> {
+    fn inject_event(&mut self, event: BroadcastEvent) {
+        match event {
+            BroadcastEvent::Received(_peer_id, topic, data) => {
+                let topic = std::str::from_utf8(&topic).unwrap();
+                if let Some(subscribers) = self.subscriptions.get_mut(topic) {
+                    subscribers
+                        .retain(|subscriber| subscriber.unbounded_send(data.to_vec()).is_ok());
+                    if subscribers.is_empty() {
+                        self.unsubscribe(topic);
+                        self.subscriptions.remove(topic);
+                    }
+                }
+            }
+            BroadcastEvent::Subscribed(_, _) => {}
+            BroadcastEvent::Unsubscribed(_, _) => {}
+        }
+    }
+}
+
 impl<P: StoreParams> NetworkBehaviourEventProcess<void::Void> for NetworkBackendBehaviour<P> {
     fn inject_event(&mut self, _event: void::Void) {}
 }
@@ -373,6 +395,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             identify,
             bitswap,
             gossipsub,
+            broadcast: Broadcast::default(),
             provider_queries: Default::default(),
             queries: Default::default(),
             subscriptions: Default::default(),
@@ -505,27 +528,38 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         if let Some(subscribers) = self.subscriptions.get_mut(topic) {
             subscribers.push(tx);
         } else {
-            self.subscriptions.insert(topic.to_string(), vec![tx]);
-            let topic = IdentTopic::new(topic);
+            let gossip_topic = IdentTopic::new(topic);
+            let broadcast_topic = Topic::new(gossip_topic.hash().as_str().as_ref());
+            self.subscriptions.insert(gossip_topic.hash().as_str().to_string(), vec![tx]);
             self.gossipsub
-                .subscribe(&topic)
+                .subscribe(&gossip_topic)
                 .map_err(|err| anyhow::anyhow!("{:?}", err))?;
+            self.broadcast.subscribe(broadcast_topic);
         }
         Ok(rx)
     }
 
     fn unsubscribe(&mut self, topic: &str) {
-        let topic = IdentTopic::new(topic);
-        if let Err(err) = self.gossipsub.unsubscribe(&topic) {
+        let gossip_topic = IdentTopic::new(topic);
+        let broadcast_topic = Topic::new(gossip_topic.hash().as_str().as_ref());
+        if let Err(err) = self.gossipsub.unsubscribe(&gossip_topic) {
             tracing::trace!("unsubscribing from topic {} failed with {:?}", topic, err);
         }
+        self.broadcast.unsubscribe(&broadcast_topic);
     }
 
     pub fn publish(&mut self, topic: &str, msg: Vec<u8>) -> Result<()> {
-        let topic = IdentTopic::new(topic);
+        let gossip_topic = IdentTopic::new(topic);
         self.gossipsub
-            .publish(topic, msg)
+            .publish(gossip_topic, msg)
             .map_err(GossipsubPublishError)?;
+        Ok(())
+    }
+
+    pub fn broadcast(&mut self, topic: &str, msg: Vec<u8>) -> Result<()> {
+        let gossip_topic = IdentTopic::new(topic);
+        let broadcast_topic = Topic::new(gossip_topic.hash().as_str().as_ref());
+        self.broadcast.broadcast(&broadcast_topic, msg.into());
         Ok(())
     }
 
