@@ -216,6 +216,11 @@ where
         self.network.publish(topic, msg)
     }
 
+    /// Publishes a new message in a `topic`, sending the message to all subscribed connected peers.
+    pub fn broadcast(&self, topic: &str, msg: Vec<u8>) -> Result<()> {
+        self.network.broadcast(topic, msg)
+    }
+
     /// Creates a temporary pin in the block store. A temporary pin is not persisted to disk
     /// and is released once it is dropped.
     pub fn create_temp_pin(&self) -> Result<TempPin> {
@@ -626,7 +631,7 @@ mod tests {
 
     #[async_std::test]
     #[allow(clippy::eval_order_dependence)]
-    async fn test_gossip() -> Result<()> {
+    async fn test_gossip_and_broadcast() -> Result<()> {
         tracing_try_init();
         let stores = [
             create_store(false).await?,
@@ -649,13 +654,20 @@ mod tests {
 
         async_std::task::sleep(Duration::from_millis(500)).await;
 
-        stores[0].publish(&topic, b"hello world".to_vec()).unwrap();
+        stores[0].publish(&topic, b"hello gossip".to_vec()).unwrap();
 
         for subscription in &mut subscriptions[1..] {
-            if let Some(msg) = subscription.next().await {
-                assert_eq!(msg.as_slice(), &b"hello world"[..]);
-            }
+            let msg = subscription.next().await.unwrap();
+            assert_eq!(msg.as_slice(), &b"hello gossip"[..]);
         }
+
+        stores[0].broadcast(&topic, b"hello broadcast".to_vec()).unwrap();
+
+        for subscription in &mut subscriptions[1..] {
+            let msg = subscription.next().await.unwrap();
+            assert_eq!(msg.as_slice(), &b"hello broadcast"[..]);
+        }
+
         Ok(())
     }
 }

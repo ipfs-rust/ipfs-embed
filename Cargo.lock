@@ -1411,6 +1411,7 @@ dependencies = [
  "libipld",
  "libp2p",
  "libp2p-bitswap",
+ "libp2p-broadcast",
  "multihash",
  "names",
  "parking_lot",
@@ -1624,6 +1625,17 @@ dependencies = [
  "thiserror",
  "tracing",
  "unsigned-varint 0.7.0",
+]
+
+[[package]]
+name = "libp2p-broadcast"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff54ce08f02a8ff5826fccf317246c453358c30cefc9a93584db37cacaf77ed6"
+dependencies = [
+ "fnv",
+ "futures",
+ "libp2p",
 ]
 
 [[package]]

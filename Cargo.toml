@@ -26,6 +26,7 @@ thiserror = "1.0.24"
 tide = "0.16.0"
 tracing = "0.1.25"
 void = "1.0.2"
+libp2p-broadcast = "0.1.0"
 
 [dependencies.libp2p]
 version = "0.35.1"

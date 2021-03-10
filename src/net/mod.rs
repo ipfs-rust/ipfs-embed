@@ -218,6 +218,11 @@ impl<P: StoreParams> NetworkService<P> {
         swarm.publish(topic, msg)
     }
 
+    pub fn broadcast(&self, topic: &str, msg: Vec<u8>) -> Result<()> {
+        let mut swarm = self.swarm.lock();
+        swarm.broadcast(topic, msg)
+    }
+
     pub fn remove_record(&self, key: &Key) {
         let mut swarm = self.swarm.lock();
         swarm.remove_record(key)
