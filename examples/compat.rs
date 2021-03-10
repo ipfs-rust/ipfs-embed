@@ -3,9 +3,9 @@ use ipfs_embed::{Config, Ipfs, Multiaddr, PeerId};
 use libipld::{store::StoreParams, Cid, IpldCodec};
 
 #[derive(Debug, Clone)]
-struct SP;
+struct Sp;
 
-impl StoreParams for SP {
+impl StoreParams for Sp {
     type Hashes = libipld::multihash::Code;
     type Codecs = IpldCodec;
     const MAX_BLOCK_SIZE: usize = 1024 * 1024 * 4;
@@ -21,7 +21,7 @@ fn tracing_try_init() {
 async fn main() -> anyhow::Result<()> {
     tracing_try_init();
     let config = Config::new(None, 1024 * 1024);
-    let ipfs = Ipfs::<SP>::new(config).await?;
+    let ipfs = Ipfs::<Sp>::new(config).await?;
     let peer: PeerId = "QmRSGx67Kq8w7xSBDia7hQfbfuvauMQGgxcwSWw976x4BS".parse()?;
     let addr: Multiaddr = "/ip4/54.173.33.96/tcp/4001".parse()?;
     ipfs.dial_address(&peer, addr)?;

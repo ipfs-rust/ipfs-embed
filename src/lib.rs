@@ -109,7 +109,11 @@ where
                 network2.unprovide(cid);
             }
         });
-        Ok(Self { storage, network, _event_task: Arc::new(event_task) })
+        Ok(Self {
+            storage,
+            network,
+            _event_task: Arc::new(event_task),
+        })
     }
 
     /// Returns the local `PeerId`.

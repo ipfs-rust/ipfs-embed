@@ -110,21 +110,22 @@ where
         let gc_interval = config.gc_interval;
         let gc_min_blocks = config.gc_min_blocks;
         let gc_target_duration = config.gc_target_duration;
-        let gc_task = async_global_executor::spawn(async_global_executor::spawn_blocking(move || {
-            std::thread::sleep(gc_interval / 2);
-            loop {
-                tracing::debug!("gc_loop running incremental gc");
-                gc.lock()
-                    .incremental_gc(gc_min_blocks, gc_target_duration)
-                    .ok();
+        let gc_task =
+            async_global_executor::spawn(async_global_executor::spawn_blocking(move || {
                 std::thread::sleep(gc_interval / 2);
-                tracing::debug!("gc_loop running incremental delete orphaned");
-                gc.lock()
-                    .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)
-                    .ok();
-                std::thread::sleep(gc_interval / 2);
-            }
-        }));
+                loop {
+                    tracing::debug!("gc_loop running incremental gc");
+                    gc.lock()
+                        .incremental_gc(gc_min_blocks, gc_target_duration)
+                        .ok();
+                    std::thread::sleep(gc_interval / 2);
+                    tracing::debug!("gc_loop running incremental delete orphaned");
+                    gc.lock()
+                        .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)
+                        .ok();
+                    std::thread::sleep(gc_interval / 2);
+                }
+            }));
         Ok(Self {
             _marker: PhantomData,
             gc_target_duration: config.gc_target_duration,
