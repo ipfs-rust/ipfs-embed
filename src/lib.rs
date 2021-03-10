@@ -17,6 +17,8 @@ pub use crate::net::{
     PeerRecord, Quorum, Record, SyncEvent, SyncQuery,
 };
 use crate::net::{BitswapStore, NetworkService};
+#[cfg(feature = "telemetry")]
+pub use crate::telemetry::telemetry;
 use async_trait::async_trait;
 use futures::channel::mpsc;
 use futures::stream::{Stream, StreamExt};
@@ -25,13 +27,14 @@ use libipld::error::BlockNotFound;
 pub use libipld::store::DefaultParams;
 use libipld::store::{Store, StoreParams};
 use libipld::{Block, Cid, Ipld, Result};
-use prometheus::{Encoder, Registry};
+use prometheus::Registry;
 use std::future::Future;
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 mod db;
 mod net;
+#[cfg(feature = "telemetry")]
+mod telemetry;
 
 /// Ipfs configuration.
 #[derive(Clone, Debug)]
@@ -314,35 +317,6 @@ where
         self.network.register_metrics(registry)?;
         Ok(())
     }
-}
-
-/// Telemetry server
-pub fn telemetry<P: StoreParams>(addr: SocketAddr, ipfs: &Ipfs<P>) -> Result<()>
-where
-    Ipld: References<P::Codecs>,
-{
-    let registry = prometheus::default_registry();
-    ipfs.register_metrics(registry)?;
-    let mut s = tide::new();
-    s.at("/metrics").get(get_metric);
-    async_global_executor::spawn(async move { s.listen(addr).await }).detach();
-    Ok(())
-}
-
-/// Return metrics to prometheus
-async fn get_metric(_: tide::Request<()>) -> tide::Result {
-    let encoder = prometheus::TextEncoder::new();
-    let metric_families = prometheus::gather();
-    let mut buffer = vec![];
-
-    encoder.encode(&metric_families, &mut buffer).unwrap();
-
-    let response = tide::Response::builder(200)
-        .content_type("text/plain; version=0.0.4")
-        .body(tide::Body::from(buffer))
-        .build();
-
-    Ok(response)
 }
 
 #[async_trait]
@@ -661,7 +635,9 @@ mod tests {
             assert_eq!(msg.as_slice(), &b"hello gossip"[..]);
         }
 
-        stores[0].broadcast(&topic, b"hello broadcast".to_vec()).unwrap();
+        stores[0]
+            .broadcast(&topic, b"hello broadcast".to_vec())
+            .unwrap();
 
         for subscription in &mut subscriptions[1..] {
             let msg = subscription.next().await.unwrap();

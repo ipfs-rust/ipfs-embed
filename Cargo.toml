@@ -7,6 +7,9 @@ license = "MIT OR Apache-2.0"
 description = "small embeddable ipfs implementation"
 repository = "https://github.com/ipfs-rust/ipfs-embed"
 
+[features]
+telemetry = ["tide"]
+
 [dependencies]
 anyhow = "1.0.38"
 async-global-executor = "2.0.2"
@@ -23,7 +26,7 @@ names = "0.11.0"
 parking_lot = "0.11.1"
 prometheus = "0.12.0"
 thiserror = "1.0.24"
-tide = "0.16.0"
+tide = { version = "0.16.0", optional = true }
 tracing = "0.1.25"
 void = "1.0.2"
 libp2p-broadcast = "0.1.0"
