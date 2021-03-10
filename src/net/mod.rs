@@ -44,7 +44,10 @@ pub struct NetworkService<P: StoreParams> {
 
 impl<P: StoreParams> NetworkService<P> {
     pub async fn new<S: BitswapStore<Params = P>>(config: NetworkConfig, store: S) -> Result<Self> {
-        let transport = DnsConfig::new(TcpConfig::new()/*.port_reuse(true)*/.nodelay(true))?;
+        let transport = DnsConfig::new(
+            TcpConfig::new() /*.port_reuse(true)*/
+                .nodelay(true),
+        )?;
         let transport = if let Some(psk) = config.psk {
             EitherTransport::Left(
                 transport.and_then(move |socket, _| PnetConfig::new(psk).handshake(socket)),

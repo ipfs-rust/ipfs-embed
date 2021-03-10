@@ -530,7 +530,8 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         } else {
             let gossip_topic = IdentTopic::new(topic);
             let broadcast_topic = Topic::new(gossip_topic.hash().as_str().as_ref());
-            self.subscriptions.insert(gossip_topic.hash().as_str().to_string(), vec![tx]);
+            self.subscriptions
+                .insert(gossip_topic.hash().as_str().to_string(), vec![tx]);
             self.gossipsub
                 .subscribe(&gossip_topic)
                 .map_err(|err| anyhow::anyhow!("{:?}", err))?;
