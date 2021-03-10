@@ -133,9 +133,13 @@ impl NetworkBehaviour for AddressBook {
         }
     }
 
-    fn inject_connected(&mut self, _peer_id: &PeerId) {}
+    fn inject_connected(&mut self, peer_id: &PeerId) {
+        tracing::trace!("connected to {}", peer_id);
+    }
 
-    fn inject_disconnected(&mut self, _peer_id: &PeerId) {}
+    fn inject_disconnected(&mut self, peer_id: &PeerId) {
+        tracing::trace!("disconnected from {}", peer_id);
+    }
 
     fn inject_event(&mut self, _peer_id: PeerId, _connection: ConnectionId, _event: void::Void) {}
 
@@ -191,14 +195,16 @@ impl NetworkBehaviour for AddressBook {
         &mut self,
         peer_id: Option<&PeerId>,
         addr: &Multiaddr,
-        _error: &dyn std::error::Error,
+        error: &dyn std::error::Error,
     ) {
         if let Some(peer_id) = peer_id {
+            tracing::trace!("inject_addr_reach_failure {}", error);
             self.remove_address(peer_id, addr);
         }
     }
 
     fn inject_dial_failure(&mut self, peer_id: &PeerId) {
+        tracing::trace!("dial failure {}", peer_id);
         self.peers.remove(peer_id);
     }
 }
