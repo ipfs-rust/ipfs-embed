@@ -1,4 +1,5 @@
 use crate::net::behaviour::{GetChannel, NetworkBackendBehaviour, SyncChannel};
+use async_global_executor::Task;
 use futures::stream::Stream;
 use futures::task::AtomicWaker;
 use futures::{future, pin_mut};
@@ -40,6 +41,7 @@ pub use libp2p_bitswap::{BitswapConfig, BitswapStore};
 pub struct NetworkService<P: StoreParams> {
     swarm: Arc<Mutex<Swarm<NetworkBackendBehaviour<P>>>>,
     waker: Arc<AtomicWaker>,
+    _swarm_task: Arc<Task<()>>,
 }
 
 impl<P: StoreParams> NetworkService<P> {
@@ -80,7 +82,7 @@ impl<P: StoreParams> NetworkService<P> {
         let swarm2 = swarm.clone();
         let waker = Arc::new(AtomicWaker::new());
         let waker2 = waker.clone();
-        async_global_executor::spawn::<_, ()>(future::poll_fn(move |cx| {
+        let swarm_task = async_global_executor::spawn::<_, ()>(future::poll_fn(move |cx| {
             waker.register(cx.waker());
             let mut guard = swarm.lock();
             while {
@@ -89,12 +91,12 @@ impl<P: StoreParams> NetworkService<P> {
                 swarm.poll_next(cx).is_ready()
             } {}
             Poll::Pending
-        }))
-        .detach();
+        }));
 
         Ok(Self {
             swarm: swarm2,
             waker: waker2,
+            _swarm_task: Arc::new(swarm_task),
         })
     }
 

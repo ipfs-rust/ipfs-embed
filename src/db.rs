@@ -1,3 +1,4 @@
+use async_global_executor::Task;
 use futures::channel::mpsc;
 pub use ipfs_sqlite_block_store::TempPin;
 use ipfs_sqlite_block_store::{
@@ -83,6 +84,7 @@ pub struct StorageService<S: StoreParams> {
     store: Arc<Mutex<BlockStore>>,
     gc_target_duration: Duration,
     gc_min_blocks: usize,
+    _gc_task: Arc<Task<()>>,
 }
 
 impl<S: StoreParams> StorageService<S>
@@ -108,7 +110,7 @@ where
         let gc_interval = config.gc_interval;
         let gc_min_blocks = config.gc_min_blocks;
         let gc_target_duration = config.gc_target_duration;
-        async_global_executor::spawn(async_global_executor::spawn_blocking(move || {
+        let gc_task = async_global_executor::spawn(async_global_executor::spawn_blocking(move || {
             std::thread::sleep(gc_interval / 2);
             loop {
                 tracing::debug!("gc_loop running incremental gc");
@@ -122,13 +124,13 @@ where
                     .ok();
                 std::thread::sleep(gc_interval / 2);
             }
-        }))
-        .detach();
+        }));
         Ok(Self {
             _marker: PhantomData,
             gc_target_duration: config.gc_target_duration,
             gc_min_blocks: config.gc_min_blocks,
             store,
+            _gc_task: Arc::new(gc_task),
         })
     }
 

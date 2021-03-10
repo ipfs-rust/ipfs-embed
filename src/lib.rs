@@ -19,6 +19,7 @@ pub use crate::net::{
 use crate::net::{BitswapStore, NetworkService};
 #[cfg(feature = "telemetry")]
 pub use crate::telemetry::telemetry;
+use async_global_executor::Task;
 use async_trait::async_trait;
 use futures::channel::mpsc;
 use futures::stream::{Stream, StreamExt};
@@ -61,6 +62,7 @@ impl Config {
 pub struct Ipfs<P: StoreParams> {
     storage: StorageService<P>,
     network: NetworkService<P>,
+    _event_task: Arc<Task<()>>,
 }
 
 struct BitswapStorage<P: StoreParams>(StorageService<P>);
@@ -102,13 +104,12 @@ where
         let bitswap = BitswapStorage(storage.clone());
         let network = NetworkService::new(config.network, bitswap).await?;
         let network2 = network.clone();
-        async_global_executor::spawn(async move {
+        let event_task = async_global_executor::spawn(async move {
             while let Some(StorageEvent::Remove(cid)) = storage_events.next().await {
                 network2.unprovide(cid);
             }
-        })
-        .detach();
-        Ok(Self { storage, network })
+        });
+        Ok(Self { storage, network, _event_task: Arc::new(event_task) })
     }
 
     /// Returns the local `PeerId`.
