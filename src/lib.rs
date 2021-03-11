@@ -36,6 +36,8 @@ mod db;
 mod net;
 #[cfg(feature = "telemetry")]
 mod telemetry;
+#[cfg(test)]
+mod test_util;
 
 /// Ipfs configuration.
 #[derive(Clone, Debug)]
@@ -403,6 +405,7 @@ mod tests {
         let mut network = NetworkConfig::new();
         network.enable_mdns = enable_mdns;
         network.allow_non_globals_in_dht = true;
+        network.bitswap.receive_limit = std::num::NonZeroU16::new(u16::MAX).unwrap();
 
         let ipfs = Ipfs::new(Config { storage, network }).await?;
         ipfs.listen_on("/ip4/127.0.0.1/tcp/0".parse()?).await?;
@@ -649,6 +652,84 @@ mod tests {
             assert_eq!(msg.as_slice(), &b"hello broadcast"[..]);
         }
 
+        Ok(())
+    }
+
+    #[async_std::test]
+    async fn test_bitswap_sync_chain() -> Result<()> {
+        use std::time::Instant;
+        tracing_try_init();
+        let a = create_store(true).await?;
+        let b = create_store(true).await?;
+        let root = alias!(root);
+
+        let (cid, blocks) = test_util::build_tree(1, 1000)?;
+        a.alias(root, Some(&cid))?;
+        b.alias(root, Some(&cid))?;
+
+        let size: usize = blocks.iter().map(|block| block.data().len()).sum();
+        tracing::info!("chain built {} blocks, {} bytes", blocks.len(), size);
+        for block in blocks.iter() {
+            let _ = a.insert(block)?;
+        }
+        a.flush().await?;
+
+        let t0 = Instant::now();
+        let _ = b
+            .sync(&cid)
+            .for_each(|x| async move { tracing::debug!("sync progress {:?}", x) })
+            .await;
+        b.flush().await?;
+        tracing::info!(
+            "chain sync complete {} ms {} blocks {} bytes!",
+            t0.elapsed().as_millis(),
+            blocks.len(),
+            size
+        );
+        for block in blocks {
+            let data = b.get(block.cid())?;
+            assert_eq!(data, block);
+        }
+
+        Ok(())
+    }
+
+    #[async_std::test]
+    #[ignore]
+    async fn test_bitswap_sync_tree() -> Result<()> {
+        use std::time::Instant;
+        tracing_try_init();
+        let a = create_store(true).await?;
+        let b = create_store(true).await?;
+        let root = alias!(root);
+
+        let (cid, blocks) = test_util::build_tree(10, 4)?;
+        a.alias(root, Some(&cid))?;
+        b.alias(root, Some(&cid))?;
+
+        let size: usize = blocks.iter().map(|block| block.data().len()).sum();
+        tracing::info!("chain built {} blocks, {} bytes", blocks.len(), size);
+        for block in blocks.iter() {
+            let _ = a.insert(block)?;
+        }
+        a.flush().await?;
+
+        let t0 = Instant::now();
+        let _ = b
+            .sync(&cid)
+            .for_each(|x| async move { tracing::debug!("sync progress {:?}", x) })
+            .await;
+        b.flush().await?;
+        tracing::info!(
+            "tree sync complete {} ms {} blocks {} bytes!",
+            t0.elapsed().as_millis(),
+            blocks.len(),
+            size
+        );
+        for block in blocks {
+            let data = b.get(block.cid())?;
+            assert_eq!(data, block);
+        }
         Ok(())
     }
 }
