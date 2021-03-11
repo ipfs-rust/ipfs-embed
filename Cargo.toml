@@ -1,6 +1,6 @@
 [package]
 name = "ipfs-embed"
-version = "0.13.0"
+version = "0.14.0"
 authors = ["David Craven <david@craven.ch>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
