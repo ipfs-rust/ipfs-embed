@@ -54,7 +54,7 @@ impl From<libp2p::kad::QueryId> for QueryId {
 pub enum SyncEvent {
     /// Signals that the sync query made progress and counts the amount of subtrees to
     /// sync. If it is syncing a linked list, it will always be 1.
-    Progress(usize),
+    Progress { missing: usize },
     /// Signals completion of the sync query and if it was completed successfully.
     Complete(Result<()>),
 }
@@ -238,7 +238,7 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<BitswapEvent> for NetworkBacke
             }
             BitswapEvent::Progress(id, missing) => {
                 if let Some(QueryChannel::Sync(ch)) = self.queries.get(&id.into()) {
-                    ch.unbounded_send(SyncEvent::Progress(missing)).ok();
+                    ch.unbounded_send(SyncEvent::Progress { missing }).ok();
                 }
             }
             BitswapEvent::Complete(id, result) => match self.queries.remove(&id.into()) {
