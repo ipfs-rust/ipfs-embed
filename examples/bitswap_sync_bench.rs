@@ -10,7 +10,7 @@ use tempdir::TempDir;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "bench")]
-struct Opt {
+struct BenchOpts {
     #[structopt(long, default_value = "1")]
     n_providers: usize,
 
@@ -116,8 +116,11 @@ async fn run_test(
     assert!(n_providers < n_nodes);
 
     let temp_dir = if on_disk {
-        Some(TempDir::new(name)?)
+        let res = TempDir::new(name)?;
+        println!("creating test database on disk in {}", res.path().display());
+        Some(res)
     } else {
+        println!("creating test database in memory");
         None
     };
 
@@ -129,6 +132,9 @@ async fn run_test(
     }
 
     // create some blocks in each node that will not participate in the sync
+    if n_spam > 0 {
+        println!("creating spam data");
+    }
     for i in 0..n_spam {
         let alias = format!("passive-{}", i);
         let (cid, blocks) = create_test_data()?;
@@ -142,6 +148,7 @@ async fn run_test(
     }
 
     // create the blocks to be synced in n_providers nodes
+    println!("creating test data");
     let root = alias!(root);
     let (cid, blocks) = create_test_data()?;
     for i in 0..n_providers {
@@ -190,6 +197,6 @@ async fn run_test(
 #[async_std::main]
 async fn main() -> Result<()> {
     tracing_try_init();
-    let opt = Opt::from_args();
+    let opt = BenchOpts::from_args();
     run_test("2 nodes", opt.n_nodes, opt.n_providers, opt.n_spam, !opt.in_memory, || build_tree(10, 4)).await
 }
