@@ -147,7 +147,7 @@ where
         iter: impl IntoIterator<Item = Cid> + Send + 'static,
     ) -> Result<()> {
         observe_query("temp_pin", || {
-            self.store.lock().assign_temp_pin(&temp, iter)
+            self.store.lock().extend_temp_pin(&temp, iter)
         })
     }
 
