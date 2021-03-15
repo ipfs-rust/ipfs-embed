@@ -1,6 +1,6 @@
 [package]
 name = "ipfs-embed"
-version = "0.15.0"
+version = "0.16.0"
 authors = ["David Craven <david@craven.ch>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
@@ -21,7 +21,7 @@ ipfs-sqlite-block-store = "0.3.0"
 ip_network = "0.3.4"
 lazy_static = "1.4.0"
 libipld = { version = "0.11.0", default-features = false }
-libp2p-bitswap = "0.14.1"
+libp2p-bitswap = "0.15.0"
 names = "0.11.0"
 parking_lot = "0.11.1"
 prometheus = "0.12.0"
@@ -51,10 +51,10 @@ features = [
 anyhow = "1.0.38"
 async-std = { version = "1.9.0", features = ["attributes"] }
 libipld = { version = "0.11.0", default-features = false, features = ["dag-cbor", "dag-pb", "derive"] }
-libp2p-bitswap = { version = "0.14.1", default-features = false, features = ["compat"] }
+libp2p-bitswap = { version = "0.15.0", default-features = false, features = ["compat"] }
 multihash = { version = "0.13.2", default-features = false, features = ["blake3"] }
 rand = "0.8.3"
-tracing-subscriber = "0.2.16"
+tracing-subscriber = "0.2.17"
 
 [profile.release]
 debug = true

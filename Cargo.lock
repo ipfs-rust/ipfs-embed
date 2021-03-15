@@ -1276,9 +1276,9 @@ dependencies = [
 
 [[package]]
 name = "http-client"
-version = "6.3.4"
+version = "6.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98c12a6a451357392f3307325e9a15cbd27451abdaad96e74c30ea8786f615c4"
+checksum = "5566ecc26bc6b04e773e680d66141fced78e091ad818e420d726c152b05a64ff"
 dependencies = [
  "async-trait",
  "cfg-if 1.0.0",
@@ -1396,7 +1396,7 @@ checksum = "2ee15951c035f79eddbef745611ec962f63f4558f1dadf98ab723cc603487c6f"
 
 [[package]]
 name = "ipfs-embed"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "async-global-executor",
@@ -1609,9 +1609,9 @@ dependencies = [
 
 [[package]]
 name = "libp2p-bitswap"
-version = "0.14.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55fd75d1519fb5fb7eb82a57bc6b9d5e05b4252a9af12af48eaae382974811d9"
+checksum = "5729801c3ffb55b72e466448fdb395b8ed489a82180557639bd9c22deef7ac2b"
 dependencies = [
  "async-trait",
  "fnv",
@@ -2610,9 +2610,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.4.4"
+version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54fd1046a3107eb58f42de31d656fee6853e5d276c455fd943742dce89fc3dd3"
+checksum = "957056ecddbeba1b26965114e191d2e8589ce74db242b6ea25fc4062427a5c19"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -3024,9 +3024,9 @@ checksum = "45f6ee7c7b87caf59549e9fe45d6a69c75c8019e79e212a835c5da0e92f0ba08"
 
 [[package]]
 name = "syn"
-version = "1.0.63"
+version = "1.0.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fd9bc7ccc2688b3344c2f48b9b546648b25ce0b20fc717ee7fa7981a8ca9717"
+checksum = "3fd9d1e9976102a03c542daa2eff1b43f9d72306342f3f8b3ed5fb8908195d6f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3197,9 +3197,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-attributes"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41768be5b9f3489491825f56f01f25290aa1d3e7cc97e182d4d34360493ba6fa"
+checksum = "c42e6fa53307c8a17e4ccd4dc81cf5ec38db9209f59b222210375b54ee40d1e2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3238,9 +3238,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-subscriber"
-version = "0.2.16"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ab8966ac3ca27126141f7999361cc97dd6fb4b71da04c02044fa9045d98bb96"
+checksum = "705096c6f83bf68ea5d357a6aa01829ddbdac531b357b45abeca842938085baa"
 dependencies = [
  "ansi_term",
  "chrono",
@@ -3260,9 +3260,9 @@ dependencies = [
 
 [[package]]
 name = "typenum"
-version = "1.12.0"
+version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "373c8a200f9e67a0c95e62a4f52fbf80c23b4381c05a17845531982fa99e6b33"
+checksum = "879f6906492a7cd215bfa4cf595b600146ccfac0c79bcbd1f3000162af5e8b06"
 
 [[package]]
 name = "uint"

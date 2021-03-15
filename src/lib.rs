@@ -405,7 +405,6 @@ mod tests {
         let mut network = NetworkConfig::new();
         network.enable_mdns = enable_mdns;
         network.allow_non_globals_in_dht = true;
-        network.bitswap.receive_limit = std::num::NonZeroU16::new(u16::MAX).unwrap();
 
         let ipfs = Ipfs::new(Config { storage, network }).await?;
         ipfs.listen_on("/ip4/127.0.0.1/tcp/0".parse()?).await?;
@@ -695,7 +694,6 @@ mod tests {
     }
 
     #[async_std::test]
-    #[ignore]
     async fn test_bitswap_sync_tree() -> Result<()> {
         use std::time::Instant;
         tracing_try_init();
