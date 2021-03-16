@@ -1,13 +1,22 @@
 use fnv::FnvHashMap;
+use futures::channel::mpsc;
+use futures::stream::Stream;
 use libipld::DagCbor;
 use libp2p::core::connection::{ConnectedPoint, ConnectionId};
 use libp2p::identify::IdentifyInfo;
 use libp2p::swarm::protocols_handler::DummyProtocolsHandler;
-use libp2p::swarm::{DialPeerCondition, NetworkBehaviour, NetworkBehaviourAction, PollParameters};
+use libp2p::swarm::{NetworkBehaviour, NetworkBehaviourAction, PollParameters};
 use libp2p::{Multiaddr, PeerId};
-use std::collections::VecDeque;
 use std::task::{Context, Poll};
 use std::time::Duration;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Event {
+    NewListenAddr(Multiaddr),
+    ExpiredListenAddr(Multiaddr),
+    NewExternalAddr(Multiaddr),
+    Discovered(PeerId),
+}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PeerInfo {
@@ -54,7 +63,7 @@ pub struct AddressBook {
     local_peer_id: PeerId,
     peers: FnvHashMap<PeerId, PeerInfo>,
     connections: FnvHashMap<PeerId, Multiaddr>,
-    events: VecDeque<PeerId>,
+    event_stream: Vec<mpsc::UnboundedSender<Event>>,
 }
 
 impl AddressBook {
@@ -63,7 +72,7 @@ impl AddressBook {
             local_peer_id,
             peers: Default::default(),
             connections: Default::default(),
-            events: Default::default(),
+            event_stream: Default::default(),
         }
     }
 
@@ -84,7 +93,7 @@ impl AddressBook {
         let info = self.peers.entry(*peer).or_default();
         info.addresses.insert(address.clone(), source);
         if !self.is_connected(peer) {
-            self.events.push_back(*peer);
+            self.notify(Event::Discovered(*peer));
         }
     }
 
@@ -124,6 +133,17 @@ impl AddressBook {
             info.protocols = identify.protocols;
         }
     }
+
+    pub fn event_stream(&mut self) -> impl Stream<Item = Event> {
+        let (tx, rx) = mpsc::unbounded();
+        self.event_stream.push(tx);
+        rx
+    }
+
+    pub fn notify(&mut self, event: Event) {
+        self.event_stream
+            .retain(|tx| tx.unbounded_send(event.clone()).is_ok());
+    }
 }
 
 impl NetworkBehaviour for AddressBook {
@@ -157,14 +177,7 @@ impl NetworkBehaviour for AddressBook {
         _cx: &mut Context,
         _params: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<void::Void, void::Void>> {
-        if let Some(peer_id) = self.events.pop_front() {
-            Poll::Ready(NetworkBehaviourAction::DialPeer {
-                peer_id,
-                condition: DialPeerCondition::Disconnected,
-            })
-        } else {
-            Poll::Pending
-        }
+        Poll::Pending
     }
 
     fn inject_connection_established(
@@ -212,5 +225,17 @@ impl NetworkBehaviour for AddressBook {
     fn inject_dial_failure(&mut self, peer_id: &PeerId) {
         tracing::trace!("dial failure {}", peer_id);
         self.peers.remove(peer_id);
+    }
+
+    fn inject_new_listen_addr(&mut self, addr: &Multiaddr) {
+        self.notify(Event::NewListenAddr(addr.clone()));
+    }
+
+    fn inject_expired_listen_addr(&mut self, addr: &Multiaddr) {
+        self.notify(Event::ExpiredListenAddr(addr.clone()));
+    }
+
+    fn inject_new_external_addr(&mut self, addr: &Multiaddr) {
+        self.notify(Event::NewExternalAddr(addr.clone()));
     }
 }

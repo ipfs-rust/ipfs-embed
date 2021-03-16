@@ -13,8 +13,8 @@
 pub use crate::db::{StorageConfig, TempPin};
 use crate::db::{StorageEvent, StorageService};
 pub use crate::net::{
-    AddressRecord, AddressSource, BitswapConfig, Key, Multiaddr, NetworkConfig, PeerId, PeerInfo,
-    PeerRecord, Quorum, Record, SyncEvent, SyncQuery,
+    AddressRecord, AddressSource, BitswapConfig, Event, Key, Multiaddr, NetworkConfig, PeerId,
+    PeerInfo, PeerRecord, Quorum, Record, SyncEvent, SyncQuery,
 };
 use crate::net::{BitswapStore, NetworkService};
 #[cfg(feature = "telemetry")]
@@ -328,6 +328,11 @@ where
         self.storage.register_metrics(registry)?;
         self.network.register_metrics(registry)?;
         Ok(())
+    }
+
+    /// Subscribes to the event stream.
+    pub fn event_stream(&self) -> impl Stream<Item = Event> {
+        self.network.event_stream()
     }
 }
 
