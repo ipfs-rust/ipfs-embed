@@ -91,7 +91,7 @@ impl AddressBook {
             source
         );
         let info = self.peers.entry(*peer).or_default();
-        info.addresses.insert(address.clone(), source);
+        info.addresses.insert(address, source);
         if !self.is_connected(peer) {
             self.notify(Event::Discovered(*peer));
         }
