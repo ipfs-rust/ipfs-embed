@@ -185,6 +185,11 @@ where
         self.network.connections()
     }
 
+    /// Returns `true` if there is a connection to peer.
+    pub fn is_connected(&self, peer: &PeerId) -> bool {
+        self.network.is_connected(peer)
+    }
+
     /// Returns the `PeerInfo` of a peer.
     pub fn peer_info(&self, peer: &PeerId) -> Option<PeerInfo> {
         self.network.peer_info(peer)

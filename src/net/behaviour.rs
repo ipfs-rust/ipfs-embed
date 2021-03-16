@@ -440,6 +440,10 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         self.peers.connections()
     }
 
+    pub fn is_connected(&self, peer: &PeerId) -> bool {
+        self.peers.is_connected(peer)
+    }
+
     pub fn bootstrap(&mut self) -> BootstrapChannel {
         let (tx, rx) = oneshot::channel();
         if let Some(kad) = self.kad.as_mut() {

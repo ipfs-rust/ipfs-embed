@@ -176,6 +176,11 @@ impl<P: StoreParams> NetworkService<P> {
             .collect()
     }
 
+    pub fn is_connected(&self, peer: &PeerId) -> bool {
+        let swarm = self.swarm.lock();
+        swarm.is_connected(peer)
+    }
+
     pub fn peer_info(&self, peer: &PeerId) -> Option<PeerInfo> {
         let swarm = self.swarm.lock();
         swarm.info(peer).cloned()

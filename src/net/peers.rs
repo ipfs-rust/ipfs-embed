@@ -1,4 +1,5 @@
-use fnv::{FnvHashMap, FnvHashSet};
+use fnv::FnvHashMap;
+use libipld::DagCbor;
 use libp2p::core::connection::{ConnectedPoint, ConnectionId};
 use libp2p::identify::IdentifyInfo;
 use libp2p::swarm::protocols_handler::DummyProtocolsHandler;
@@ -39,10 +40,12 @@ impl PeerInfo {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, DagCbor, Debug, Eq, PartialEq)]
+#[ipld(repr = "int")]
 pub enum AddressSource {
     Mdns,
     Kad,
+    Peer,
     User,
 }
 
@@ -50,7 +53,7 @@ pub enum AddressSource {
 pub struct AddressBook {
     local_peer_id: PeerId,
     peers: FnvHashMap<PeerId, PeerInfo>,
-    connections: FnvHashSet<(PeerId, Multiaddr)>,
+    connections: FnvHashMap<PeerId, Multiaddr>,
     events: VecDeque<PeerId>,
 }
 
@@ -79,8 +82,10 @@ impl AddressBook {
             source
         );
         let info = self.peers.entry(*peer).or_default();
-        info.addresses.insert(address, source);
-        self.events.push_back(*peer);
+        info.addresses.insert(address.clone(), source);
+        if !self.is_connected(peer) {
+            self.events.push_back(*peer);
+        }
     }
 
     pub fn remove_address(&mut self, peer: &PeerId, address: &Multiaddr) {
@@ -96,6 +101,10 @@ impl AddressBook {
 
     pub fn connections(&self) -> impl Iterator<Item = (&PeerId, &Multiaddr)> + '_ {
         self.connections.iter().map(|(peer, addr)| (peer, addr))
+    }
+
+    pub fn is_connected(&self, peer: &PeerId) -> bool {
+        self.connections.contains_key(peer) || peer == self.local_peer_id()
     }
 
     pub fn info(&self, peer_id: &PeerId) -> Option<&PeerInfo> {
@@ -164,31 +173,28 @@ impl NetworkBehaviour for AddressBook {
         _: &ConnectionId,
         conn: &ConnectedPoint,
     ) {
-        let conn = (*peer_id, conn.get_remote_address().clone());
-        self.connections.insert(conn);
+        self.connections
+            .insert(*peer_id, conn.get_remote_address().clone());
     }
 
     fn inject_address_change(
         &mut self,
         peer_id: &PeerId,
         _: &ConnectionId,
-        old: &ConnectedPoint,
+        _old: &ConnectedPoint,
         new: &ConnectedPoint,
     ) {
-        let old = (*peer_id, old.get_remote_address().clone());
-        let new = (*peer_id, new.get_remote_address().clone());
-        self.connections.remove(&old);
-        self.connections.insert(new);
+        self.connections
+            .insert(*peer_id, new.get_remote_address().clone());
     }
 
     fn inject_connection_closed(
         &mut self,
         peer_id: &PeerId,
         _: &ConnectionId,
-        conn: &ConnectedPoint,
+        _conn: &ConnectedPoint,
     ) {
-        let conn = (*peer_id, conn.get_remote_address().clone());
-        self.connections.remove(&conn);
+        self.connections.remove(&peer_id);
     }
 
     fn inject_addr_reach_failure(
