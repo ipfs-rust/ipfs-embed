@@ -29,7 +29,7 @@ mod peers;
 
 pub use crate::net::behaviour::{QueryId, SyncEvent};
 pub use crate::net::config::NetworkConfig;
-pub use crate::net::peers::{AddressSource, PeerInfo};
+pub use crate::net::peers::{AddressSource, Event, PeerInfo};
 pub use libp2p::gossipsub::{GossipsubEvent, GossipsubMessage, MessageId, Topic, TopicHash};
 pub use libp2p::kad::record::{Key, Record};
 pub use libp2p::kad::{PeerRecord, Quorum};
@@ -176,6 +176,11 @@ impl<P: StoreParams> NetworkService<P> {
             .collect()
     }
 
+    pub fn is_connected(&self, peer: &PeerId) -> bool {
+        let swarm = self.swarm.lock();
+        swarm.is_connected(peer)
+    }
+
     pub fn peer_info(&self, peer: &PeerId) -> Option<PeerInfo> {
         let swarm = self.swarm.lock();
         swarm.info(peer).cloned()
@@ -272,6 +277,11 @@ impl<P: StoreParams> NetworkService<P> {
     pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
         let swarm = self.swarm.lock();
         swarm.register_metrics(registry)
+    }
+
+    pub fn event_stream(&self) -> impl Stream<Item = Event> {
+        let mut swarm = self.swarm.lock();
+        swarm.event_stream()
     }
 }
 

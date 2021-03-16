@@ -1,5 +1,5 @@
 use crate::net::config::NetworkConfig;
-use crate::net::peers::{AddressBook, AddressSource, PeerInfo};
+use crate::net::peers::{AddressBook, AddressSource, Event, PeerInfo};
 use fnv::FnvHashMap;
 use futures::channel::{mpsc, oneshot};
 use futures::stream::Stream;
@@ -440,6 +440,10 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         self.peers.connections()
     }
 
+    pub fn is_connected(&self, peer: &PeerId) -> bool {
+        self.peers.is_connected(peer)
+    }
+
     pub fn bootstrap(&mut self) -> BootstrapChannel {
         let (tx, rx) = oneshot::channel();
         if let Some(kad) = self.kad.as_mut() {
@@ -588,5 +592,9 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
     pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
         self.bitswap.register_metrics(registry)?;
         Ok(())
+    }
+
+    pub fn event_stream(&mut self) -> impl Stream<Item = Event> {
+        self.peers.event_stream()
     }
 }

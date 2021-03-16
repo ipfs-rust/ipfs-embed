@@ -1,12 +1,22 @@
-use fnv::{FnvHashMap, FnvHashSet};
+use fnv::FnvHashMap;
+use futures::channel::mpsc;
+use futures::stream::Stream;
+use libipld::DagCbor;
 use libp2p::core::connection::{ConnectedPoint, ConnectionId};
 use libp2p::identify::IdentifyInfo;
 use libp2p::swarm::protocols_handler::DummyProtocolsHandler;
-use libp2p::swarm::{DialPeerCondition, NetworkBehaviour, NetworkBehaviourAction, PollParameters};
+use libp2p::swarm::{NetworkBehaviour, NetworkBehaviourAction, PollParameters};
 use libp2p::{Multiaddr, PeerId};
-use std::collections::VecDeque;
 use std::task::{Context, Poll};
 use std::time::Duration;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Event {
+    NewListenAddr(Multiaddr),
+    ExpiredListenAddr(Multiaddr),
+    NewExternalAddr(Multiaddr),
+    Discovered(PeerId),
+}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PeerInfo {
@@ -39,10 +49,12 @@ impl PeerInfo {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, DagCbor, Debug, Eq, PartialEq)]
+#[ipld(repr = "int")]
 pub enum AddressSource {
     Mdns,
     Kad,
+    Peer,
     User,
 }
 
@@ -50,8 +62,8 @@ pub enum AddressSource {
 pub struct AddressBook {
     local_peer_id: PeerId,
     peers: FnvHashMap<PeerId, PeerInfo>,
-    connections: FnvHashSet<(PeerId, Multiaddr)>,
-    events: VecDeque<PeerId>,
+    connections: FnvHashMap<PeerId, Multiaddr>,
+    event_stream: Vec<mpsc::UnboundedSender<Event>>,
 }
 
 impl AddressBook {
@@ -60,7 +72,7 @@ impl AddressBook {
             local_peer_id,
             peers: Default::default(),
             connections: Default::default(),
-            events: Default::default(),
+            event_stream: Default::default(),
         }
     }
 
@@ -80,7 +92,9 @@ impl AddressBook {
         );
         let info = self.peers.entry(*peer).or_default();
         info.addresses.insert(address, source);
-        self.events.push_back(*peer);
+        if !self.is_connected(peer) {
+            self.notify(Event::Discovered(*peer));
+        }
     }
 
     pub fn remove_address(&mut self, peer: &PeerId, address: &Multiaddr) {
@@ -96,6 +110,10 @@ impl AddressBook {
 
     pub fn connections(&self) -> impl Iterator<Item = (&PeerId, &Multiaddr)> + '_ {
         self.connections.iter().map(|(peer, addr)| (peer, addr))
+    }
+
+    pub fn is_connected(&self, peer: &PeerId) -> bool {
+        self.connections.contains_key(peer) || peer == self.local_peer_id()
     }
 
     pub fn info(&self, peer_id: &PeerId) -> Option<&PeerInfo> {
@@ -114,6 +132,17 @@ impl AddressBook {
             info.agent_version = Some(identify.agent_version);
             info.protocols = identify.protocols;
         }
+    }
+
+    pub fn event_stream(&mut self) -> impl Stream<Item = Event> {
+        let (tx, rx) = mpsc::unbounded();
+        self.event_stream.push(tx);
+        rx
+    }
+
+    pub fn notify(&mut self, event: Event) {
+        self.event_stream
+            .retain(|tx| tx.unbounded_send(event.clone()).is_ok());
     }
 }
 
@@ -148,14 +177,7 @@ impl NetworkBehaviour for AddressBook {
         _cx: &mut Context,
         _params: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<void::Void, void::Void>> {
-        if let Some(peer_id) = self.events.pop_front() {
-            Poll::Ready(NetworkBehaviourAction::DialPeer {
-                peer_id,
-                condition: DialPeerCondition::Disconnected,
-            })
-        } else {
-            Poll::Pending
-        }
+        Poll::Pending
     }
 
     fn inject_connection_established(
@@ -164,31 +186,28 @@ impl NetworkBehaviour for AddressBook {
         _: &ConnectionId,
         conn: &ConnectedPoint,
     ) {
-        let conn = (*peer_id, conn.get_remote_address().clone());
-        self.connections.insert(conn);
+        self.connections
+            .insert(*peer_id, conn.get_remote_address().clone());
     }
 
     fn inject_address_change(
         &mut self,
         peer_id: &PeerId,
         _: &ConnectionId,
-        old: &ConnectedPoint,
+        _old: &ConnectedPoint,
         new: &ConnectedPoint,
     ) {
-        let old = (*peer_id, old.get_remote_address().clone());
-        let new = (*peer_id, new.get_remote_address().clone());
-        self.connections.remove(&old);
-        self.connections.insert(new);
+        self.connections
+            .insert(*peer_id, new.get_remote_address().clone());
     }
 
     fn inject_connection_closed(
         &mut self,
         peer_id: &PeerId,
         _: &ConnectionId,
-        conn: &ConnectedPoint,
+        _conn: &ConnectedPoint,
     ) {
-        let conn = (*peer_id, conn.get_remote_address().clone());
-        self.connections.remove(&conn);
+        self.connections.remove(&peer_id);
     }
 
     fn inject_addr_reach_failure(
@@ -206,5 +225,17 @@ impl NetworkBehaviour for AddressBook {
     fn inject_dial_failure(&mut self, peer_id: &PeerId) {
         tracing::trace!("dial failure {}", peer_id);
         self.peers.remove(peer_id);
+    }
+
+    fn inject_new_listen_addr(&mut self, addr: &Multiaddr) {
+        self.notify(Event::NewListenAddr(addr.clone()));
+    }
+
+    fn inject_expired_listen_addr(&mut self, addr: &Multiaddr) {
+        self.notify(Event::ExpiredListenAddr(addr.clone()));
+    }
+
+    fn inject_new_external_addr(&mut self, addr: &Multiaddr) {
+        self.notify(Event::NewExternalAddr(addr.clone()));
     }
 }
