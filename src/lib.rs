@@ -335,8 +335,8 @@ where
         Ok(())
     }
 
-    /// Subscribes to the event stream.
-    pub fn event_stream(&self) -> impl Stream<Item = Event> {
+    /// Subscribes to the swarm event stream.
+    pub fn swarm_events(&self) -> impl Stream<Item = Event> {
         self.network.event_stream()
     }
 }
