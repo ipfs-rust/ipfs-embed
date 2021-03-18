@@ -186,7 +186,11 @@ impl NetworkBehaviour for AddressBook {
         _: &ConnectionId,
         conn: &ConnectedPoint,
     ) {
-        self.add_address(peer_id, conn.get_remote_address().clone(), AddressSource::Peer);
+        self.add_address(
+            peer_id,
+            conn.get_remote_address().clone(),
+            AddressSource::Peer,
+        );
         self.connections
             .insert(*peer_id, conn.get_remote_address().clone());
     }
@@ -198,7 +202,11 @@ impl NetworkBehaviour for AddressBook {
         _old: &ConnectedPoint,
         new: &ConnectedPoint,
     ) {
-        self.add_address(peer_id, new.get_remote_address().clone(), AddressSource::Peer);
+        self.add_address(
+            peer_id,
+            new.get_remote_address().clone(),
+            AddressSource::Peer,
+        );
         self.connections
             .insert(*peer_id, new.get_remote_address().clone());
     }
