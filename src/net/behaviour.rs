@@ -98,6 +98,8 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     queries: FnvHashMap<QueryId, QueryChannel>,
     #[behaviour(ignore)]
     subscriptions: FnvHashMap<String, Vec<mpsc::UnboundedSender<Vec<u8>>>>,
+    #[behaviour(ignore)]
+    local_node_name: String,
 }
 
 impl<P: StoreParams> NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendBehaviour<P> {
@@ -399,7 +401,12 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             provider_queries: Default::default(),
             queries: Default::default(),
             subscriptions: Default::default(),
+            local_node_name: config.node_name,
         })
+    }
+
+    pub fn local_node_name(&self) -> &str {
+        &self.local_node_name
     }
 
     pub fn add_address(&mut self, peer_id: &PeerId, addr: Multiaddr, source: AddressSource) {

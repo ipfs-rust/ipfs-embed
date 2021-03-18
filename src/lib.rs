@@ -123,6 +123,11 @@ where
         self.network.local_peer_id()
     }
 
+    /// Returns the local node name.
+    pub fn local_node_name(&self) -> String {
+        self.network.local_node_name()
+    }
+
     /// Listens on a new `Multiaddr`.
     pub async fn listen_on(&self, addr: Multiaddr) -> Result<Multiaddr> {
         self.network.listen_on(addr).await
@@ -330,8 +335,8 @@ where
         Ok(())
     }
 
-    /// Subscribes to the event stream.
-    pub fn event_stream(&self) -> impl Stream<Item = Event> {
+    /// Subscribes to the swarm event stream.
+    pub fn swarm_events(&self) -> impl Stream<Item = Event> {
         self.network.event_stream()
     }
 }

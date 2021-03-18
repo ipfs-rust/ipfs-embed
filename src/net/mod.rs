@@ -105,6 +105,11 @@ impl<P: StoreParams> NetworkService<P> {
         *Swarm::local_peer_id(&swarm)
     }
 
+    pub fn local_node_name(&self) -> String {
+        let swarm = self.swarm.lock();
+        swarm.local_node_name().to_string()
+    }
+
     #[allow(clippy::await_holding_lock)]
     pub async fn listen_on(&self, addr: Multiaddr) -> Result<Multiaddr> {
         let mut swarm = self.swarm.lock();
@@ -141,11 +146,13 @@ impl<P: StoreParams> NetworkService<P> {
     pub fn add_address(&self, peer: &PeerId, addr: Multiaddr) {
         let mut swarm = self.swarm.lock();
         swarm.add_address(peer, addr, AddressSource::User);
+        self.waker.wake();
     }
 
     pub fn remove_address(&self, peer: &PeerId, addr: &Multiaddr) {
         let mut swarm = self.swarm.lock();
         swarm.remove_address(peer, addr);
+        self.waker.wake();
     }
 
     pub fn dial(&self, peer: &PeerId) -> Result<()> {
