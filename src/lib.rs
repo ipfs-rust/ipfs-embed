@@ -123,6 +123,11 @@ where
         self.network.local_peer_id()
     }
 
+    /// Returns the local node name.
+    pub fn local_node_name(&self) -> String {
+        self.network.local_node_name()
+    }
+
     /// Listens on a new `Multiaddr`.
     pub async fn listen_on(&self, addr: Multiaddr) -> Result<Multiaddr> {
         self.network.listen_on(addr).await
