@@ -598,6 +598,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
 
     pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
         self.bitswap.register_metrics(registry)?;
+        self.peers.register_metrics(registry)?;
         Ok(())
     }
 

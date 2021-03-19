@@ -1,12 +1,14 @@
+use anyhow::Result;
 use fnv::FnvHashMap;
 use futures::channel::mpsc;
 use futures::stream::Stream;
-use libipld::DagCbor;
+use lazy_static::lazy_static;
 use libp2p::core::connection::{ConnectedPoint, ConnectionId};
 use libp2p::identify::IdentifyInfo;
 use libp2p::swarm::protocols_handler::DummyProtocolsHandler;
 use libp2p::swarm::{NetworkBehaviour, NetworkBehaviourAction, PollParameters};
 use libp2p::{Multiaddr, PeerId};
+use prometheus::{IntCounter, IntGauge, Registry};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -16,6 +18,8 @@ pub enum Event {
     ExpiredListenAddr(Multiaddr),
     NewExternalAddr(Multiaddr),
     Discovered(PeerId),
+    Connected(PeerId),
+    Disconnected(PeerId),
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -49,13 +53,26 @@ impl PeerInfo {
     }
 }
 
-#[derive(Clone, Copy, DagCbor, Debug, Eq, PartialEq)]
-#[ipld(repr = "int")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AddressSource {
     Mdns,
     Kad,
     Peer,
     User,
+}
+
+lazy_static! {
+    pub static ref CONNECTED: IntGauge =
+        IntGauge::new("peers_connected", "Number of connected peers.").unwrap();
+    pub static ref DISCOVERED: IntCounter =
+        IntCounter::new("peers_discovered_total", "Number of discovered peers.").unwrap();
+    pub static ref LISTENERS: IntGauge =
+        IntGauge::new("peers_listeners", "Number of listeners.").unwrap();
+    pub static ref EXTERNAL_ADDRS: IntCounter = IntCounter::new(
+        "peers_external_addrs_total",
+        "Number of external addresses.",
+    )
+    .unwrap();
 }
 
 #[derive(Debug)]
@@ -144,6 +161,14 @@ impl AddressBook {
         self.event_stream
             .retain(|tx| tx.unbounded_send(event.clone()).is_ok());
     }
+
+    pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
+        registry.register(Box::new(CONNECTED.clone()))?;
+        registry.register(Box::new(DISCOVERED.clone()))?;
+        registry.register(Box::new(LISTENERS.clone()))?;
+        registry.register(Box::new(EXTERNAL_ADDRS.clone()))?;
+        Ok(())
+    }
 }
 
 impl NetworkBehaviour for AddressBook {
@@ -164,10 +189,14 @@ impl NetworkBehaviour for AddressBook {
 
     fn inject_connected(&mut self, peer_id: &PeerId) {
         tracing::trace!("connected to {}", peer_id);
+        CONNECTED.inc();
+        self.notify(Event::Connected(*peer_id));
     }
 
     fn inject_disconnected(&mut self, peer_id: &PeerId) {
         tracing::trace!("disconnected from {}", peer_id);
+        CONNECTED.dec();
+        self.notify(Event::Disconnected(*peer_id));
     }
 
     fn inject_event(&mut self, _peer_id: PeerId, _connection: ConnectionId, _event: void::Void) {}
@@ -238,14 +267,20 @@ impl NetworkBehaviour for AddressBook {
     }
 
     fn inject_new_listen_addr(&mut self, addr: &Multiaddr) {
+        tracing::trace!("new listen addr {}", addr);
+        LISTENERS.inc();
         self.notify(Event::NewListenAddr(addr.clone()));
     }
 
     fn inject_expired_listen_addr(&mut self, addr: &Multiaddr) {
+        tracing::trace!("expired listen addr {}", addr);
+        LISTENERS.dec();
         self.notify(Event::ExpiredListenAddr(addr.clone()));
     }
 
     fn inject_new_external_addr(&mut self, addr: &Multiaddr) {
+        tracing::trace!("new external addr {}", addr);
+        EXTERNAL_ADDRS.inc();
         self.notify(Event::NewExternalAddr(addr.clone()));
     }
 }
