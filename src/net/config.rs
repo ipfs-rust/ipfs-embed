@@ -1,6 +1,7 @@
 use libp2p::core::PeerId;
 use libp2p::gossipsub::GossipsubConfig;
 use libp2p::identity::{Keypair, PublicKey};
+use libp2p::mdns::MdnsConfig;
 use libp2p::ping::PingConfig;
 use libp2p::pnet::PreSharedKey;
 use libp2p_bitswap::BitswapConfig;
@@ -20,6 +21,8 @@ pub struct NetworkConfig {
     pub allow_non_globals_in_dht: bool,
     /// Pre shared key for pnet.
     pub psk: Option<PreSharedKey>,
+    /// Mdns config.
+    pub mdns: MdnsConfig,
     /// Ping config.
     pub ping: PingConfig,
     /// Gossipsub config.
@@ -40,6 +43,7 @@ impl NetworkConfig {
                 .next()
                 .unwrap(),
             psk: None,
+            mdns: MdnsConfig::default(),
             ping: PingConfig::new().with_keep_alive(true),
             gossipsub: GossipsubConfig::default(),
             bitswap: BitswapConfig::default(),
@@ -72,6 +76,7 @@ impl std::fmt::Debug for NetworkConfig {
             .field("enable_kad", &self.enable_kad)
             .field("allow_non_globals_in_dht", &self.allow_non_globals_in_dht)
             .field("psk", &self.psk.is_some())
+            .field("mdns", &self.mdns)
             .field("ping", &self.ping)
             .field("gossipsub", &self.gossipsub)
             .field("bitswap", &self.bitswap)

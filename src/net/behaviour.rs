@@ -9,7 +9,7 @@ use libipld::{Cid, Result};
 use libp2p::gossipsub::{
     Gossipsub, GossipsubEvent, GossipsubMessage, IdentTopic, MessageAuthenticity,
 };
-use libp2p::identify::{Identify, IdentifyEvent};
+use libp2p::identify::{Identify, IdentifyConfig, IdentifyEvent};
 use libp2p::kad::kbucket::Key as BucketKey;
 use libp2p::kad::record::store::MemoryStore;
 use libp2p::kad::record::{Key, Record};
@@ -25,7 +25,7 @@ use libp2p::swarm::NetworkBehaviourEventProcess;
 use libp2p::NetworkBehaviour;
 use libp2p::{Multiaddr, PeerId};
 use libp2p_bitswap::{Bitswap, BitswapEvent, BitswapStore};
-use libp2p_broadcast::{BroadcastBehaviour as Broadcast, BroadcastEvent, Topic};
+use libp2p_broadcast::{Broadcast, BroadcastEvent, Topic};
 use prometheus::Registry;
 use std::collections::HashSet;
 use thiserror::Error;
@@ -214,7 +214,7 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBack
                 QueryResult::RepublishProvider(Err(err)) => {
                     tracing::trace!("{:?}", err);
                 }
-                QueryResult::GetRecord(Ok(GetRecordOk { records })) => {
+                QueryResult::GetRecord(Ok(GetRecordOk { records, .. })) => {
                     if let Some(QueryChannel::GetRecord(ch)) = self.queries.remove(&id.into()) {
                         ch.send(Ok(records)).ok();
                     }
@@ -305,17 +305,16 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<IdentifyEvent> for NetworkBack
     fn inject_event(&mut self, event: IdentifyEvent) {
         // When a peer opens a connection we only have it's outgoing address. The identify
         // protocol sends the listening address which needs to be registered with kademlia.
-        if let IdentifyEvent::Received {
-            peer_id,
-            info,
-            observed_addr,
-        } = event
-        {
-            self.peers.set_info(&peer_id, info);
-            tracing::debug!("has external address {}", observed_addr);
+        if let IdentifyEvent::Received { peer_id, info } = event {
+            tracing::debug!("has external address {}", &info.observed_addr);
             let local_peer_id = *self.peers.local_peer_id();
             // source doesn't matter as it won't be added to address book.
-            self.add_address(&local_peer_id, observed_addr, AddressSource::User);
+            self.add_address(
+                &local_peer_id,
+                info.observed_addr.clone(),
+                AddressSource::User,
+            );
+            self.peers.set_info(&peer_id, info);
         }
     }
 }
@@ -374,8 +373,10 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
     /// Create a Kademlia behaviour with the IPFS bootstrap nodes.
     pub async fn new<S: BitswapStore<Params = P>>(config: NetworkConfig, store: S) -> Result<Self> {
         let peer_id = config.peer_id();
+        let public = config.public();
+
         let mdns = if config.enable_mdns {
-            Some(Mdns::new().await?)
+            Some(Mdns::new(config.mdns).await?)
         } else {
             None
         }
@@ -387,9 +388,10 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             None
         }
         .into();
-        let public = config.public();
         let ping = Ping::new(config.ping);
-        let identify = Identify::new("/ipfs-embed/1.0".into(), config.node_name.clone(), public);
+        let mut identify_config = IdentifyConfig::new("/ipfs-embed/1.0".into(), public);
+        identify_config.agent_version = config.node_name.clone();
+        let identify = Identify::new(identify_config);
         let bitswap = Bitswap::new(config.bitswap, store);
         let gossipsub = Gossipsub::new(
             MessageAuthenticity::Signed(config.node_key.clone()),
