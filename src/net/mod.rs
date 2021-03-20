@@ -9,6 +9,7 @@ use libp2p::core::either::EitherTransport;
 use libp2p::core::transport::Transport;
 use libp2p::core::upgrade::{SelectUpgrade, Version};
 use libp2p::dns::DnsConfig;
+use libp2p::kad::kbucket::Key as BucketKey;
 use libp2p::mplex::MplexConfig;
 use libp2p::noise::{Keypair, NoiseConfig, X25519Spec};
 use libp2p::pnet::PnetConfig;
@@ -17,6 +18,7 @@ use libp2p::tcp::TcpConfig;
 use libp2p::yamux::YamuxConfig;
 use parking_lot::Mutex;
 use prometheus::Registry;
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -208,6 +210,38 @@ impl<P: StoreParams> NetworkService<P> {
         Ok(())
     }
 
+    pub async fn get_closest_peers<K>(&self, key: K) -> Result<Vec<PeerId>>
+    where
+        K: Into<BucketKey<K>> + Into<Vec<u8>> + Clone,
+    {
+        let rx = {
+            let mut swarm = self.swarm.lock();
+            swarm.get_closest_peers(key)
+        };
+        Ok(rx.await??)
+    }
+
+    pub async fn providers(&self, key: Key) -> Result<HashSet<PeerId>> {
+        let rx = {
+            let mut swarm = self.swarm.lock();
+            swarm.providers(key)
+        };
+        Ok(rx.await??)
+    }
+
+    pub async fn provide(&self, key: Key) -> Result<()> {
+        let rx = {
+            let mut swarm = self.swarm.lock();
+            swarm.provide(key)
+        };
+        Ok(rx.await??)
+    }
+
+    pub fn unprovide(&self, key: &Key) {
+        let mut swarm = self.swarm.lock();
+        swarm.unprovide(key)
+    }
+
     pub async fn get_record(&self, key: &Key, quorum: Quorum) -> Result<Vec<PeerRecord>> {
         let rx = {
             let mut swarm = self.swarm.lock();
@@ -225,6 +259,11 @@ impl<P: StoreParams> NetworkService<P> {
         Ok(())
     }
 
+    pub fn remove_record(&self, key: &Key) {
+        let mut swarm = self.swarm.lock();
+        swarm.remove_record(key)
+    }
+
     pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = Vec<u8>>> {
         let mut swarm = self.swarm.lock();
         swarm.subscribe(topic)
@@ -240,14 +279,9 @@ impl<P: StoreParams> NetworkService<P> {
         swarm.broadcast(topic, msg)
     }
 
-    pub fn remove_record(&self, key: &Key) {
+    pub fn get(&self, cid: Cid, providers: impl Iterator<Item = PeerId>) -> GetQuery<P> {
         let mut swarm = self.swarm.lock();
-        swarm.remove_record(key)
-    }
-
-    pub fn get(&self, cid: Cid) -> GetQuery<P> {
-        let mut swarm = self.swarm.lock();
-        let (rx, id) = swarm.get(cid);
+        let (rx, id) = swarm.get(cid, providers);
         self.waker.wake();
         GetQuery {
             swarm: Some(self.swarm.clone()),
@@ -256,29 +290,20 @@ impl<P: StoreParams> NetworkService<P> {
         }
     }
 
-    pub fn sync(&self, cid: Cid, missing: impl Iterator<Item = Cid>) -> SyncQuery<P> {
+    pub fn sync(
+        &self,
+        cid: Cid,
+        providers: Vec<PeerId>,
+        missing: impl Iterator<Item = Cid>,
+    ) -> SyncQuery<P> {
         let mut swarm = self.swarm.lock();
-        let (rx, id) = swarm.sync(cid, missing);
+        let (rx, id) = swarm.sync(cid, providers, missing);
         self.waker.wake();
         SyncQuery {
             swarm: Some(self.swarm.clone()),
             id,
             rx,
         }
-    }
-
-    pub async fn provide(&self, cid: Cid) -> Result<()> {
-        let rx = {
-            let mut swarm = self.swarm.lock();
-            swarm.provide(cid)
-        };
-        rx.await??;
-        Ok(())
-    }
-
-    pub fn unprovide(&self, cid: Cid) {
-        let mut swarm = self.swarm.lock();
-        swarm.unprovide(cid)
     }
 
     pub fn register_metrics(&self, registry: &Registry) -> Result<()> {

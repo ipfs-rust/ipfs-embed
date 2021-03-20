@@ -10,8 +10,8 @@
 //! ipfs.listen_on("/ip4/0.0.0.0/tcp/0".parse()?).await?;
 //! # Ok(()) }
 //! ```
+use crate::db::StorageService;
 pub use crate::db::{StorageConfig, TempPin};
-use crate::db::{StorageEvent, StorageService};
 pub use crate::net::{
     AddressRecord, AddressSource, BitswapConfig, Event, Key, Multiaddr, NetworkConfig, PeerId,
     PeerInfo, PeerRecord, Quorum, Record, SyncEvent, SyncQuery,
@@ -19,18 +19,14 @@ pub use crate::net::{
 use crate::net::{BitswapStore, NetworkService};
 #[cfg(feature = "telemetry")]
 pub use crate::telemetry::telemetry;
-use async_global_executor::Task;
-use async_trait::async_trait;
-use futures::channel::mpsc;
-use futures::stream::{Stream, StreamExt};
+use futures::stream::Stream;
 use libipld::codec::References;
 use libipld::error::BlockNotFound;
 pub use libipld::store::DefaultParams;
-use libipld::store::{Store, StoreParams};
+use libipld::store::StoreParams;
 use libipld::{Block, Cid, Ipld, Result};
 use prometheus::Registry;
-use std::future::Future;
-use std::sync::Arc;
+use std::collections::HashSet;
 
 mod db;
 mod net;
@@ -64,7 +60,6 @@ impl Config {
 pub struct Ipfs<P: StoreParams> {
     storage: StorageService<P>,
     network: NetworkService<P>,
-    _event_task: Arc<Task<()>>,
 }
 
 struct BitswapStorage<P: StoreParams>(StorageService<P>);
@@ -101,21 +96,10 @@ where
     /// This starts three background tasks. The swarm, garbage collector and the dht cleanup
     /// tasks run in the background.
     pub async fn new(config: Config) -> Result<Self> {
-        let (tx, mut storage_events) = mpsc::unbounded();
-        let storage = StorageService::open(config.storage, tx)?;
+        let storage = StorageService::open(config.storage)?;
         let bitswap = BitswapStorage(storage.clone());
         let network = NetworkService::new(config.network, bitswap).await?;
-        let network2 = network.clone();
-        let event_task = async_global_executor::spawn(async move {
-            while let Some(StorageEvent::Remove(cid)) = storage_events.next().await {
-                network2.unprovide(cid);
-            }
-        });
-        Ok(Self {
-            storage,
-            network,
-            _event_task: Arc::new(event_task),
-        })
+        Ok(Self { storage, network })
     }
 
     /// Returns the local `PeerId`.
@@ -204,10 +188,29 @@ where
     /// provides all blocks in the block store.
     pub async fn bootstrap(&self, nodes: &[(PeerId, Multiaddr)]) -> Result<()> {
         self.network.bootstrap(nodes).await?;
-        for cid in self.storage.iter()? {
-            let _ = self.network.provide(cid);
-        }
         Ok(())
+    }
+
+    /// Gets the closest peer to a key. Useful for finding the `Multiaddr` of a `PeerId`.
+    #[allow(unused)] // TODO: something fishy about `get_closest_peers`.
+    async fn get_closest_peers(&self, peer_id: PeerId) -> Result<()> {
+        self.network.get_closest_peers(peer_id).await?;
+        Ok(())
+    }
+
+    /// Gets providers of a key from the dht.
+    pub async fn providers(&self, key: Key) -> Result<HashSet<PeerId>> {
+        self.network.providers(key).await
+    }
+
+    /// Provides a key in the dht.
+    pub async fn provide(&self, key: Key) -> Result<()> {
+        self.network.provide(key).await
+    }
+
+    /// Stops providing a key in the dht.
+    pub fn unprovide(&self, key: &Key) {
+        self.network.unprovide(key)
     }
 
     /// Gets a record from the dht.
@@ -274,12 +277,16 @@ where
 
     /// Either returns a block if it's in the block store or tries to retrieve it from
     /// a peer.
-    pub async fn fetch(&self, cid: &Cid) -> Result<Block<P>> {
+    pub async fn fetch(
+        &self,
+        cid: &Cid,
+        providers: impl Iterator<Item = PeerId>,
+    ) -> Result<Block<P>> {
         if let Some(data) = self.storage.get(cid)? {
             let block = Block::new_unchecked(*cid, data);
             return Ok(block);
         }
-        self.network.get(*cid).await?;
+        self.network.get(*cid, providers).await?;
         if let Some(data) = self.storage.get(cid)? {
             let block = Block::new_unchecked(*cid, data);
             return Ok(block);
@@ -288,11 +295,10 @@ where
         Err(BlockNotFound(*cid).into())
     }
 
-    /// Inserts a block in to the block store and announces it to peers.
-    pub fn insert(&self, block: &Block<P>) -> Result<impl Future<Output = Result<()>> + '_> {
-        let cid = *block.cid();
+    /// Inserts a block in to the block store.
+    pub fn insert(&self, block: &Block<P>) -> Result<()> {
         self.storage.insert(block)?;
-        Ok(self.network.provide(cid))
+        Ok(())
     }
 
     /// Manually runs garbage collection to completion. This is mainly useful for testing and
@@ -302,9 +308,9 @@ where
         self.storage.evict().await
     }
 
-    pub fn sync(&self, cid: &Cid) -> SyncQuery<P> {
+    pub fn sync(&self, cid: &Cid, providers: Vec<PeerId>) -> SyncQuery<P> {
         let missing = self.storage.missing_blocks(cid).ok().unwrap_or_default();
-        self.network.sync(*cid, missing.into_iter())
+        self.network.sync(*cid, providers, missing.into_iter())
     }
 
     /// Creates, updates or removes an alias with a new root `Cid`.
@@ -341,6 +347,7 @@ where
     }
 }
 
+/*
 #[async_trait]
 impl<P: StoreParams> Store for Ipfs<P>
 where
@@ -393,12 +400,13 @@ where
     async fn sync(&self, cid: &Cid) -> Result<()> {
         Ipfs::sync(self, cid).await
     }
-}
+}*/
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use futures::join;
+    use futures::stream::StreamExt;
     use libipld::cbor::DagCborCodec;
     use libipld::multihash::Code;
     use libipld::raw::RawCodec;
@@ -456,7 +464,9 @@ mod tests {
         store1.flush().await?;
         let tmp2 = store2.create_temp_pin()?;
         store2.temp_pin(&tmp2, block.cid())?;
-        let block2 = store2.fetch(block.cid()).await?;
+        let block2 = store2
+            .fetch(block.cid(), std::iter::once(store1.local_peer_id()))
+            .await?;
         assert_eq!(block.data(), block2.data());
         Ok(())
     }
@@ -479,14 +489,17 @@ mod tests {
         r2.unwrap();
 
         let block = create_block(b"test_exchange_kad")?;
+        let key = Key::new(&block.cid().to_bytes());
         let tmp1 = store1.create_temp_pin()?;
         store1.temp_pin(&tmp1, block.cid())?;
-        store1.insert(&block)?.await?;
+        store1.insert(&block)?;
+        store1.provide(key.clone()).await?;
         store1.flush().await?;
 
         let tmp2 = store2.create_temp_pin()?;
         store2.temp_pin(&tmp2, block.cid())?;
-        let block2 = store2.fetch(block.cid()).await?;
+        let providers = store2.providers(key).await?;
+        let block2 = store2.fetch(block.cid(), providers.into_iter()).await?;
         assert_eq!(block.data(), block2.data());
         Ok(())
     }
@@ -497,7 +510,7 @@ mod tests {
         let store1 = create_store(true).await?;
         let block = create_block(b"test_provider_not_found")?;
         if store1
-            .fetch(block.cid())
+            .fetch(block.cid(), std::iter::once(store1.local_peer_id()))
             .await
             .unwrap_err()
             .downcast_ref::<BlockNotFound>()
@@ -558,7 +571,7 @@ mod tests {
         assert_pinned!(&local1, &c1);
 
         local2.alias(&x, Some(c1.cid()))?;
-        local2.sync(c1.cid()).await?;
+        local2.sync(c1.cid(), vec![local1.local_peer_id()]).await?;
         local2.flush().await?;
         assert_pinned!(&local2, &a1);
         assert_pinned!(&local2, &b1);
@@ -575,7 +588,7 @@ mod tests {
         assert_pinned!(&local2, &c2);
 
         local1.alias(x, Some(c2.cid()))?;
-        local1.sync(c2.cid()).await?;
+        local1.sync(c2.cid(), vec![local2.local_peer_id()]).await?;
         local1.flush().await?;
         assert_pinned!(&local1, &a1);
         assert_unpinned!(&local1, &b1);
@@ -690,7 +703,7 @@ mod tests {
 
         let t0 = Instant::now();
         let _ = b
-            .sync(&cid)
+            .sync(&cid, vec![a.local_peer_id()])
             .for_each(|x| async move { tracing::debug!("sync progress {:?}", x) })
             .await;
         b.flush().await?;
@@ -729,7 +742,7 @@ mod tests {
 
         let t0 = Instant::now();
         let _ = b
-            .sync(&cid)
+            .sync(&cid, vec![a.local_peer_id()])
             .for_each(|x| async move { tracing::debug!("sync progress {:?}", x) })
             .await;
         b.flush().await?;

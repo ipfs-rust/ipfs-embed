@@ -3,7 +3,7 @@ use fnv::FnvHashMap;
 use futures::channel::mpsc;
 use futures::stream::Stream;
 use lazy_static::lazy_static;
-use libp2p::core::connection::{ConnectedPoint, ConnectionId};
+use libp2p::core::connection::{ConnectedPoint, ConnectionId, ListenerId};
 use libp2p::identify::IdentifyInfo;
 use libp2p::swarm::protocols_handler::DummyProtocolsHandler;
 use libp2p::swarm::{NetworkBehaviour, NetworkBehaviourAction, PollParameters};
@@ -276,6 +276,14 @@ impl NetworkBehaviour for AddressBook {
         tracing::trace!("expired listen addr {}", addr);
         LISTENERS.dec();
         self.notify(Event::ExpiredListenAddr(addr.clone()));
+    }
+
+    fn inject_listener_error(&mut self, id: ListenerId, err: &(dyn std::error::Error + 'static)) {
+        tracing::trace!("listener {:?} had an error {}", id, err);
+    }
+
+    fn inject_listener_closed(&mut self, id: ListenerId, reason: Result<(), &std::io::Error>) {
+        tracing::trace!("listener {:?} closed for reason {:?}", id, reason);
     }
 
     fn inject_new_external_addr(&mut self, addr: &Multiaddr) {

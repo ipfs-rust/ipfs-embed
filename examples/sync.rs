@@ -72,7 +72,8 @@ async fn main() -> Result<()> {
     let start = std::time::Instant::now();
 
     b.alias(ROOT, builder.prev.as_ref())?;
-    b.sync(builder.prev.as_ref().unwrap()).await?;
+    b.sync(builder.prev.as_ref().unwrap(), vec![a.local_peer_id()])
+        .await?;
     b.flush().await?;
 
     let end = std::time::Instant::now();
