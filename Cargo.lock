@@ -1642,6 +1642,7 @@ dependencies = [
  "libp2p-noise",
  "libp2p-ping",
  "libp2p-pnet",
+ "libp2p-relay",
  "libp2p-request-response",
  "libp2p-swarm",
  "libp2p-swarm-derive",
@@ -1869,6 +1870,27 @@ dependencies = [
  "rand 0.7.3",
  "salsa20",
  "sha3",
+]
+
+[[package]]
+name = "libp2p-relay"
+version = "0.2.0"
+dependencies = [
+ "asynchronous-codec",
+ "bytes",
+ "futures",
+ "futures-timer",
+ "libp2p-core",
+ "libp2p-swarm",
+ "log",
+ "pin-project 1.0.5",
+ "prost",
+ "prost-build",
+ "rand 0.7.3",
+ "smallvec",
+ "unsigned-varint 0.7.0",
+ "void",
+ "wasm-timer",
 ]
 
 [[package]]
