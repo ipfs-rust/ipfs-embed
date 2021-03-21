@@ -7,14 +7,14 @@
 //! # use ipfs_embed::{Config, DefaultParams, Ipfs};
 //! # let cache_size = 100;
 //! let ipfs = Ipfs::<DefaultParams>::new(Config::new(None, cache_size)).await?;
-//! ipfs.listen_on("/ip4/0.0.0.0/tcp/0".parse()?).await?;
+//! ipfs.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 //! # Ok(()) }
 //! ```
 use crate::db::StorageService;
 pub use crate::db::{StorageConfig, TempPin};
 pub use crate::net::{
-    AddressRecord, AddressSource, BitswapConfig, Event, Key, Multiaddr, NetworkConfig, PeerId,
-    PeerInfo, PeerRecord, Quorum, Record, SyncEvent, SyncQuery,
+    AddressRecord, AddressSource, BitswapConfig, Event, Key, ListenerEvent, Multiaddr,
+    NetworkConfig, PeerId, PeerInfo, PeerRecord, Quorum, Record, SyncEvent, SyncQuery,
 };
 use crate::net::{BitswapStore, NetworkService};
 #[cfg(feature = "telemetry")]
@@ -25,6 +25,7 @@ use libipld::error::BlockNotFound;
 pub use libipld::store::DefaultParams;
 use libipld::store::StoreParams;
 use libipld::{Block, Cid, Ipld, Result};
+use libp2p::kad::kbucket::Key as BucketKey;
 use prometheus::Registry;
 use std::collections::HashSet;
 
@@ -113,8 +114,8 @@ where
     }
 
     /// Listens on a new `Multiaddr`.
-    pub async fn listen_on(&self, addr: Multiaddr) -> Result<Multiaddr> {
-        self.network.listen_on(addr).await
+    pub fn listen_on(&self, addr: Multiaddr) -> Result<impl Stream<Item = ListenerEvent>> {
+        self.network.listen_on(addr)
     }
 
     /// Returns the currently active listener addresses.
@@ -192,9 +193,11 @@ where
     }
 
     /// Gets the closest peer to a key. Useful for finding the `Multiaddr` of a `PeerId`.
-    #[allow(unused)] // TODO: something fishy about `get_closest_peers`.
-    async fn get_closest_peers(&self, peer_id: PeerId) -> Result<()> {
-        self.network.get_closest_peers(peer_id).await?;
+    pub async fn get_closest_peers<K>(&self, key: K) -> Result<()>
+    where
+        K: Into<BucketKey<K>> + Into<Vec<u8>> + Clone,
+    {
+        self.network.get_closest_peers(key).await?;
         Ok(())
     }
 
@@ -430,7 +433,10 @@ mod tests {
         network.allow_non_globals_in_dht = true;
 
         let ipfs = Ipfs::new(Config { storage, network }).await?;
-        ipfs.listen_on("/ip4/127.0.0.1/tcp/0".parse()?).await?;
+        ipfs.listen_on("/ip4/127.0.0.1/tcp/0".parse()?)?
+            .next()
+            .await
+            .unwrap();
         Ok(ipfs)
     }
 

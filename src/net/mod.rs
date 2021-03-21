@@ -1,6 +1,6 @@
 use crate::net::behaviour::{GetChannel, NetworkBackendBehaviour, SyncChannel};
 use async_global_executor::Task;
-use futures::stream::Stream;
+use futures::stream::{Stream, StreamExt};
 use futures::task::AtomicWaker;
 use futures::{future, pin_mut};
 use libipld::store::StoreParams;
@@ -13,7 +13,7 @@ use libp2p::kad::kbucket::Key as BucketKey;
 use libp2p::mplex::MplexConfig;
 use libp2p::noise::{Keypair, NoiseConfig, X25519Spec};
 use libp2p::pnet::PnetConfig;
-use libp2p::swarm::{AddressScore, Swarm, SwarmBuilder, SwarmEvent};
+use libp2p::swarm::{AddressScore, Swarm, SwarmBuilder};
 use libp2p::tcp::TcpConfig;
 use libp2p::yamux::YamuxConfig;
 use parking_lot::Mutex;
@@ -32,12 +32,18 @@ mod peers;
 pub use crate::net::behaviour::{QueryId, SyncEvent};
 pub use crate::net::config::NetworkConfig;
 pub use crate::net::peers::{AddressSource, Event, PeerInfo};
+pub use libp2p::core::connection::ListenerId;
 pub use libp2p::gossipsub::{GossipsubEvent, GossipsubMessage, MessageId, Topic, TopicHash};
 pub use libp2p::kad::record::{Key, Record};
 pub use libp2p::kad::{PeerRecord, Quorum};
 pub use libp2p::swarm::AddressRecord;
 pub use libp2p::{Multiaddr, PeerId};
 pub use libp2p_bitswap::{BitswapConfig, BitswapStore};
+
+pub enum ListenerEvent {
+    NewListenAddr(Multiaddr),
+    ExpiredListenAddr(Multiaddr),
+}
 
 #[derive(Clone)]
 pub struct NetworkService<P: StoreParams> {
@@ -113,22 +119,24 @@ impl<P: StoreParams> NetworkService<P> {
         swarm.behaviour().local_node_name().to_string()
     }
 
-    #[allow(clippy::await_holding_lock)]
-    pub async fn listen_on(&self, addr: Multiaddr) -> Result<Multiaddr> {
+    pub fn listen_on(&self, addr: Multiaddr) -> Result<impl Stream<Item = ListenerEvent>> {
         let mut swarm = self.swarm.lock();
-        swarm.listen_on(addr)?;
-        loop {
-            match swarm.next_event().await {
-                SwarmEvent::NewListenAddr(addr) => {
-                    tracing::info!("listening on {}", addr);
-                    return Ok(addr);
+        let stream = swarm.behaviour_mut().event_stream();
+        let listener = swarm.listen_on(addr)?;
+        Ok(stream
+            .take_while(move |event| match event {
+                Event::ListenerClosed(id) if *id == listener => future::ready(false),
+                _ => future::ready(true),
+            })
+            .filter_map(move |event| match event {
+                Event::NewListenAddr(id, addr) if id == listener => {
+                    future::ready(Some(ListenerEvent::NewListenAddr(addr)))
                 }
-                SwarmEvent::ListenerClosed {
-                    reason: Err(err), ..
-                } => return Err(err.into()),
-                _ => continue,
-            }
-        }
+                Event::ExpiredListenAddr(id, addr) if id == listener => {
+                    future::ready(Some(ListenerEvent::ExpiredListenAddr(addr)))
+                }
+                _ => future::ready(None),
+            }))
     }
 
     pub fn listeners(&self) -> Vec<Multiaddr> {
