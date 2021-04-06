@@ -27,7 +27,7 @@ pub struct StorageConfig {
     pub path: Option<PathBuf>,
     /// The target number of blocks.
     ///
-    /// Up to this number,Up to this number, the store will retain everything even if
+    /// Up to this number, the store will retain everything even if
     /// not pinned. Once this number is exceeded, the store will run garbage collection
     /// of all unpinned blocks until the block criterion is met again.
     ///
