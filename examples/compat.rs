@@ -36,13 +36,13 @@ async fn main() -> anyhow::Result<()> {
         "bafyreidrtb53vnjjxnhf6pu5tankvyzsjrbgp23ypx3v34a7eccqboalry".parse()?;
     // a unixfs v1 movie
     let _cid_movie: Cid = "QmWhFbSZ6gr3sz5EpxjmxhPCfj4JYH43y4p6o1gNzSMzow".parse()?;
-    let block = ipfs.fetch(&cid_leaf_cbor).await?;
+    let block = ipfs.fetch(&cid_leaf_cbor, std::iter::once(peer)).await?;
     println!("got single block. len = {}", block.data().len());
 
-    let block = ipfs.fetch(&cid_simple_dag).await?;
+    let block = ipfs.fetch(&cid_simple_dag, std::iter::once(peer)).await?;
     println!("got single block. len = {}", block.data().len());
 
-    let mut updates = ipfs.sync(&cid_simple_dag);
+    let mut updates = ipfs.sync(&cid_simple_dag, vec![peer]);
     println!("starting sync of large file");
     while let Some(update) = updates.next().await {
         println!("{:?}", update);

@@ -3,7 +3,7 @@ use fnv::FnvHashMap;
 use futures::channel::mpsc;
 use futures::stream::Stream;
 use lazy_static::lazy_static;
-use libp2p::core::connection::{ConnectedPoint, ConnectionId};
+use libp2p::core::connection::{ConnectedPoint, ConnectionId, ListenerId};
 use libp2p::identify::IdentifyInfo;
 use libp2p::swarm::protocols_handler::DummyProtocolsHandler;
 use libp2p::swarm::{NetworkBehaviour, NetworkBehaviourAction, PollParameters};
@@ -14,10 +14,14 @@ use std::time::Duration;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Event {
-    NewListenAddr(Multiaddr),
-    ExpiredListenAddr(Multiaddr),
+    NewListener(ListenerId),
+    NewListenAddr(ListenerId, Multiaddr),
+    ExpiredListenAddr(ListenerId, Multiaddr),
+    ListenerClosed(ListenerId),
     NewExternalAddr(Multiaddr),
+    ExpiredExternalAddr(Multiaddr),
     Discovered(PeerId),
+    Unreachable(PeerId),
     Connected(PeerId),
     Disconnected(PeerId),
 }
@@ -62,21 +66,35 @@ pub enum AddressSource {
 }
 
 lazy_static! {
-    pub static ref CONNECTED: IntGauge =
-        IntGauge::new("peers_connected", "Number of connected peers.").unwrap();
-    pub static ref DISCOVERED: IntCounter =
-        IntCounter::new("peers_discovered_total", "Number of discovered peers.").unwrap();
     pub static ref LISTENERS: IntGauge =
         IntGauge::new("peers_listeners", "Number of listeners.").unwrap();
-    pub static ref EXTERNAL_ADDRS: IntCounter = IntCounter::new(
-        "peers_external_addrs_total",
-        "Number of external addresses.",
+    pub static ref LISTEN_ADDRS: IntGauge =
+        IntGauge::new("peers_listen_addrs", "Number of listen addrs.",).unwrap();
+    pub static ref EXTERNAL_ADDRS: IntGauge =
+        IntGauge::new("peers_external_addrs", "Number of external addresses.",).unwrap();
+    pub static ref DISCOVERED: IntGauge =
+        IntGauge::new("peers_discovered", "Number of discovered peers.").unwrap();
+    pub static ref CONNECTED: IntGauge =
+        IntGauge::new("peers_connected", "Number of connected peers.").unwrap();
+    pub static ref CONNECTIONS: IntGauge =
+        IntGauge::new("peers_connections", "Number of connections.").unwrap();
+    pub static ref LISTENER_ERROR: IntCounter = IntCounter::new(
+        "peers_listener_error",
+        "Number of non fatal listener errors."
     )
     .unwrap();
+    pub static ref ADDRESS_REACH_FAILURE: IntCounter = IntCounter::new(
+        "peers_address_reach_failure",
+        "Number of address reach failures."
+    )
+    .unwrap();
+    pub static ref DIAL_FAILURE: IntCounter =
+        IntCounter::new("peers_dial_failure", "Number of dial failures.").unwrap();
 }
 
 #[derive(Debug)]
 pub struct AddressBook {
+    local_node_name: String,
     local_peer_id: PeerId,
     peers: FnvHashMap<PeerId, PeerInfo>,
     connections: FnvHashMap<PeerId, Multiaddr>,
@@ -84,13 +102,18 @@ pub struct AddressBook {
 }
 
 impl AddressBook {
-    pub fn new(local_peer_id: PeerId) -> Self {
+    pub fn new(local_peer_id: PeerId, local_node_name: String) -> Self {
         Self {
+            local_node_name,
             local_peer_id,
             peers: Default::default(),
             connections: Default::default(),
             event_stream: Default::default(),
         }
+    }
+
+    pub fn local_node_name(&self) -> &str {
+        &self.local_node_name
     }
 
     pub fn local_peer_id(&self) -> &PeerId {
@@ -163,10 +186,15 @@ impl AddressBook {
     }
 
     pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
-        registry.register(Box::new(CONNECTED.clone()))?;
-        registry.register(Box::new(DISCOVERED.clone()))?;
         registry.register(Box::new(LISTENERS.clone()))?;
+        registry.register(Box::new(LISTEN_ADDRS.clone()))?;
         registry.register(Box::new(EXTERNAL_ADDRS.clone()))?;
+        registry.register(Box::new(DISCOVERED.clone()))?;
+        registry.register(Box::new(CONNECTED.clone()))?;
+        registry.register(Box::new(CONNECTIONS.clone()))?;
+        registry.register(Box::new(LISTENER_ERROR.clone()))?;
+        registry.register(Box::new(ADDRESS_REACH_FAILURE.clone()))?;
+        registry.register(Box::new(DIAL_FAILURE.clone()))?;
         Ok(())
     }
 }
@@ -187,6 +215,16 @@ impl NetworkBehaviour for AddressBook {
         }
     }
 
+    fn inject_event(&mut self, _peer_id: PeerId, _connection: ConnectionId, _event: void::Void) {}
+
+    fn poll(
+        &mut self,
+        _cx: &mut Context,
+        _params: &mut impl PollParameters,
+    ) -> Poll<NetworkBehaviourAction<void::Void, void::Void>> {
+        Poll::Pending
+    }
+
     fn inject_connected(&mut self, peer_id: &PeerId) {
         tracing::trace!("connected to {}", peer_id);
         CONNECTED.inc();
@@ -197,16 +235,6 @@ impl NetworkBehaviour for AddressBook {
         tracing::trace!("disconnected from {}", peer_id);
         CONNECTED.dec();
         self.notify(Event::Disconnected(*peer_id));
-    }
-
-    fn inject_event(&mut self, _peer_id: PeerId, _connection: ConnectionId, _event: void::Void) {}
-
-    fn poll(
-        &mut self,
-        _cx: &mut Context,
-        _params: &mut impl PollParameters,
-    ) -> Poll<NetworkBehaviourAction<void::Void, void::Void>> {
-        Poll::Pending
     }
 
     fn inject_connection_established(
@@ -256,31 +284,59 @@ impl NetworkBehaviour for AddressBook {
         error: &dyn std::error::Error,
     ) {
         if let Some(peer_id) = peer_id {
-            tracing::trace!("inject_addr_reach_failure {}", error);
+            tracing::trace!("address reach failure {}", error);
+            ADDRESS_REACH_FAILURE.inc();
             self.remove_address(peer_id, addr);
         }
     }
 
     fn inject_dial_failure(&mut self, peer_id: &PeerId) {
         tracing::trace!("dial failure {}", peer_id);
-        self.peers.remove(peer_id);
+        DIAL_FAILURE.inc();
+        if self.peers.remove(peer_id).is_some() {
+            DISCOVERED.dec();
+            self.notify(Event::Unreachable(*peer_id));
+        }
     }
 
-    fn inject_new_listen_addr(&mut self, addr: &Multiaddr) {
-        tracing::trace!("new listen addr {}", addr);
+    fn inject_new_listener(&mut self, id: ListenerId) {
+        tracing::trace!("listener {:?}: created", id);
         LISTENERS.inc();
-        self.notify(Event::NewListenAddr(addr.clone()));
+        self.notify(Event::NewListener(id));
     }
 
-    fn inject_expired_listen_addr(&mut self, addr: &Multiaddr) {
-        tracing::trace!("expired listen addr {}", addr);
+    fn inject_new_listen_addr(&mut self, id: ListenerId, addr: &Multiaddr) {
+        tracing::trace!("listener {:?}: new listen addr {}", id, addr);
+        LISTEN_ADDRS.inc();
+        self.notify(Event::NewListenAddr(id, addr.clone()));
+    }
+
+    fn inject_expired_listen_addr(&mut self, id: ListenerId, addr: &Multiaddr) {
+        tracing::trace!("listener {:?}: expired listen addr {}", id, addr);
+        LISTEN_ADDRS.dec();
+        self.notify(Event::ExpiredListenAddr(id, addr.clone()));
+    }
+
+    fn inject_listener_error(&mut self, id: ListenerId, err: &(dyn std::error::Error + 'static)) {
+        tracing::trace!("listener {:?}: listener error {}", id, err);
+        LISTENER_ERROR.inc();
+    }
+
+    fn inject_listener_closed(&mut self, id: ListenerId, reason: Result<(), &std::io::Error>) {
+        tracing::trace!("listener {:?}: closed for reason {:?}", id, reason);
         LISTENERS.dec();
-        self.notify(Event::ExpiredListenAddr(addr.clone()));
+        self.notify(Event::ListenerClosed(id));
     }
 
     fn inject_new_external_addr(&mut self, addr: &Multiaddr) {
         tracing::trace!("new external addr {}", addr);
         EXTERNAL_ADDRS.inc();
         self.notify(Event::NewExternalAddr(addr.clone()));
+    }
+
+    fn inject_expired_external_addr(&mut self, addr: &Multiaddr) {
+        tracing::trace!("expired external addr {}", addr);
+        EXTERNAL_ADDRS.dec();
+        self.notify(Event::ExpiredExternalAddr(addr.clone()));
     }
 }

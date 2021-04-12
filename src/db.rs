@@ -1,9 +1,7 @@
 use async_global_executor::Task;
-use futures::channel::mpsc;
 pub use ipfs_sqlite_block_store::TempPin;
 use ipfs_sqlite_block_store::{
-    cache::{BlockInfo, CacheTracker, SqliteCacheTracker},
-    BlockStore, Config, SizeTargets, Synchronous,
+    cache::SqliteCacheTracker, BlockStore, Config, SizeTargets, Synchronous,
 };
 use lazy_static::lazy_static;
 use libipld::codec::References;
@@ -73,11 +71,6 @@ impl StorageConfig {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum StorageEvent {
-    Remove(Cid),
-}
-
 #[derive(Clone)]
 pub struct StorageService<S: StoreParams> {
     _marker: PhantomData<S>,
@@ -91,18 +84,16 @@ impl<S: StoreParams> StorageService<S>
 where
     Ipld: References<S::Codecs>,
 {
-    pub fn open(config: StorageConfig, tx: mpsc::UnboundedSender<StorageEvent>) -> Result<Self> {
+    pub fn open(config: StorageConfig) -> Result<Self> {
         let size = SizeTargets::new(config.cache_size_blocks, config.cache_size_bytes);
         let store_config = Config::default()
             .with_size_targets(size)
             .with_pragma_synchronous(Synchronous::Normal);
         let store = if let Some(path) = config.path {
             let tracker = SqliteCacheTracker::open(&path, |access, _| Some(access))?;
-            let tracker = IpfsCacheTracker { tracker, tx };
             BlockStore::open(path, store_config.with_cache_tracker(tracker))?
         } else {
             let tracker = SqliteCacheTracker::memory(|access, _| Some(access))?;
-            let tracker = IpfsCacheTracker { tracker, tx };
             BlockStore::memory(store_config.with_cache_tracker(tracker))?
         };
         let store = Arc::new(Mutex::new(store));
@@ -218,35 +209,6 @@ where
     }
 }
 
-#[derive(Debug)]
-struct IpfsCacheTracker<T> {
-    tracker: T,
-    tx: mpsc::UnboundedSender<StorageEvent>,
-}
-
-impl<T: CacheTracker> CacheTracker for IpfsCacheTracker<T> {
-    fn blocks_accessed(&self, blocks: Vec<BlockInfo>) {
-        self.tracker.blocks_accessed(blocks)
-    }
-
-    fn blocks_deleted(&self, blocks: Vec<BlockInfo>) {
-        for block in &blocks {
-            self.tx
-                .unbounded_send(StorageEvent::Remove(*block.cid()))
-                .ok();
-        }
-        self.tracker.blocks_deleted(blocks)
-    }
-
-    fn retain_ids(&self, ids: &[i64]) {
-        self.tracker.retain_ids(ids)
-    }
-
-    fn sort_ids(&self, ids: &mut [i64]) {
-        self.tracker.sort_ids(ids)
-    }
-}
-
 lazy_static! {
     pub static ref QUERIES_TOTAL: IntCounterVec = IntCounterVec::new(
         Opts::new(
@@ -343,7 +305,6 @@ impl SqliteStoreCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::stream::StreamExt;
     use libipld::cbor::DagCborCodec;
     use libipld::multihash::Code;
     use libipld::store::DefaultParams;
@@ -390,19 +351,15 @@ mod tests {
             .ok();
     }
 
-    fn create_store() -> (
-        StorageService<DefaultParams>,
-        mpsc::UnboundedReceiver<StorageEvent>,
-    ) {
-        let (tx, rx) = mpsc::unbounded();
+    fn create_store() -> StorageService<DefaultParams> {
         let config = StorageConfig::new(None, 2, Duration::from_secs(100));
-        (StorageService::open(config, tx).unwrap(), rx)
+        StorageService::open(config).unwrap()
     }
 
     #[async_std::test]
     async fn test_store_evict() {
         tracing_try_init();
-        let (store, mut rx) = create_store();
+        let store = create_store();
         let blocks = [
             create_block(&ipld!(0)),
             create_block(&ipld!(1)),
@@ -428,21 +385,13 @@ mod tests {
         assert_unpinned!(&store, &blocks[1]);
         assert_evicted!(&store, &blocks[2]);
         assert_unpinned!(&store, &blocks[3]);
-        assert_eq!(
-            rx.next().await,
-            Some(StorageEvent::Remove(*blocks[0].cid()))
-        );
-        assert_eq!(
-            rx.next().await,
-            Some(StorageEvent::Remove(*blocks[2].cid()))
-        );
     }
 
     #[async_std::test]
     #[allow(clippy::many_single_char_names)]
     async fn test_store_unpin() {
         tracing_try_init();
-        let (store, _) = create_store();
+        let store = create_store();
         let a = create_block(&ipld!({ "a": [] }));
         let b = create_block(&ipld!({ "b": [a.cid()] }));
         let c = create_block(&ipld!({ "c": [a.cid()] }));
@@ -473,7 +422,7 @@ mod tests {
     #[allow(clippy::many_single_char_names)]
     async fn test_store_unpin2() {
         tracing_try_init();
-        let (store, _) = create_store();
+        let store = create_store();
         let a = create_block(&ipld!({ "a": [] }));
         let b = create_block(&ipld!({ "b": [a.cid()] }));
         let x = alias!(x).as_bytes().to_vec();

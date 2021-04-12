@@ -1,80 +1,93 @@
-use libp2p::core::PeerId;
-use libp2p::gossipsub::GossipsubConfig;
-use libp2p::identity::{Keypair, PublicKey};
-use libp2p::ping::PingConfig;
-use libp2p::pnet::PreSharedKey;
-use libp2p_bitswap::BitswapConfig;
+use libipld::store::{DefaultParams, StoreParams};
+pub use libp2p::dns::{ResolverConfig, ResolverOpts};
+pub use libp2p::gossipsub::GossipsubConfig;
+pub use libp2p::identify::IdentifyConfig;
+pub use libp2p::kad::record::store::MemoryStoreConfig;
+pub use libp2p::mdns::MdnsConfig;
+pub use libp2p::ping::PingConfig;
+pub use libp2p_bitswap::BitswapConfig;
+pub use libp2p_broadcast::BroadcastConfig;
+pub use libp2p_quic::{Keypair, ToLibp2p, TransportConfig};
+pub use secrecy::Secret;
+use std::time::Duration;
 
 /// Network configuration.
-#[derive(Clone)]
+#[derive(Debug)]
 pub struct NetworkConfig {
-    /// Node identity keypair.
-    pub node_key: Keypair,
-    /// Name of the node. Sent over the wire for debugging purposes.
+    /// Node name.
     pub node_name: String,
-    /// Enable mdns.
-    pub enable_mdns: bool,
-    /// Enable kad.
-    pub enable_kad: bool,
-    /// Should we insert non-global addresses into the DHT?
-    pub allow_non_globals_in_dht: bool,
-    /// Pre shared key for pnet.
-    pub psk: Option<PreSharedKey>,
+    /// Node key.
+    pub node_key: Keypair,
+    /// Pre shared key.
+    pub psk: Option<Secret<[u8; 32]>>,
+    /// Quic config.
+    pub quic: TransportConfig,
+    /// Dns config. If no dns config is provided the system
+    /// defaults will be used.
+    pub dns: Option<DnsConfig>,
+    /// Mdns config.
+    pub mdns: Option<MdnsConfig>,
+    /// Kad config.
+    pub kad: Option<MemoryStoreConfig>,
     /// Ping config.
-    pub ping: PingConfig,
+    pub ping: Option<PingConfig>,
+    /// Identify config. Note that the `node_name` and
+    /// `node_key` will overwrite the `local_public_key` and
+    /// the `agent_version`.
+    pub identify: Option<IdentifyConfig>,
     /// Gossipsub config.
-    pub gossipsub: GossipsubConfig,
+    pub gossipsub: Option<GossipsubConfig>,
+    /// Broadcast config.
+    pub broadcast: Option<BroadcastConfig>,
     /// Bitswap config.
-    pub bitswap: BitswapConfig,
+    pub bitswap: Option<BitswapConfig>,
+}
+
+/// `DNS` configuration.
+#[derive(Debug)]
+pub struct DnsConfig {
+    /// Configures the nameservers to use.
+    pub config: ResolverConfig,
+    /// Configuration for the resolver.
+    pub opts: ResolverOpts,
 }
 
 impl NetworkConfig {
     /// Creates a new network configuration.
-    pub fn new() -> Self {
+    pub fn new(node_key: Keypair) -> Self {
+        let node_name = names::Generator::with_naming(names::Name::Numbered)
+            .next()
+            .unwrap();
+        let mut identify = IdentifyConfig::new("/ipfs-embed/1.0".into(), node_key.to_public());
+        identify.agent_version = node_name.clone();
+        let mut quic = TransportConfig::default();
+        quic.keep_alive_interval(Some(Duration::from_millis(100)));
+        quic.max_concurrent_bidi_streams(1024).unwrap();
+        quic.max_idle_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        quic.stream_receive_window(DefaultParams::MAX_BLOCK_SIZE as _)
+            .unwrap();
+        quic.receive_window(4_000_000).unwrap();
+        quic.send_window(4_000_000);
         Self {
-            enable_mdns: true,
-            enable_kad: true,
-            allow_non_globals_in_dht: false,
-            node_key: Keypair::generate_ed25519(),
-            node_name: names::Generator::with_naming(names::Name::Numbered)
-                .next()
-                .unwrap(),
+            node_name,
+            node_key,
             psk: None,
-            ping: PingConfig::new().with_keep_alive(true),
-            gossipsub: GossipsubConfig::default(),
-            bitswap: BitswapConfig::default(),
+            quic,
+            dns: None,
+            mdns: Some(MdnsConfig::default()),
+            kad: Some(MemoryStoreConfig::default()),
+            ping: None,
+            identify: Some(identify),
+            gossipsub: Some(GossipsubConfig::default()),
+            broadcast: Some(BroadcastConfig::default()),
+            bitswap: Some(BitswapConfig::default()),
         }
-    }
-
-    /// The public node key.
-    pub fn public(&self) -> PublicKey {
-        self.node_key.public()
-    }
-
-    /// The peer id of the node.
-    pub fn peer_id(&self) -> PeerId {
-        self.node_key.public().into_peer_id()
     }
 }
 
 impl Default for NetworkConfig {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl std::fmt::Debug for NetworkConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("NetworkConfig")
-            .field("node_key", &self.peer_id().to_string())
-            .field("node_name", &self.node_name)
-            .field("enable_mdns", &self.enable_mdns)
-            .field("enable_kad", &self.enable_kad)
-            .field("allow_non_globals_in_dht", &self.allow_non_globals_in_dht)
-            .field("psk", &self.psk.is_some())
-            .field("ping", &self.ping)
-            .field("gossipsub", &self.gossipsub)
-            .field("bitswap", &self.bitswap)
-            .finish()
+        Self::new(Keypair::generate())
     }
 }
