@@ -1,0 +1,21 @@
+[package]
+name = "ipfs-embed-harness"
+version = "0.1.0"
+authors = ["David Craven <david@craven.ch>"]
+edition = "2018"
+
+[dependencies]
+anyhow = "1.0.40"
+async-global-executor = "2.0.2"
+async-process = "1.0.2"
+futures = "0.3.14"
+futures-lite = "1.11.3"
+ipfs-embed-cli = { path = "../cli" }
+libipld = { version = "0.11.0", default-features = false, features = ["dag-cbor", "dag-pb", "derive"] }
+multihash = { version = "0.13.2", default-features = false, features = ["blake3"] }
+netsim-embed = "0.2.2"
+rand = "0.8.3"
+structopt = "0.3.21"
+tempdir = "0.3.7"
+tracing = "0.1.25"
+tracing-subscriber = "0.2.17"

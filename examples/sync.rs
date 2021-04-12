@@ -1,4 +1,5 @@
 use anyhow::Result;
+use futures::stream::StreamExt;
 use ipfs_embed::{Config, Ipfs};
 use libipld::cbor::DagCborCodec;
 use libipld::multihash::Code;
@@ -44,12 +45,15 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     let mut config = Config::new(Some("/tmp/local1".into()), 1000);
-    config.network.enable_kad = false;
+    config.network.kad = None;
     let a = Ipfs::<DefaultParams>::new(config).await?;
-    a.listen_on("/ip4/127.0.0.1/tcp/0".parse()?).await?;
+    a.listen_on("/ip4/127.0.0.1/tcp/0".parse()?)?
+        .next()
+        .await
+        .unwrap();
 
     let mut config = Config::new(Some("/tmp/local2".into()), 1000);
-    config.network.enable_kad = false;
+    config.network.kad = None;
     let b = Ipfs::<DefaultParams>::new(config).await?;
 
     println!("starting import");
@@ -72,7 +76,8 @@ async fn main() -> Result<()> {
     let start = std::time::Instant::now();
 
     b.alias(ROOT, builder.prev.as_ref())?;
-    b.sync(builder.prev.as_ref().unwrap()).await?;
+    b.sync(builder.prev.as_ref().unwrap(), vec![a.local_peer_id()])
+        .await?;
     b.flush().await?;
 
     let end = std::time::Instant::now();
