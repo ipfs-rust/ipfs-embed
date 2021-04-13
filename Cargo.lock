@@ -2020,7 +2020,7 @@ dependencies = [
 [[package]]
 name = "libp2p-quic"
 version = "0.2.0"
-source = "git+https://github.com/ipfs-rust/libp2p-quic#753883b738b5168be45ff35c56555caaea120f7c"
+source = "git+https://github.com/ipfs-rust/libp2p-quic#246da5b36d715e55ee1c9a6639d837c134f5bb50"
 dependencies = [
  "anyhow",
  "async-global-executor",
@@ -3860,9 +3860,9 @@ checksum = "56dee185309b50d1f11bfedef0fe6d036842e3fb77413abef29f8f8d1c5d4c1c"
 
 [[package]]
 name = "udp-socket"
-version = "0.1.1"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86be7e931b47b46e53409681dc719532d30974a698e4820c3718dd22a11c0bf7"
+checksum = "597d54e27ed027aa6a362e825ebb46d4a05847d8c05b01dee0e8ce60ae44f952"
 dependencies = [
  "async-io",
  "futures-lite",

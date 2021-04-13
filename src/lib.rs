@@ -631,6 +631,7 @@ mod tests {
     async fn test_dht_record() -> Result<()> {
         tracing_try_init();
         let stores = [create_store(false).await?, create_store(false).await?];
+        async_std::task::sleep(Duration::from_millis(100)).await;
         stores[0]
             .bootstrap(&[(stores[1].local_peer_id(), stores[1].listeners()[0].clone())])
             .await?;
