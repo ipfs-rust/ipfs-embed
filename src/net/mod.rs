@@ -106,11 +106,15 @@ impl<P: StoreParams> NetworkService<P> {
         } else {
             DnsConfig::system(quic_or_tcp).await?.boxed()
         };
-        let swarm = SwarmBuilder::new(transport, behaviour, peer_id)
+        let mut swarm = SwarmBuilder::new(transport, behaviour, peer_id)
             .executor(Box::new(|fut| {
                 async_global_executor::spawn(fut).detach();
             }))
             .build();
+        // Required for swarm book keeping.
+        swarm
+            .listen_on("/ip4/0.0.0.0/udp/0/quic".parse().unwrap())
+            .unwrap();
 
         let swarm = Arc::new(Mutex::new(swarm));
         let swarm2 = swarm.clone();

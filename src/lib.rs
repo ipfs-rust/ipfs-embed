@@ -442,12 +442,7 @@ mod tests {
             network.mdns = None;
         }
 
-        let ipfs = Ipfs::new(Config { storage, network }).await?;
-        ipfs.listen_on("/ip4/127.0.0.1/tcp/0".parse()?)?
-            .next()
-            .await
-            .unwrap();
-        Ok(ipfs)
+        Ipfs::new(Config { storage, network }).await
     }
 
     fn create_block(bytes: &[u8]) -> Result<Block<DefaultParams>> {
@@ -515,6 +510,7 @@ mod tests {
         let tmp2 = store2.create_temp_pin()?;
         store2.temp_pin(&tmp2, block.cid())?;
         let providers = store2.providers(key).await?;
+        assert!(providers.len() > 0);
         let block2 = store2.fetch(block.cid(), providers.into_iter()).await?;
         assert_eq!(block.data(), block2.data());
         Ok(())
