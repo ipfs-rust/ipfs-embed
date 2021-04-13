@@ -71,12 +71,11 @@ impl DagBuilder {
         } else {
             rng.next_u32() as usize % self.heads.len()
         };
-        /*let n_children_rm = if n_children == 0 {
+        let n_children_rm = if n_children == 0 {
             0
         } else {
             rng.next_u32() as usize % n_children
-        };*/
-        let n_children_rm = n_children;
+        };
         let nonce = rng.next_u64();
         let mut children = Vec::with_capacity(n_children);
         children.extend(self.heads.iter().take(n_children));
