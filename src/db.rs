@@ -7,7 +7,7 @@ use lazy_static::lazy_static;
 use libipld::codec::References;
 use libipld::store::StoreParams;
 use libipld::{Block, Cid, Ipld, Result};
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use prometheus::core::{Collector, Desc};
 use prometheus::proto::MetricFamily;
 use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry};
@@ -78,6 +78,14 @@ pub struct StorageService<S: StoreParams> {
     gc_target_duration: Duration,
     gc_min_blocks: usize,
     _gc_task: Arc<Task<()>>,
+    exit: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl<S: StoreParams> Drop for StorageService<S> {
+    fn drop(&mut self) {
+        *self.exit.0.lock() = true;
+        self.exit.1.notify_all();
+    }
 }
 
 impl<S: StoreParams> StorageService<S>
@@ -101,20 +109,39 @@ where
         let gc_interval = config.gc_interval;
         let gc_min_blocks = config.gc_min_blocks;
         let gc_target_duration = config.gc_target_duration;
+        let exit = Arc::new((Mutex::new(false), Condvar::new()));
+        let exit2 = exit.clone();
         let gc_task =
             async_global_executor::spawn(async_global_executor::spawn_blocking(move || {
-                std::thread::sleep(gc_interval / 2);
+                enum Phase {
+                    Gc,
+                    Delete,
+                }
+                let mut phase = Phase::Gc;
                 loop {
-                    tracing::debug!("gc_loop running incremental gc");
-                    gc.lock()
-                        .incremental_gc(gc_min_blocks, gc_target_duration)
-                        .ok();
-                    std::thread::sleep(gc_interval / 2);
-                    tracing::debug!("gc_loop running incremental delete orphaned");
-                    gc.lock()
-                        .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)
-                        .ok();
-                    std::thread::sleep(gc_interval / 2);
+                    let mut should_exit = exit.0.lock();
+                    let timeout = exit.1.wait_for(&mut should_exit, gc_interval / 2);
+                    if *should_exit {
+                        break;
+                    }
+                    if timeout.timed_out() {
+                        match phase {
+                            Phase::Gc => {
+                                tracing::debug!("gc_loop running incremental gc");
+                                gc.lock()
+                                    .incremental_gc(gc_min_blocks, gc_target_duration)
+                                    .ok();
+                                phase = Phase::Delete;
+                            }
+                            Phase::Delete => {
+                                tracing::debug!("gc_loop running incremental delete orphaned");
+                                gc.lock()
+                                    .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)
+                                    .ok();
+                                phase = Phase::Gc;
+                            }
+                        }
+                    }
                 }
             }));
         Ok(Self {
@@ -123,6 +150,7 @@ where
             gc_min_blocks: config.gc_min_blocks,
             store,
             _gc_task: Arc::new(gc_task),
+            exit: exit2,
         })
     }
 

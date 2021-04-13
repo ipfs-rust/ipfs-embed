@@ -442,12 +442,7 @@ mod tests {
             network.mdns = None;
         }
 
-        let ipfs = Ipfs::new(Config { storage, network }).await?;
-        ipfs.listen_on("/ip4/127.0.0.1/tcp/0".parse()?)?
-            .next()
-            .await
-            .unwrap();
-        Ok(ipfs)
+        Ipfs::new(Config { storage, network }).await
     }
 
     fn create_block(bytes: &[u8]) -> Result<Block<DefaultParams>> {
@@ -515,6 +510,7 @@ mod tests {
         let tmp2 = store2.create_temp_pin()?;
         store2.temp_pin(&tmp2, block.cid())?;
         let providers = store2.providers(key).await?;
+        assert!(!providers.is_empty());
         let block2 = store2.fetch(block.cid(), providers.into_iter()).await?;
         assert_eq!(block.data(), block2.data());
         Ok(())
@@ -635,6 +631,7 @@ mod tests {
     async fn test_dht_record() -> Result<()> {
         tracing_try_init();
         let stores = [create_store(false).await?, create_store(false).await?];
+        async_std::task::sleep(Duration::from_millis(100)).await;
         stores[0]
             .bootstrap(&[(stores[1].local_peer_id(), stores[1].listeners()[0].clone())])
             .await?;
