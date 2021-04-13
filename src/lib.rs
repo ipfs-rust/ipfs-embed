@@ -510,7 +510,7 @@ mod tests {
         let tmp2 = store2.create_temp_pin()?;
         store2.temp_pin(&tmp2, block.cid())?;
         let providers = store2.providers(key).await?;
-        assert!(providers.len() > 0);
+        assert!(!providers.is_empty());
         let block2 = store2.fetch(block.cid(), providers.into_iter()).await?;
         assert_eq!(block.data(), block2.data());
         Ok(())
