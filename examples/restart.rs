@@ -11,48 +11,47 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::new(None, 1024 * 1024);
     let ipfs = Ipfs::<DefaultParams>::new(config).await?;
-    async_std::task::sleep(Duration::from_secs(1)).await;
+    async_std::task::sleep(Duration::from_millis(10)).await;
     println!("ipfs-embed threads: {}", threads()?);
     println!("{}", comms()?.join(""));
 
     drop(ipfs);
-    async_std::task::sleep(Duration::from_secs(1)).await;
+    async_std::task::sleep(Duration::from_millis(10)).await;
     println!("after ipfs-embed drop threads: {}", threads()?);
     println!("{}", comms()?.join(""));
 
     let config = Config::new(None, 1024 * 1024);
     let ipfs = Ipfs::<DefaultParams>::new(config).await?;
-    async_std::task::sleep(Duration::from_secs(1)).await;
+    async_std::task::sleep(Duration::from_millis(10)).await;
     println!("threads after 2nd ipfs: {}", threads()?);
     println!("{}", comms()?.join(""));
 
     drop(ipfs);
-    async_std::task::sleep(Duration::from_secs(1)).await;
     println!("after 2nd ipfs-embed drop threads: {}", threads()?);
+    async_std::task::sleep(Duration::from_millis(10)).await;
     println!("{}", comms()?.join(""));
 
     let config = Config::new(None, 1024 * 1024);
     let ipfs = Ipfs::<DefaultParams>::new(config).await?;
-    async_std::task::sleep(Duration::from_secs(1)).await;
+    async_std::task::sleep(Duration::from_millis(10)).await;
     println!("threads after 3nd ipfs: {}", threads()?);
     println!("{}", comms()?.join(""));
 
     drop(ipfs);
-    async_std::task::sleep(Duration::from_secs(1)).await;
+    async_std::task::sleep(Duration::from_millis(10)).await;
     println!("after 3nd ipfs-embed drop threads: {}", threads()?);
     println!("{}", comms()?.join(""));
 
-    async_std::task::sleep(Duration::from_secs(10)).await;
-    println!("after waiting for 10s: {}", threads()?);
+    for _ in 0..128 {
+        let config = Config::new(None, 1024 * 1024);
+        let ipfs = Ipfs::<DefaultParams>::new(config).await?;
+        drop(ipfs);
+    }
+
+    async_std::task::sleep(Duration::from_secs(1)).await;
+    println!("threads: {}", threads()?);
     println!("{}", comms()?.join(""));
 
-    /*loop {
-        let n = threads()?;
-        println!("threads: {}", n);
-        if n == 0 {
-            break;
-        }
-    }*/
     Ok(())
 }
 

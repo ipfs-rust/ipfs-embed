@@ -7,14 +7,13 @@ use lazy_static::lazy_static;
 use libipld::codec::References;
 use libipld::store::StoreParams;
 use libipld::{Block, Cid, Ipld, Result};
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use prometheus::core::{Collector, Desc};
 use prometheus::proto::MetricFamily;
 use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -79,12 +78,13 @@ pub struct StorageService<S: StoreParams> {
     gc_target_duration: Duration,
     gc_min_blocks: usize,
     _gc_task: Arc<Task<()>>,
-    gc_exit: Arc<AtomicBool>,
+    exit: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl<S: StoreParams> Drop for StorageService<S> {
     fn drop(&mut self) {
-        self.gc_exit.store(true, Ordering::Relaxed);
+        *self.exit.0.lock() = true;
+        self.exit.1.notify_all();
     }
 }
 
@@ -109,34 +109,31 @@ where
         let gc_interval = config.gc_interval;
         let gc_min_blocks = config.gc_min_blocks;
         let gc_target_duration = config.gc_target_duration;
-        let gc_exit = Arc::new(AtomicBool::new(false));
-        let gc_exit2 = gc_exit.clone();
+        let exit = Arc::new((Mutex::new(false), Condvar::new()));
+        let exit2 = exit.clone();
         let gc_task =
             async_global_executor::spawn(async_global_executor::spawn_blocking(move || {
-                std::thread::sleep(gc_interval / 2);
+                let mut phase = true;
                 loop {
-                    if gc_exit.load(Ordering::Relaxed) {
+                    let mut should_exit = exit.0.lock();
+                    let timeout = exit.1.wait_for(&mut should_exit, gc_interval / 2);
+                    if *should_exit {
                         break;
                     }
-                    tracing::debug!("gc_loop running incremental gc");
-                    gc.lock()
-                        .incremental_gc(gc_min_blocks, gc_target_duration)
-                        .ok();
-                    if gc_exit.load(Ordering::Relaxed) {
-                        break;
+                    if timeout.timed_out() {
+                        if phase {
+                            tracing::debug!("gc_loop running incremental gc");
+                            gc.lock()
+                                .incremental_gc(gc_min_blocks, gc_target_duration)
+                                .ok();
+                        } else {
+                            tracing::debug!("gc_loop running incremental delete orphaned");
+                            gc.lock()
+                                .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)
+                                .ok();
+                        }
+                        phase = !phase;
                     }
-                    std::thread::sleep(gc_interval / 2);
-                    if gc_exit.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    tracing::debug!("gc_loop running incremental delete orphaned");
-                    gc.lock()
-                        .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)
-                        .ok();
-                    if gc_exit.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    std::thread::sleep(gc_interval / 2);
                 }
             }));
         Ok(Self {
@@ -145,7 +142,7 @@ where
             gc_min_blocks: config.gc_min_blocks,
             store,
             _gc_task: Arc::new(gc_task),
-            gc_exit: gc_exit2,
+            exit: exit2,
         })
     }
 
