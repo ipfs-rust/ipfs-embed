@@ -45,7 +45,7 @@ features = [
     "kad",
     "mdns",
     "ping",
-    "relay",
+    #"relay",
     "mplex", "noise", "pnet", "tcp-async-io", "yamux",
 ]
 git = "https://github.com/libp2p/rust-libp2p"
