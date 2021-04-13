@@ -113,7 +113,11 @@ where
         let exit2 = exit.clone();
         let gc_task =
             async_global_executor::spawn(async_global_executor::spawn_blocking(move || {
-                let mut phase = true;
+                enum Phase {
+                    Gc,
+                    Delete,
+                }
+                let mut phase = Phase::Gc;
                 loop {
                     let mut should_exit = exit.0.lock();
                     let timeout = exit.1.wait_for(&mut should_exit, gc_interval / 2);
@@ -121,18 +125,22 @@ where
                         break;
                     }
                     if timeout.timed_out() {
-                        if phase {
-                            tracing::debug!("gc_loop running incremental gc");
-                            gc.lock()
-                                .incremental_gc(gc_min_blocks, gc_target_duration)
-                                .ok();
-                        } else {
-                            tracing::debug!("gc_loop running incremental delete orphaned");
-                            gc.lock()
-                                .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)
-                                .ok();
+                        match phase {
+                            Phase::Gc => {
+                                tracing::debug!("gc_loop running incremental gc");
+                                gc.lock()
+                                    .incremental_gc(gc_min_blocks, gc_target_duration)
+                                    .ok();
+                                phase = Phase::Delete;
+                            }
+                            Phase::Delete => {
+                                tracing::debug!("gc_loop running incremental delete orphaned");
+                                gc.lock()
+                                    .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)
+                                    .ok();
+                                phase = Phase::Gc;
+                            }
                         }
-                        phase = !phase;
                     }
                 }
             }));
