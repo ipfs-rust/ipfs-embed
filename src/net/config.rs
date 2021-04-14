@@ -88,6 +88,6 @@ impl NetworkConfig {
 
 impl Default for NetworkConfig {
     fn default() -> Self {
-        Self::new(Keypair::generate())
+        Self::new(libp2p_quic::generate_keypair())
     }
 }

@@ -5,7 +5,7 @@ use futures::task::AtomicWaker;
 use futures::{future, pin_mut};
 use libipld::store::StoreParams;
 use libipld::{Cid, Result};
-use libp2p::core::either::{EitherOutput, EitherTransport};
+use libp2p::core::either::EitherTransport;
 use libp2p::core::transport::Transport;
 use libp2p::core::upgrade::{SelectUpgrade, Version};
 use libp2p::dns::DnsConfig;
@@ -16,7 +16,7 @@ use libp2p::pnet::{PnetConfig, PreSharedKey};
 use libp2p::swarm::{AddressScore, Swarm, SwarmBuilder};
 use libp2p::tcp::TcpConfig;
 use libp2p::yamux::YamuxConfig;
-use libp2p_quic::{QuicConfig, ToLibp2p};
+use libp2p_quic::ToLibp2p;
 use parking_lot::Mutex;
 use prometheus::Registry;
 use secrecy::ExposeSecret;
@@ -85,7 +85,7 @@ impl<P: StoreParams> NetworkService<P> {
                 .timeout(Duration::from_secs(5))
                 .boxed()
         };
-        let quic = {
+        /*let quic = {
             QuicConfig {
                 keypair: config.node_key,
                 transport: config.quic,
@@ -98,7 +98,8 @@ impl<P: StoreParams> NetworkService<P> {
         let quic_or_tcp = quic.or_transport(tcp).map(|either, _| match either {
             EitherOutput::First(first) => first,
             EitherOutput::Second(second) => second,
-        });
+        });*/
+        let quic_or_tcp = tcp;
         let transport = if let Some(config) = config.dns {
             DnsConfig::custom(quic_or_tcp, config.config, config.opts)
                 .await?
@@ -106,15 +107,17 @@ impl<P: StoreParams> NetworkService<P> {
         } else {
             DnsConfig::system(quic_or_tcp).await?.boxed()
         };
-        let mut swarm = SwarmBuilder::new(transport, behaviour, peer_id)
+        let swarm = SwarmBuilder::new(transport, behaviour, peer_id)
             .executor(Box::new(|fut| {
                 async_global_executor::spawn(fut).detach();
             }))
             .build();
+        /*
         // Required for swarm book keeping.
         swarm
             .listen_on("/ip4/0.0.0.0/udp/0/quic".parse().unwrap())
             .unwrap();
+        */
 
         let swarm = Arc::new(Mutex::new(swarm));
         let swarm2 = swarm.clone();

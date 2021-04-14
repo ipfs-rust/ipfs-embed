@@ -442,7 +442,9 @@ mod tests {
             network.mdns = None;
         }
 
-        Ipfs::new(Config { storage, network }).await
+        let ipfs = Ipfs::new(Config { storage, network }).await?;
+        ipfs.listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())?.next().await.unwrap();
+        Ok(ipfs)
     }
 
     fn create_block(bytes: &[u8]) -> Result<Block<DefaultParams>> {
