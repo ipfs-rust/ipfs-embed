@@ -13,8 +13,10 @@
 use crate::db::StorageService;
 pub use crate::db::{StorageConfig, TempPin};
 pub use crate::net::{
-    AddressRecord, AddressSource, BitswapConfig, Event, Key, ListenerEvent, Multiaddr,
-    NetworkConfig, PeerId, PeerInfo, PeerRecord, Quorum, Record, SyncEvent, SyncQuery,
+    generate_keypair, AddressRecord, AddressSource, BitswapConfig, BroadcastConfig, DnsConfig,
+    Event, GossipsubConfig, IdentifyConfig, KadConfig, Key, Keypair, ListenerEvent, ListenerId,
+    MdnsConfig, Multiaddr, NetworkConfig, PeerId, PeerInfo, PeerRecord, PingConfig, Quorum, Record,
+    SyncEvent, SyncQuery, ToLibp2p, TransportConfig,
 };
 use crate::net::{BitswapStore, NetworkService};
 #[cfg(feature = "telemetry")]
@@ -443,7 +445,10 @@ mod tests {
         }
 
         let ipfs = Ipfs::new(Config { storage, network }).await?;
-        ipfs.listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())?.next().await.unwrap();
+        ipfs.listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())?
+            .next()
+            .await
+            .unwrap();
         Ok(ipfs)
     }
 

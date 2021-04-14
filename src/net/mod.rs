@@ -8,7 +8,7 @@ use libipld::{Cid, Result};
 use libp2p::core::either::EitherTransport;
 use libp2p::core::transport::Transport;
 use libp2p::core::upgrade::{SelectUpgrade, Version};
-use libp2p::dns::DnsConfig;
+use libp2p::dns::DnsConfig as Dns;
 use libp2p::kad::kbucket::Key as BucketKey;
 use libp2p::mplex::MplexConfig;
 use libp2p::noise::{self, NoiseConfig, X25519Spec};
@@ -16,7 +16,6 @@ use libp2p::pnet::{PnetConfig, PreSharedKey};
 use libp2p::swarm::{AddressScore, Swarm, SwarmBuilder};
 use libp2p::tcp::TcpConfig;
 use libp2p::yamux::YamuxConfig;
-use libp2p_quic::ToLibp2p;
 use parking_lot::Mutex;
 use prometheus::Registry;
 use std::collections::HashSet;
@@ -34,13 +33,14 @@ pub use crate::net::behaviour::{QueryId, SyncEvent};
 pub use crate::net::config::*;
 pub use crate::net::peers::{AddressSource, Event, PeerInfo};
 pub use libp2p::core::connection::ListenerId;
-pub use libp2p::gossipsub::{GossipsubEvent, GossipsubMessage, MessageId, Topic, TopicHash};
 pub use libp2p::kad::record::{Key, Record};
 pub use libp2p::kad::{PeerRecord, Quorum};
 pub use libp2p::swarm::AddressRecord;
 pub use libp2p::{Multiaddr, PeerId};
 pub use libp2p_bitswap::BitswapStore;
+pub use libp2p_quic::{generate_keypair, ToLibp2p};
 
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ListenerEvent {
     NewListenAddr(Multiaddr),
     ExpiredListenAddr(Multiaddr),
@@ -100,11 +100,11 @@ impl<P: StoreParams> NetworkService<P> {
         });*/
         let quic_or_tcp = tcp;
         let transport = if let Some(config) = config.dns {
-            DnsConfig::custom(quic_or_tcp, config.config, config.opts)
+            Dns::custom(quic_or_tcp, config.config, config.opts)
                 .await?
                 .boxed()
         } else {
-            DnsConfig::system(quic_or_tcp).await?.boxed()
+            Dns::system(quic_or_tcp).await?.boxed()
         };
         let swarm = SwarmBuilder::new(transport, behaviour, peer_id)
             .executor(Box::new(|fut| {

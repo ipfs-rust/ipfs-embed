@@ -2,7 +2,7 @@ use libipld::store::{DefaultParams, StoreParams};
 pub use libp2p::dns::{ResolverConfig, ResolverOpts};
 pub use libp2p::gossipsub::GossipsubConfig;
 pub use libp2p::identify::IdentifyConfig;
-pub use libp2p::kad::record::store::MemoryStoreConfig;
+pub use libp2p::kad::record::store::MemoryStoreConfig as KadConfig;
 pub use libp2p::mdns::MdnsConfig;
 pub use libp2p::ping::PingConfig;
 pub use libp2p_bitswap::BitswapConfig;
@@ -27,7 +27,7 @@ pub struct NetworkConfig {
     /// Mdns config.
     pub mdns: Option<MdnsConfig>,
     /// Kad config.
-    pub kad: Option<MemoryStoreConfig>,
+    pub kad: Option<KadConfig>,
     /// Ping config.
     pub ping: Option<PingConfig>,
     /// Identify config. Note that the `node_name` and
@@ -74,7 +74,7 @@ impl NetworkConfig {
             quic,
             dns: None,
             mdns: Some(MdnsConfig::default()),
-            kad: Some(MemoryStoreConfig::default()),
+            kad: Some(KadConfig::default()),
             ping: None,
             identify: Some(identify),
             gossipsub: Some(GossipsubConfig::default()),
