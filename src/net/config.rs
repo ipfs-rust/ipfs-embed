@@ -8,7 +8,6 @@ pub use libp2p::ping::PingConfig;
 pub use libp2p_bitswap::BitswapConfig;
 pub use libp2p_broadcast::BroadcastConfig;
 pub use libp2p_quic::{Keypair, ToLibp2p, TransportConfig};
-pub use secrecy::Secret;
 use std::time::Duration;
 
 /// Network configuration.
@@ -19,7 +18,7 @@ pub struct NetworkConfig {
     /// Node key.
     pub node_key: Keypair,
     /// Pre shared key.
-    pub psk: Option<Secret<[u8; 32]>>,
+    pub psk: Option<[u8; 32]>,
     /// Quic config.
     pub quic: TransportConfig,
     /// Dns config. If no dns config is provided the system
@@ -58,8 +57,7 @@ impl NetworkConfig {
         let node_name = names::Generator::with_naming(names::Name::Numbered)
             .next()
             .unwrap();
-        let mut identify = IdentifyConfig::new("/ipfs-embed/1.0".into(), node_key.to_public());
-        identify.agent_version = node_name.clone();
+        let identify = IdentifyConfig::new("/ipfs-embed/1.0".into(), node_key.to_public());
         let mut quic = TransportConfig::default();
         quic.keep_alive_interval(Some(Duration::from_millis(100)));
         quic.max_concurrent_bidi_streams(1024).unwrap();

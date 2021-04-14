@@ -19,7 +19,6 @@ use libp2p::yamux::YamuxConfig;
 use libp2p_quic::ToLibp2p;
 use parking_lot::Mutex;
 use prometheus::Registry;
-use secrecy::ExposeSecret;
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
@@ -65,7 +64,7 @@ impl<P: StoreParams> NetworkService<P> {
         let tcp = {
             let transport = TcpConfig::new().nodelay(true);
             let transport = if let Some(psk) = config.psk {
-                let psk = PreSharedKey::new(*psk.expose_secret());
+                let psk = PreSharedKey::new(psk);
                 EitherTransport::Left(
                     transport.and_then(move |socket, _| PnetConfig::new(psk).handshake(socket)),
                 )
