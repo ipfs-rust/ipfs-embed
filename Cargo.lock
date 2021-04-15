@@ -1565,9 +1565,9 @@ dependencies = [
 
 [[package]]
 name = "ipfs-sqlite-block-store"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79278185aa9e17092cbf75c28606b3ebb6f49df6643400e12b25185840d5d08c"
+checksum = "7503f8cbd1f120bd2d70f52ae46490c4c598c734988433fe6c96530bddb3c09b"
 dependencies = [
  "anyhow",
  "derive_more",
@@ -1758,9 +1758,9 @@ dependencies = [
 
 [[package]]
 name = "libp2p-bitswap"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2216584a930237d17f1747115f6656eb16a91b7b2b5b990a245349bda8d1526f"
+checksum = "8d72e67680298bf5c2b57da3eb94a315a85eea157759397e1c973e36d8c03bad"
 dependencies = [
  "async-trait",
  "fnv",
@@ -2111,9 +2111,9 @@ dependencies = [
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.20.1"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64d31059f22935e6c31830db5249ba2b7ecd54fd73a9909286f0a67aa55c2fbd"
+checksum = "2f6332d94daa84478d55a6aa9dbb3b305ed6500fb0cb9400cb9e1525d0e0e188"
 dependencies = [
  "cc",
  "pkg-config",
@@ -3001,9 +3001,9 @@ checksum = "56770675ebc04927ded3e60633437841581c285dc6236109ea25fbf3beb7b59e"
 
 [[package]]
 name = "rusqlite"
-version = "0.24.2"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5f38ee71cbab2c827ec0ac24e76f82eca723cee92c509a65f67dee393c25112"
+checksum = "48381bf52627e7b0e02c4c0e4c0c88fc1cf2228a2eb7461d9499b1372399f1da"
 dependencies = [
  "bitflags 1.2.1",
  "fallible-iterator",
