@@ -3776,9 +3776,9 @@ checksum = "879f6906492a7cd215bfa4cf595b600146ccfac0c79bcbd1f3000162af5e8b06"
 
 [[package]]
 name = "udp-socket"
-version = "0.1.3"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "597d54e27ed027aa6a362e825ebb46d4a05847d8c05b01dee0e8ce60ae44f952"
+checksum = "ab965d55b986832d7aefec8778caf524fa14ab0f7fe79588ebc85da4a83f0572"
 dependencies = [
  "async-io",
  "futures-lite",

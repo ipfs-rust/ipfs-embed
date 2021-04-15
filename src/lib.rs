@@ -292,11 +292,7 @@ where
 
     /// Either returns a block if it's in the block store or tries to retrieve it from
     /// a peer.
-    pub async fn fetch(
-        &self,
-        cid: &Cid,
-        providers: Vec<PeerId>,
-    ) -> Result<Block<P>> {
+    pub async fn fetch(&self, cid: &Cid, providers: Vec<PeerId>) -> Result<Block<P>> {
         if let Some(data) = self.storage.get(cid)? {
             let block = Block::new_unchecked(*cid, data);
             return Ok(block);
@@ -519,7 +515,9 @@ mod tests {
         let tmp2 = store2.create_temp_pin()?;
         store2.temp_pin(&tmp2, block.cid())?;
         let providers = store2.providers(key).await?;
-        let block2 = store2.fetch(block.cid(), providers.into_iter().collect()).await?;
+        let block2 = store2
+            .fetch(block.cid(), providers.into_iter().collect())
+            .await?;
         assert_eq!(block.data(), block2.data());
         Ok(())
     }
