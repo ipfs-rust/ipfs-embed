@@ -86,7 +86,7 @@ jobs:
 
     - name: Rust tests
       if: matrix.platform.cross == false
-      run: cargo test --all
+      run: cargo test
 
   lint-rust:
     runs-on: ubuntu-latest
