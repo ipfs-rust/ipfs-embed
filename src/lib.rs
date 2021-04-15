@@ -295,18 +295,20 @@ where
     pub async fn fetch(
         &self,
         cid: &Cid,
-        providers: impl Iterator<Item = PeerId>,
+        providers: Vec<PeerId>,
     ) -> Result<Block<P>> {
         if let Some(data) = self.storage.get(cid)? {
             let block = Block::new_unchecked(*cid, data);
             return Ok(block);
         }
-        self.network.get(*cid, providers).await?;
-        if let Some(data) = self.storage.get(cid)? {
-            let block = Block::new_unchecked(*cid, data);
-            return Ok(block);
+        if !providers.is_empty() {
+            self.network.get(*cid, providers.into_iter()).await?;
+            if let Some(data) = self.storage.get(cid)? {
+                let block = Block::new_unchecked(*cid, data);
+                return Ok(block);
+            }
+            tracing::error!("block evicted too soon. use a temp pin to keep the block around.");
         }
-        tracing::error!("block evicted too soon. use a temp pin to keep the block around.");
         Err(BlockNotFound(*cid).into())
     }
 
@@ -408,7 +410,7 @@ where
     }
 
     async fn fetch(&self, cid: &Cid) -> Result<Block<Self::Params>> {
-        Ipfs::fetch(self, cid, self.peers().into_iter()).await
+        Ipfs::fetch(self, cid, self.peers()).await
     }
 
     async fn sync(&self, cid: &Cid) -> Result<()> {
@@ -483,7 +485,7 @@ mod tests {
         let tmp2 = store2.create_temp_pin()?;
         store2.temp_pin(&tmp2, block.cid())?;
         let block2 = store2
-            .fetch(block.cid(), std::iter::once(store1.local_peer_id()))
+            .fetch(block.cid(), vec![store1.local_peer_id()])
             .await?;
         assert_eq!(block.data(), block2.data());
         Ok(())
@@ -517,8 +519,7 @@ mod tests {
         let tmp2 = store2.create_temp_pin()?;
         store2.temp_pin(&tmp2, block.cid())?;
         let providers = store2.providers(key).await?;
-        assert!(!providers.is_empty());
-        let block2 = store2.fetch(block.cid(), providers.into_iter()).await?;
+        let block2 = store2.fetch(block.cid(), providers.into_iter().collect()).await?;
         assert_eq!(block.data(), block2.data());
         Ok(())
     }
@@ -529,7 +530,7 @@ mod tests {
         let store1 = create_store(true).await?;
         let block = create_block(b"test_provider_not_found")?;
         if store1
-            .fetch(block.cid(), std::iter::once(store1.local_peer_id()))
+            .fetch(block.cid(), vec![store1.local_peer_id()])
             .await
             .unwrap_err()
             .downcast_ref::<BlockNotFound>()
