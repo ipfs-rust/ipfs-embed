@@ -78,11 +78,11 @@ jobs:
 
     - name: Build
       if: contains(matrix.platform.target, 'android') == false
-      run: cargo build --all --target ${{ matrix.platform.target }}
+      run: cargo build --target ${{ matrix.platform.target }}
 
     - name: Build android
       if: contains(matrix.platform.target, 'android')
-      run: cargo apk build --target ${{ matrix.platform.target }} --all
+      run: cargo apk build --target ${{ matrix.platform.target }}
 
     - name: Rust tests
       if: matrix.platform.cross == false
