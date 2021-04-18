@@ -1,4 +1,3 @@
-use async_global_executor::Task;
 pub use ipfs_sqlite_block_store::TempPin;
 use ipfs_sqlite_block_store::{
     cache::SqliteCacheTracker, BlockStore, Config, SizeTargets, Synchronous,
@@ -16,6 +15,8 @@ use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+
+use crate::executor::{Executor, JoinHandle};
 
 /// Storage configuration.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -73,11 +74,12 @@ impl StorageConfig {
 
 #[derive(Clone)]
 pub struct StorageService<S: StoreParams> {
+    executor: Executor,
     _marker: PhantomData<S>,
     store: Arc<Mutex<BlockStore>>,
     gc_target_duration: Duration,
     gc_min_blocks: usize,
-    _gc_task: Arc<Task<()>>,
+    _gc_task: Arc<JoinHandle<()>>,
     exit: Arc<(Mutex<bool>, Condvar)>,
 }
 
@@ -92,7 +94,7 @@ impl<S: StoreParams> StorageService<S>
 where
     Ipld: References<S::Codecs>,
 {
-    pub fn open(config: StorageConfig) -> Result<Self> {
+    pub fn open(config: StorageConfig, executor: Executor) -> Result<Self> {
         let size = SizeTargets::new(config.cache_size_blocks, config.cache_size_bytes);
         let store_config = Config::default()
             .with_size_targets(size)
@@ -111,40 +113,40 @@ where
         let gc_target_duration = config.gc_target_duration;
         let exit = Arc::new((Mutex::new(false), Condvar::new()));
         let exit2 = exit.clone();
-        let gc_task =
-            async_global_executor::spawn(async_global_executor::spawn_blocking(move || {
-                enum Phase {
-                    Gc,
-                    Delete,
+        let gc_task = executor.spawn_blocking(move || {
+            enum Phase {
+                Gc,
+                Delete,
+            }
+            let mut phase = Phase::Gc;
+            loop {
+                let mut should_exit = exit.0.lock();
+                let timeout = exit.1.wait_for(&mut should_exit, gc_interval / 2);
+                if *should_exit {
+                    break;
                 }
-                let mut phase = Phase::Gc;
-                loop {
-                    let mut should_exit = exit.0.lock();
-                    let timeout = exit.1.wait_for(&mut should_exit, gc_interval / 2);
-                    if *should_exit {
-                        break;
-                    }
-                    if timeout.timed_out() {
-                        match phase {
-                            Phase::Gc => {
-                                tracing::debug!("gc_loop running incremental gc");
-                                gc.lock()
-                                    .incremental_gc(gc_min_blocks, gc_target_duration)
-                                    .ok();
-                                phase = Phase::Delete;
-                            }
-                            Phase::Delete => {
-                                tracing::debug!("gc_loop running incremental delete orphaned");
-                                gc.lock()
-                                    .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)
-                                    .ok();
-                                phase = Phase::Gc;
-                            }
+                if timeout.timed_out() {
+                    match phase {
+                        Phase::Gc => {
+                            tracing::debug!("gc_loop running incremental gc");
+                            gc.lock()
+                                .incremental_gc(gc_min_blocks, gc_target_duration)
+                                .ok();
+                            phase = Phase::Delete;
+                        }
+                        Phase::Delete => {
+                            tracing::debug!("gc_loop running incremental delete orphaned");
+                            gc.lock()
+                                .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)
+                                .ok();
+                            phase = Phase::Gc;
                         }
                     }
                 }
-            }));
+            }
+        });
         Ok(Self {
+            executor,
             _marker: PhantomData,
             gc_target_duration: config.gc_target_duration,
             gc_min_blocks: config.gc_min_blocks,
@@ -191,18 +193,20 @@ where
         let store = self.store.clone();
         let gc_min_blocks = self.gc_min_blocks;
         let gc_target_duration = self.gc_target_duration;
-        async_global_executor::spawn_blocking(move || {
-            while !store
-                .lock()
-                .incremental_gc(gc_min_blocks, gc_target_duration)?
-            {}
-            while !store
-                .lock()
-                .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)?
-            {}
-            Ok(())
-        })
-        .await
+        self.executor
+            .spawn_blocking(move || {
+                while !store
+                    .lock()
+                    .incremental_gc(gc_min_blocks, gc_target_duration)?
+                {}
+                while !store
+                    .lock()
+                    .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)?
+                {
+                }
+                Ok(())
+            })
+            .await?
     }
 
     pub fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
@@ -225,8 +229,8 @@ where
 
     pub async fn flush(&self) -> Result<()> {
         let store = self.store.clone();
-        let flush = async_global_executor::spawn_blocking(move || store.lock().flush());
-        observe_future("flush", flush).await
+        let flush = self.executor.spawn_blocking(move || store.lock().flush());
+        Ok(observe_future("flush", flush).await??)
     }
 
     pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
@@ -272,10 +276,9 @@ where
     Ok(res?)
 }
 
-async fn observe_future<T, E, F>(name: &'static str, query: F) -> Result<T>
+async fn observe_future<T, F>(name: &'static str, query: F) -> Result<T>
 where
-    E: std::error::Error + Send + Sync + 'static,
-    F: Future<Output = Result<T, E>>,
+    F: Future<Output = anyhow::Result<T>>,
 {
     QUERIES_TOTAL.with_label_values(&[name]).inc();
     let timer = QUERY_DURATION.with_label_values(&[name]).start_timer();
@@ -332,6 +335,8 @@ impl SqliteStoreCollector {
 
 #[cfg(test)]
 mod tests {
+    use crate::executor::Executor;
+
     use super::*;
     use libipld::cbor::DagCborCodec;
     use libipld::multihash::Code;
@@ -381,7 +386,7 @@ mod tests {
 
     fn create_store() -> StorageService<DefaultParams> {
         let config = StorageConfig::new(None, 2, Duration::from_secs(100));
-        StorageService::open(config).unwrap()
+        StorageService::open(config, Executor::new()).unwrap()
     }
 
     #[async_std::test]

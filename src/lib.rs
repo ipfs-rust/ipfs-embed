@@ -22,6 +22,7 @@ use crate::net::{BitswapStore, NetworkService};
 #[cfg(feature = "telemetry")]
 pub use crate::telemetry::telemetry;
 use async_trait::async_trait;
+use executor::Executor;
 use futures::stream::Stream;
 use libipld::codec::References;
 use libipld::error::BlockNotFound;
@@ -36,6 +37,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 mod db;
+mod executor;
 mod net;
 #[cfg(feature = "telemetry")]
 mod telemetry;
@@ -109,9 +111,13 @@ where
     /// This starts three background tasks. The swarm, garbage collector and the dht cleanup
     /// tasks run in the background.
     pub async fn new(config: Config) -> Result<Self> {
-        let storage = StorageService::open(config.storage)?;
+        let executor = Executor::new();
+        Self::new0(config, executor).await
+    }
+    async fn new0(config: Config, executor: Executor) -> Result<Self> {
+        let storage = StorageService::open(config.storage, executor.clone())?;
         let bitswap = BitswapStorage(storage.clone());
-        let network = NetworkService::new(config.network, bitswap).await?;
+        let network = NetworkService::new(config.network, bitswap, executor).await?;
         Ok(Self { storage, network })
     }
 

@@ -1,5 +1,7 @@
-use crate::net::behaviour::{GetChannel, NetworkBackendBehaviour, SyncChannel};
-use async_global_executor::Task;
+use crate::{
+    executor::{Executor, JoinHandle},
+    net::behaviour::{GetChannel, NetworkBackendBehaviour, SyncChannel},
+};
 use futures::stream::{Stream, StreamExt};
 use futures::task::AtomicWaker;
 use futures::{future, pin_mut};
@@ -14,7 +16,10 @@ use libp2p::mplex::MplexConfig;
 use libp2p::noise::{self, NoiseConfig, X25519Spec};
 use libp2p::pnet::{PnetConfig, PreSharedKey};
 use libp2p::swarm::{AddressScore, Swarm, SwarmBuilder};
+#[cfg(feature = "async_global")]
 use libp2p::tcp::TcpConfig;
+#[cfg(all(feature = "tokio", not(feature = "async_global")))]
+use libp2p::tcp::TokioTcpConfig as TcpConfig;
 use libp2p::yamux::YamuxConfig;
 use parking_lot::Mutex;
 use prometheus::Registry;
@@ -48,15 +53,17 @@ pub enum ListenerEvent {
 
 #[derive(Clone)]
 pub struct NetworkService<P: StoreParams> {
+    executor: Executor,
     swarm: Arc<Mutex<Swarm<NetworkBackendBehaviour<P>>>>,
     waker: Arc<AtomicWaker>,
-    _swarm_task: Arc<Task<()>>,
+    _swarm_task: Arc<JoinHandle<()>>,
 }
 
 impl<P: StoreParams> NetworkService<P> {
     pub async fn new<S: BitswapStore<Params = P>>(
         mut config: NetworkConfig,
         store: S,
+        executor: Executor,
     ) -> Result<Self> {
         let peer_id = config.node_key.to_peer_id();
         let behaviour = NetworkBackendBehaviour::<P>::new(&mut config, store).await?;
@@ -106,9 +113,10 @@ impl<P: StoreParams> NetworkService<P> {
         } else {
             Dns::system(quic_or_tcp).await?.boxed()
         };
+        let exec = executor.clone();
         let swarm = SwarmBuilder::new(transport, behaviour, peer_id)
-            .executor(Box::new(|fut| {
-                async_global_executor::spawn(fut).detach();
+            .executor(Box::new(move |fut| {
+                exec.spawn(fut).detach();
             }))
             .build();
         /*
@@ -122,7 +130,7 @@ impl<P: StoreParams> NetworkService<P> {
         let swarm2 = swarm.clone();
         let waker = Arc::new(AtomicWaker::new());
         let waker2 = waker.clone();
-        let swarm_task = async_global_executor::spawn::<_, ()>(future::poll_fn(move |cx| {
+        let swarm_task = executor.spawn(future::poll_fn(move |cx| {
             waker.register(cx.waker());
             let mut guard = swarm.lock();
             while {
@@ -134,6 +142,7 @@ impl<P: StoreParams> NetworkService<P> {
         }));
 
         Ok(Self {
+            executor,
             swarm: swarm2,
             waker: waker2,
             _swarm_task: Arc::new(swarm_task),
