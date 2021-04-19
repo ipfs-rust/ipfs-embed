@@ -111,7 +111,7 @@ impl<T> Future for JoinHandle<T> {
 
 #[cfg(test)]
 mod test {
-    use crate::{Config, DefaultParams, Executor, Ipfs};
+    use crate::{Config, DefaultParams, Ipfs};
 
     #[test]
     fn should_work_with_async_global_per_default() {
@@ -128,7 +128,7 @@ mod test {
         use futures::executor::block_on;
         let _ = block_on(Ipfs::<DefaultParams>::new0(
             Config::new(None, 100),
-            Executor::Tokio,
+            crate::Executor::Tokio,
         ));
     }
 
@@ -140,7 +140,7 @@ mod test {
             .unwrap();
         rt.block_on(Ipfs::<DefaultParams>::new0(
             Config::new(None, 100),
-            Executor::Tokio,
+            crate::Executor::Tokio,
         ))
         .unwrap();
     }
