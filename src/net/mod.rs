@@ -10,7 +10,10 @@ use libipld::{Cid, Result};
 use libp2p::core::either::EitherTransport;
 use libp2p::core::transport::Transport;
 use libp2p::core::upgrade::{SelectUpgrade, Version};
+#[cfg(feature = "async_global")]
 use libp2p::dns::DnsConfig as Dns;
+#[cfg(all(feature = "tokio", not(feature = "async_global")))]
+use libp2p::dns::TokioDnsConfig as Dns;
 use libp2p::kad::kbucket::Key as BucketKey;
 use libp2p::mplex::MplexConfig;
 use libp2p::noise::{self, NoiseConfig, X25519Spec};
@@ -106,6 +109,7 @@ impl<P: StoreParams> NetworkService<P> {
             EitherOutput::Second(second) => second,
         });*/
         let quic_or_tcp = tcp;
+        #[cfg(feature = "async_global")]
         let transport = if let Some(config) = config.dns {
             Dns::custom(quic_or_tcp, config.config, config.opts)
                 .await?
@@ -113,6 +117,13 @@ impl<P: StoreParams> NetworkService<P> {
         } else {
             Dns::system(quic_or_tcp).await?.boxed()
         };
+        #[cfg(all(feature = "tokio", not(feature = "async_global")))]
+        let transport = if let Some(config) = config.dns {
+            Dns::custom(quic_or_tcp, config.config, config.opts)?.boxed()
+        } else {
+            Dns::system(quic_or_tcp)?.boxed()
+        };
+
         let exec = executor.clone();
         let swarm = SwarmBuilder::new(transport, behaviour, peer_id)
             .executor(Box::new(move |fut| {

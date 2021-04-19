@@ -12,8 +12,8 @@ repository = "https://github.com/ipfs-rust/ipfs-embed"
 
 [features]
 default = ["async_global"]
-async_global = ["async-global-executor", "libp2p/tcp-async-io"]
-tokio = ["tokio-crate", "libp2p/tcp-tokio"]
+async_global = ["async-global-executor", "libp2p/tcp-async-io", "libp2p/dns-async-std"]
+tokio = ["tokio-crate", "libp2p/tcp-tokio", "libp2p/dns-tokio"]
 telemetry = ["tide", "async_global"]
 
 [dependencies]
@@ -43,7 +43,6 @@ void = "1.0.2"
 version = "0.37.1"
 default-features = false
 features = [
-    "dns-async-std",
     "gossipsub",
     "identify",
     "kad",
