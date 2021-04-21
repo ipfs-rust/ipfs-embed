@@ -11,7 +11,6 @@ use prometheus::core::{Collector, Desc};
 use prometheus::proto::MetricFamily;
 use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry};
 use std::future::Future;
-use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -75,8 +74,7 @@ impl StorageConfig {
 #[derive(Clone)]
 pub struct StorageService<S: StoreParams> {
     executor: Executor,
-    _marker: PhantomData<S>,
-    store: Arc<Mutex<BlockStore>>,
+    store: Arc<Mutex<BlockStore<S>>>,
     gc_target_duration: Duration,
     gc_min_blocks: usize,
     _gc_task: Arc<JoinHandle<()>>,
@@ -147,7 +145,6 @@ where
         });
         Ok(Self {
             executor,
-            _marker: PhantomData,
             gc_target_duration: config.gc_target_duration,
             gc_min_blocks: config.gc_min_blocks,
             store,
@@ -291,12 +288,15 @@ where
     Ok(res?)
 }
 
-struct SqliteStoreCollector {
+struct SqliteStoreCollector<S: StoreParams> {
     desc: Desc,
-    store: Arc<Mutex<BlockStore>>,
+    store: Arc<Mutex<BlockStore<S>>>,
 }
 
-impl Collector for SqliteStoreCollector {
+impl<S: StoreParams> Collector for SqliteStoreCollector<S>
+where
+    Ipld: References<S::Codecs>,
+{
     fn desc(&self) -> Vec<&Desc> {
         vec![&self.desc]
     }
@@ -320,8 +320,8 @@ impl Collector for SqliteStoreCollector {
     }
 }
 
-impl SqliteStoreCollector {
-    pub fn new(store: Arc<Mutex<BlockStore>>) -> Self {
+impl<S: StoreParams> SqliteStoreCollector<S> {
+    pub fn new(store: Arc<Mutex<BlockStore<S>>>) -> Self {
         let desc = Desc::new(
             "block_store_stats".into(),
             ".".into(),
