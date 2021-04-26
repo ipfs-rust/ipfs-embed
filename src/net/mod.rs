@@ -4,7 +4,8 @@ use crate::{
 };
 use futures::stream::{Stream, StreamExt};
 use futures::task::AtomicWaker;
-use futures::{future, pin_mut};
+use futures::{channel::mpsc, future, pin_mut};
+use libipld::error::BlockNotFound;
 use libipld::store::StoreParams;
 use libipld::{Cid, Result};
 use libp2p::core::either::EitherTransport;
@@ -353,18 +354,21 @@ impl<P: StoreParams> NetworkService<P> {
         }
     }
 
-    pub fn sync(
-        &self,
-        cid: Cid,
-        providers: Vec<PeerId>,
-        missing: impl Iterator<Item = Cid>,
-    ) -> SyncQuery<P> {
+    pub fn sync(&self, cid: Cid, providers: Vec<PeerId>, missing: Vec<Cid>) -> SyncQuery<P> {
+        if missing.is_empty() {
+            return SyncQuery::ready(Ok(()));
+        }
+        if providers.is_empty() {
+            return SyncQuery::ready(Err(BlockNotFound(missing[0]).into()));
+        }
         let mut swarm = self.swarm.lock();
-        let (rx, id) = swarm.behaviour_mut().sync(cid, providers, missing);
+        let (rx, id) = swarm
+            .behaviour_mut()
+            .sync(cid, providers, missing.into_iter());
         self.waker.wake();
         SyncQuery {
             swarm: Some(self.swarm.clone()),
-            id,
+            id: Some(id),
             rx,
         }
     }
@@ -409,8 +413,20 @@ impl<P: StoreParams> Drop for GetQuery<P> {
 /// A `bitswap` sync query.
 pub struct SyncQuery<P: StoreParams> {
     swarm: Option<Arc<Mutex<Swarm<NetworkBackendBehaviour<P>>>>>,
-    id: QueryId,
+    id: Option<QueryId>,
     rx: SyncChannel,
+}
+
+impl<P: StoreParams> SyncQuery<P> {
+    fn ready(res: Result<()>) -> Self {
+        let (tx, rx) = mpsc::unbounded();
+        tx.unbounded_send(SyncEvent::Complete(res)).unwrap();
+        Self {
+            swarm: None,
+            id: None,
+            rx,
+        }
+    }
 }
 
 impl<P: StoreParams> Future for SyncQuery<P> {
@@ -437,8 +453,10 @@ impl<P: StoreParams> Stream for SyncQuery<P> {
 
 impl<P: StoreParams> Drop for SyncQuery<P> {
     fn drop(&mut self) {
-        let swarm = self.swarm.take().unwrap();
-        let mut swarm = swarm.lock();
-        swarm.behaviour_mut().cancel(self.id);
+        if let Some(id) = self.id.take() {
+            let swarm = self.swarm.take().unwrap();
+            let mut swarm = swarm.lock();
+            swarm.behaviour_mut().cancel(id);
+        }
     }
 }

@@ -329,7 +329,7 @@ where
 
     pub fn sync(&self, cid: &Cid, providers: Vec<PeerId>) -> SyncQuery<P> {
         let missing = self.storage.missing_blocks(cid).ok().unwrap_or_default();
-        self.network.sync(*cid, providers, missing.into_iter())
+        self.network.sync(*cid, providers, missing)
     }
 
     /// Creates, updates or removes an alias with a new root `Cid`.
