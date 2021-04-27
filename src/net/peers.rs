@@ -24,6 +24,8 @@ pub enum Event {
     Unreachable(PeerId),
     Connected(PeerId),
     Disconnected(PeerId),
+    Subscribed(PeerId, String),
+    Unsubscribed(PeerId, String),
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

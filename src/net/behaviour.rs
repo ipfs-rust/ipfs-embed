@@ -337,8 +337,14 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<GossipsubEvent> for NetworkBac
                     }
                 }
             }
-            GossipsubEvent::Subscribed { .. } => {}
-            GossipsubEvent::Unsubscribed { .. } => {}
+            GossipsubEvent::Subscribed { peer_id, topic, .. } => {
+                self.peers
+                    .notify(Event::Subscribed(peer_id, topic.to_string()));
+            }
+            GossipsubEvent::Unsubscribed { peer_id, topic, .. } => {
+                self.peers
+                    .notify(Event::Unsubscribed(peer_id, topic.to_string()));
+            }
         }
     }
 }
@@ -357,8 +363,17 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<BroadcastEvent> for NetworkBac
                     }
                 }
             }
-            BroadcastEvent::Subscribed(_, _) => {}
-            BroadcastEvent::Unsubscribed(_, _) => {}
+            BroadcastEvent::Subscribed(peer_id, topic) => {
+                if let Ok(topic) = std::str::from_utf8(&topic) {
+                    self.peers.notify(Event::Subscribed(peer_id, topic.into()));
+                }
+            }
+            BroadcastEvent::Unsubscribed(peer_id, topic) => {
+                if let Ok(topic) = std::str::from_utf8(&topic) {
+                    self.peers
+                        .notify(Event::Unsubscribed(peer_id, topic.into()));
+                }
+            }
         }
     }
 }
