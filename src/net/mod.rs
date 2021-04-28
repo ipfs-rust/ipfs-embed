@@ -175,6 +175,7 @@ impl<P: StoreParams> NetworkService<P> {
         let mut swarm = self.swarm.lock();
         let stream = swarm.behaviour_mut().event_stream();
         let listener = swarm.listen_on(addr)?;
+        self.waker.wake();
         Ok(stream
             .take_while(move |event| match event {
                 Event::ListenerClosed(id) if *id == listener => future::ready(false),
@@ -199,6 +200,7 @@ impl<P: StoreParams> NetworkService<P> {
     pub fn add_external_address(&self, addr: Multiaddr) {
         let mut swarm = self.swarm.lock();
         swarm.add_external_address(addr, AddressScore::Infinite);
+        self.waker.wake();
     }
 
     pub fn external_addresses(&self) -> Vec<AddressRecord> {
@@ -222,17 +224,21 @@ impl<P: StoreParams> NetworkService<P> {
 
     pub fn dial(&self, peer: &PeerId) -> Result<()> {
         let mut swarm = self.swarm.lock();
-        Ok(swarm.dial(peer)?)
+        swarm.dial(peer)?;
+        self.waker.wake();
+        Ok(())
     }
 
     pub fn ban(&self, peer: PeerId) {
         let mut swarm = self.swarm.lock();
-        swarm.ban_peer_id(peer)
+        swarm.ban_peer_id(peer);
+        self.waker.wake();
     }
 
     pub fn unban(&self, peer: PeerId) {
         let mut swarm = self.swarm.lock();
-        swarm.unban_peer_id(peer)
+        swarm.unban_peer_id(peer);
+        self.waker.wake();
     }
 
     pub fn peers(&self) -> Vec<PeerId> {
@@ -330,12 +336,16 @@ impl<P: StoreParams> NetworkService<P> {
 
     pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = Vec<u8>>> {
         let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().subscribe(topic)
+        let stream = swarm.behaviour_mut().subscribe(topic)?;
+        self.waker.wake();
+        Ok(stream)
     }
 
     pub fn publish(&self, topic: &str, msg: Vec<u8>) -> Result<()> {
         let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().publish(topic, msg)
+        swarm.behaviour_mut().publish(topic, msg)?;
+        self.waker.wake();
+        Ok(())
     }
 
     pub fn broadcast(&self, topic: &str, msg: Vec<u8>) -> Result<()> {
