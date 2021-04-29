@@ -309,7 +309,8 @@ impl<P: StoreParams> NetworkService<P> {
 
     pub fn unprovide(&self, key: &Key) {
         let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().unprovide(key)
+        swarm.behaviour_mut().unprovide(key);
+        self.waker.wake();
     }
 
     pub async fn get_record(&self, key: &Key, quorum: Quorum) -> Result<Vec<PeerRecord>> {
@@ -331,7 +332,8 @@ impl<P: StoreParams> NetworkService<P> {
 
     pub fn remove_record(&self, key: &Key) {
         let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().remove_record(key)
+        swarm.behaviour_mut().remove_record(key);
+        self.waker.wake();
     }
 
     pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = Vec<u8>>> {
@@ -350,7 +352,9 @@ impl<P: StoreParams> NetworkService<P> {
 
     pub fn broadcast(&self, topic: &str, msg: Vec<u8>) -> Result<()> {
         let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().broadcast(topic, msg)
+        swarm.behaviour_mut().broadcast(topic, msg)?;
+        self.waker.wake();
+        Ok(())
     }
 
     pub fn get(&self, cid: Cid, providers: impl Iterator<Item = PeerId>) -> GetQuery<P> {
