@@ -132,9 +132,10 @@ impl AddressBook {
             peer,
             source
         );
+        let discovered = !self.peers.contains_key(peer);
         let info = self.peers.entry(*peer).or_default();
         info.addresses.insert(address, source);
-        if !self.is_connected(peer) {
+        if discovered {
             self.notify(Event::Discovered(*peer));
         }
     }
