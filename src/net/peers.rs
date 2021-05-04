@@ -5,10 +5,12 @@ use futures::stream::Stream;
 use lazy_static::lazy_static;
 use libp2p::core::connection::{ConnectedPoint, ConnectionId, ListenerId};
 use libp2p::identify::IdentifyInfo;
+use libp2p::multiaddr::Protocol;
 use libp2p::swarm::protocols_handler::DummyProtocolsHandler;
 use libp2p::swarm::{DialPeerCondition, NetworkBehaviour, NetworkBehaviourAction, PollParameters};
 use libp2p::{Multiaddr, PeerId};
 use prometheus::{IntCounter, IntGauge, Registry};
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -125,7 +127,7 @@ impl AddressBook {
         &self.local_peer_id
     }
 
-    pub fn add_address(&mut self, peer: &PeerId, address: Multiaddr, source: AddressSource) {
+    pub fn add_address(&mut self, peer: &PeerId, mut address: Multiaddr, source: AddressSource) {
         if peer == self.local_peer_id() {
             return;
         }
@@ -137,6 +139,9 @@ impl AddressBook {
         );
         let discovered = !self.peers.contains_key(peer);
         let info = self.peers.entry(*peer).or_default();
+        if address.iter().last() == Some(Protocol::P2p((*peer).into())) {
+            address.pop();
+        }
         info.addresses.insert(address, source);
         if discovered {
             self.notify(Event::Discovered(*peer));
@@ -144,9 +149,16 @@ impl AddressBook {
     }
 
     pub fn remove_address(&mut self, peer: &PeerId, address: &Multiaddr) {
+        let address = if address.iter().last() == Some(Protocol::P2p((*peer).into())) {
+            let mut address = address.clone();
+            address.pop();
+            Cow::Owned(address)
+        } else {
+            Cow::Borrowed(address)
+        };
         if let Some(info) = self.peers.get_mut(peer) {
             tracing::trace!("removing address {} for peer {}", address, peer);
-            info.addresses.remove(address);
+            info.addresses.remove(&address);
         }
     }
 
@@ -305,6 +317,7 @@ impl NetworkBehaviour for AddressBook {
         // peer.
         if let Some(peer) = self.peers.get(peer_id) {
             if !peer.addresses.is_empty() {
+                tracing::trace!("redialing with new addresses");
                 self.actions.push_back(NetworkBehaviourAction::DialPeer {
                     peer_id: *peer_id,
                     condition: DialPeerCondition::NotDialing,
