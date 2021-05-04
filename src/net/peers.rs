@@ -6,9 +6,10 @@ use lazy_static::lazy_static;
 use libp2p::core::connection::{ConnectedPoint, ConnectionId, ListenerId};
 use libp2p::identify::IdentifyInfo;
 use libp2p::swarm::protocols_handler::DummyProtocolsHandler;
-use libp2p::swarm::{NetworkBehaviour, NetworkBehaviourAction, PollParameters};
+use libp2p::swarm::{DialPeerCondition, NetworkBehaviour, NetworkBehaviourAction, PollParameters};
 use libp2p::{Multiaddr, PeerId};
 use prometheus::{IntCounter, IntGauge, Registry};
+use std::collections::VecDeque;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -101,6 +102,7 @@ pub struct AddressBook {
     peers: FnvHashMap<PeerId, PeerInfo>,
     connections: FnvHashMap<PeerId, Multiaddr>,
     event_stream: Vec<mpsc::UnboundedSender<Event>>,
+    actions: VecDeque<NetworkBehaviourAction<void::Void, void::Void>>,
 }
 
 impl AddressBook {
@@ -111,6 +113,7 @@ impl AddressBook {
             peers: Default::default(),
             connections: Default::default(),
             event_stream: Default::default(),
+            actions: Default::default(),
         }
     }
 
@@ -225,7 +228,11 @@ impl NetworkBehaviour for AddressBook {
         _cx: &mut Context,
         _params: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<void::Void, void::Void>> {
-        Poll::Pending
+        if let Some(action) = self.actions.pop_front() {
+            Poll::Ready(action)
+        } else {
+            Poll::Pending
+        }
     }
 
     fn inject_connected(&mut self, peer_id: &PeerId) {
@@ -294,6 +301,17 @@ impl NetworkBehaviour for AddressBook {
     }
 
     fn inject_dial_failure(&mut self, peer_id: &PeerId) {
+        // If an address was added after the peer was dialed retry dialing the
+        // peer.
+        if let Some(peer) = self.peers.get(peer_id) {
+            if !peer.addresses.is_empty() {
+                self.actions.push_back(NetworkBehaviourAction::DialPeer {
+                    peer_id: *peer_id,
+                    condition: DialPeerCondition::NotDialing,
+                });
+                return;
+            }
+        }
         tracing::trace!("dial failure {}", peer_id);
         DIAL_FAILURE.inc();
         if self.peers.remove(peer_id).is_some() {
