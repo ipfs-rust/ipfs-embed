@@ -222,11 +222,10 @@ impl<P: StoreParams> NetworkService<P> {
         self.waker.wake();
     }
 
-    pub fn dial(&self, peer: &PeerId) -> Result<()> {
+    pub fn dial(&self, peer: &PeerId) {
         let mut swarm = self.swarm.lock();
-        swarm.dial(peer)?;
+        swarm.behaviour_mut().dial(peer);
         self.waker.wake();
-        Ok(())
     }
 
     pub fn ban(&self, peer: PeerId) {
@@ -268,7 +267,7 @@ impl<P: StoreParams> NetworkService<P> {
     pub async fn bootstrap(&self, peers: &[(PeerId, Multiaddr)]) -> Result<()> {
         for (peer, addr) in peers {
             self.add_address(peer, addr.clone());
-            self.dial(peer)?;
+            self.dial(peer);
         }
         let rx = {
             let mut swarm = self.swarm.lock();

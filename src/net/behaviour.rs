@@ -464,6 +464,10 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         }
     }
 
+    pub fn dial(&mut self, peer_id: &PeerId) {
+        self.peers.dial(peer_id);
+    }
+
     pub fn peers(&self) -> impl Iterator<Item = &PeerId> + '_ {
         self.peers.peers()
     }

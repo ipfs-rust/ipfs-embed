@@ -127,6 +127,13 @@ impl AddressBook {
         &self.local_peer_id
     }
 
+    pub fn dial(&mut self, peer: &PeerId) {
+        self.actions.push_back(NetworkBehaviourAction::DialPeer {
+            peer_id: *peer,
+            condition: DialPeerCondition::Disconnected,
+        });
+    }
+
     pub fn add_address(&mut self, peer: &PeerId, mut address: Multiaddr, source: AddressSource) {
         if peer == self.local_peer_id() {
             return;
@@ -318,10 +325,7 @@ impl NetworkBehaviour for AddressBook {
         if let Some(peer) = self.peers.get(peer_id) {
             if !peer.addresses.is_empty() {
                 tracing::trace!("redialing with new addresses");
-                self.actions.push_back(NetworkBehaviourAction::DialPeer {
-                    peer_id: *peer_id,
-                    condition: DialPeerCondition::NotDialing,
-                });
+                self.dial(peer_id);
                 return;
             }
         }

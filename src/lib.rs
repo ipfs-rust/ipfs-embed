@@ -162,14 +162,14 @@ where
     }
 
     /// Dials a `PeerId` using a known address.
-    pub fn dial(&self, peer: &PeerId) -> Result<()> {
-        self.network.dial(peer)
+    pub fn dial(&self, peer: &PeerId) {
+        self.network.dial(peer);
     }
 
     /// Dials a `PeerId` using `Multiaddr`.
-    pub fn dial_address(&self, peer: &PeerId, addr: Multiaddr) -> Result<()> {
+    pub fn dial_address(&self, peer: &PeerId, addr: Multiaddr) {
         self.network.add_address(peer, addr);
-        self.network.dial(peer)
+        self.network.dial(peer);
     }
 
     /// Bans a `PeerId` from the swarm, dropping all existing connections and
@@ -680,7 +680,7 @@ mod tests {
         for store in &stores {
             for other in &stores {
                 if store.local_peer_id() != other.local_peer_id() {
-                    store.dial_address(&other.local_peer_id(), other.listeners()[0].clone())?;
+                    store.dial_address(&other.local_peer_id(), other.listeners()[0].clone());
                 }
             }
             subscriptions.push(store.subscribe(topic)?);
