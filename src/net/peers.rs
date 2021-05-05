@@ -139,8 +139,8 @@ impl AddressBook {
         );
         let discovered = !self.peers.contains_key(peer);
         let info = self.peers.entry(*peer).or_default();
-        if address.iter().last() == Some(Protocol::P2p((*peer).into())) {
-            address.pop();
+        if address.iter().last() != Some(Protocol::P2p((*peer).into())) {
+            address.push(Protocol::P2p((*peer).into()));
         }
         info.addresses.insert(address, source);
         if discovered {
@@ -149,9 +149,9 @@ impl AddressBook {
     }
 
     pub fn remove_address(&mut self, peer: &PeerId, address: &Multiaddr) {
-        let address = if address.iter().last() == Some(Protocol::P2p((*peer).into())) {
+        let address = if address.iter().last() != Some(Protocol::P2p((*peer).into())) {
             let mut address = address.clone();
-            address.pop();
+            address.push(Protocol::P2p((*peer).into()));
             Cow::Owned(address)
         } else {
             Cow::Borrowed(address)
@@ -372,5 +372,58 @@ impl NetworkBehaviour for AddressBook {
         tracing::trace!("expired external addr {}", addr);
         EXTERNAL_ADDRS.dec();
         self.notify(Event::ExpiredExternalAddr(addr.clone()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::stream::StreamExt;
+
+    #[async_std::test]
+    async fn test_dial_basic() {
+        let mut book = AddressBook::new(PeerId::random(), "".into());
+        let mut stream = book.event_stream();
+        let peer_a = PeerId::random();
+        let addr_1: Multiaddr = "/ip4/1.1.1.1/tcp/3333".parse().unwrap();
+        let mut addr_1_2 = addr_1.clone();
+        addr_1_2.push(Protocol::P2p(peer_a.into()));
+        let addr_2: Multiaddr = "/ip4/2.2.2.2/tcp/3333".parse().unwrap();
+        let error = std::io::Error::new(std::io::ErrorKind::Other, "");
+        book.add_address(&peer_a, addr_1.clone(), AddressSource::Mdns);
+        book.add_address(&peer_a, addr_1_2, AddressSource::User);
+        book.add_address(&peer_a, addr_2.clone(), AddressSource::Peer);
+        assert_eq!(stream.next().await, Some(Event::Discovered(peer_a)));
+        let peers = book.peers().collect::<Vec<_>>();
+        assert_eq!(peers, vec![&peer_a]);
+        book.inject_addr_reach_failure(Some(&peer_a), &addr_1, &error);
+        book.inject_addr_reach_failure(Some(&peer_a), &addr_2, &error);
+        book.inject_dial_failure(&peer_a);
+        assert_eq!(stream.next().await, Some(Event::Unreachable(peer_a)));
+        let peers = book.peers().collect::<Vec<_>>();
+        assert!(peers.is_empty());
+    }
+
+    #[async_std::test]
+    async fn test_dial_with_added_addrs() {
+        let mut book = AddressBook::new(PeerId::random(), "".into());
+        let mut stream = book.event_stream();
+        let peer_a = PeerId::random();
+        let addr_1: Multiaddr = "/ip4/1.1.1.1/tcp/3333".parse().unwrap();
+        let addr_2: Multiaddr = "/ip4/2.2.2.2/tcp/3333".parse().unwrap();
+        let error = std::io::Error::new(std::io::ErrorKind::Other, "");
+        book.add_address(&peer_a, addr_1.clone(), AddressSource::Mdns);
+        assert_eq!(stream.next().await, Some(Event::Discovered(peer_a)));
+        book.add_address(&peer_a, addr_2.clone(), AddressSource::Peer);
+        book.inject_addr_reach_failure(Some(&peer_a), &addr_1, &error);
+        book.inject_dial_failure(&peer_a);
+        // book.poll
+        let peers = book.peers().collect::<Vec<_>>();
+        assert_eq!(peers, vec![&peer_a]);
+        book.inject_addr_reach_failure(Some(&peer_a), &addr_2, &error);
+        book.inject_dial_failure(&peer_a);
+        assert_eq!(stream.next().await, Some(Event::Unreachable(peer_a)));
+        let peers = book.peers().collect::<Vec<_>>();
+        assert!(peers.is_empty());
     }
 }

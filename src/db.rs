@@ -126,14 +126,14 @@ where
                 if timeout.timed_out() {
                     match phase {
                         Phase::Gc => {
-                            tracing::debug!("gc_loop running incremental gc");
+                            tracing::trace!("gc_loop running incremental gc");
                             gc.lock()
                                 .incremental_gc(gc_min_blocks, gc_target_duration)
                                 .ok();
                             phase = Phase::Delete;
                         }
                         Phase::Delete => {
-                            tracing::debug!("gc_loop running incremental delete orphaned");
+                            tracing::trace!("gc_loop running incremental delete orphaned");
                             gc.lock()
                                 .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)
                                 .ok();
