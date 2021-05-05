@@ -634,12 +634,17 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
     }
 
     pub fn publish(&mut self, topic: &str, msg: Vec<u8>) -> Result<()> {
+        use libp2p::gossipsub::error::PublishError;
         if let Some(gossipsub) = self.gossipsub.as_mut() {
             let gossip_topic = IdentTopic::new(topic);
-            gossipsub
-                .publish(gossip_topic, msg)
-                .map_err(GossipsubPublishError)?;
-            Ok(())
+            match gossipsub.publish(gossip_topic, msg) {
+                Ok(_) => Ok(()),
+                Err(PublishError::InsufficientPeers) => {
+                    tracing::trace!("publish: insufficient peers.");
+                    Ok(())
+                }
+                Err(err) => Err(GossipsubPublishError(err).into()),
+            }
         } else {
             Err(DisabledProtocol.into())
         }

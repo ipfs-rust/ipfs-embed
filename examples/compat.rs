@@ -24,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
     let ipfs = Ipfs::<Sp>::new(config).await?;
     let peer: PeerId = "QmRSGx67Kq8w7xSBDia7hQfbfuvauMQGgxcwSWw976x4BS".parse()?;
     let addr: Multiaddr = "/ip4/54.173.33.96/tcp/4001".parse()?;
-    ipfs.dial_address(&peer, addr)?;
+    ipfs.dial_address(&peer, addr);
 
     // 10 random bytes
     let _cid_rand10: Cid = "QmXQsqVRpp2W7fbYZHi4aB2Xkqfd3DpwWskZoLVEYigMKC".parse()?;

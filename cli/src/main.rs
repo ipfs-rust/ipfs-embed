@@ -46,7 +46,7 @@ async fn run() -> Result<()> {
             }
             Command::DialAddress(peer, addr) => {
                 if peer != peer_id {
-                    ipfs.dial_address(&peer, addr)?;
+                    ipfs.dial_address(&peer, addr);
                 }
             }
             Command::Get(cid) => {
