@@ -73,7 +73,7 @@ impl<P: StoreParams> NetworkService<P> {
         let behaviour = NetworkBackendBehaviour::<P>::new(&mut config, store).await?;
 
         let tcp = {
-            let transport = TcpConfig::new().nodelay(true);
+            let transport = TcpConfig::new().nodelay(true).port_reuse(true);
             let transport = if let Some(psk) = config.psk {
                 let psk = PreSharedKey::new(psk);
                 EitherTransport::Left(
