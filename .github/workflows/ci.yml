@@ -89,11 +89,11 @@ jobs:
       run: cargo test --all-features
 
     - name: Build netsim integration tests
-      if: matrix.platform.target == 'x86-unknown-linux-gnu'
+      if: contains(matrix.platform.target, 'linux')
       run: cargo build -p ipfs-embed-cli -p ipfs-embed-harness --release
 
     - name: Run netsim integration tests
-      if: matrix.platform.target == 'x86-unknown-linux-gnu'
+      if: contains(matrix.platform.target, 'linux')
       run: ./target/release/bitswap
 
   lint-rust:
