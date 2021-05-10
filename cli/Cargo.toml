@@ -3,6 +3,7 @@ name = "ipfs-embed-cli"
 version = "0.1.0"
 authors = ["David Craven <david@craven.ch>"]
 edition = "2018"
+publish = false
 
 [dependencies]
 anyhow = "1.0.40"

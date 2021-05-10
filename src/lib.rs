@@ -1,7 +1,7 @@
 //! Ipfs embed is a small, fast and reliable ipfs implementation designed for embedding in to
 //! complex p2p applications.
 //!
-//! ```
+//! ```no_run
 //! # #[async_std::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! # use ipfs_embed::{Config, DefaultParams, Ipfs};
