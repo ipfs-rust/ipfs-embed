@@ -289,8 +289,8 @@ where
 }
 
 struct SqliteStoreCollector<S: StoreParams> {
-    desc: Desc,
     store: Arc<Mutex<BlockStore<S>>>,
+    desc: Desc,
 }
 
 impl<S: StoreParams> Collector for SqliteStoreCollector<S>

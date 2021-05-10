@@ -23,12 +23,12 @@ jobs:
           host: windows-latest
           cross: false
 
-        - target: armv7-linux-androideabi
-          host: ubuntu-latest
-          cross: true
-        - target: aarch64-linux-android
-          host: ubuntu-latest
-          cross: true
+        # - target: armv7-linux-androideabi
+        #  host: ubuntu-latest
+        #  cross: true
+        # - target: aarch64-linux-android
+        #  host: ubuntu-latest
+        #  cross: true
 
         - target: aarch64-apple-ios
           host: macos-latest
@@ -87,6 +87,14 @@ jobs:
     - name: Rust tests
       if: matrix.platform.cross == false
       run: cargo test --all-features
+
+    - name: Build netsim integration tests
+      if: matrix.platform.target == 'x86-unknown-linux-gnu'
+      run: cargo build -p ipfs-embed-cli -p ipfs-embed-harness --release
+
+    - name: Run netsim integration tests
+      if: matrix.platform.target == 'x86-unknown-linux-gnu'
+      run: ./target/release/bitswap
 
   lint-rust:
     runs-on: ubuntu-latest

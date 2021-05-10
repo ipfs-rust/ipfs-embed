@@ -130,7 +130,8 @@ async fn run_test(
         wire.set_delay(delay);
         builder.spawn_machine(
             wire,
-            move |mut cmd: mpsc::Receiver<Command>, mut event: mpsc::Sender<Event>| async move {
+            move |mut cmd: mpsc::UnboundedReceiver<Command>,
+                  mut event: mpsc::UnboundedSender<Event>| async move {
                 let node_name = format!("node-{}", i);
                 let path = path.map(|path| path.join(&node_name));
                 let mut c = async_process::Command::new(ipfs_embed_cli);

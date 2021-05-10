@@ -402,11 +402,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         } else {
             None
         };
-        let ping = if let Some(config) = config.ping.take() {
-            Some(Ping::new(config))
-        } else {
-            None
-        };
+        let ping = config.ping.take().map(Ping::new);
         let identify = if let Some(mut config) = config.identify.take() {
             config.local_public_key = node_key.public();
             config.agent_version = node_name.clone();
@@ -421,16 +417,11 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         } else {
             None
         };
-        let broadcast = if let Some(config) = config.broadcast.take() {
-            Some(Broadcast::new(config))
-        } else {
-            None
-        };
-        let bitswap = if let Some(config) = config.bitswap.take() {
-            Some(Bitswap::new(config, store))
-        } else {
-            None
-        };
+        let broadcast = config.broadcast.take().map(Broadcast::new);
+        let bitswap = config
+            .bitswap
+            .take()
+            .map(|config| Bitswap::new(config, store));
         Ok(Self {
             bootstrap_complete: false,
             peers: AddressBook::new(peer_id, node_name),
