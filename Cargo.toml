@@ -26,8 +26,8 @@ futures = "0.3.14"
 ipfs-sqlite-block-store = "0.5.0"
 lazy_static = "1.4.0"
 libipld = { version = "0.11.0", default-features = false }
-libp2p-bitswap = "0.17.1"
-libp2p-broadcast = "0.3.0"
+libp2p-bitswap = "0.17.2"
+libp2p-broadcast = "0.3.1"
 libp2p-quic = "0.3.0"
 names = "0.11.0"
 parking_lot = "0.11.1"
@@ -55,7 +55,7 @@ features = [
 [dev-dependencies]
 async-std = { version = "1.9.0", features = ["attributes"] }
 libipld = { version = "0.11.0", default-features = false, features = ["dag-cbor", "dag-pb", "derive"] }
-libp2p-bitswap = { version = "0.17.1", default-features = false, features = ["compat"] }
+libp2p-bitswap = { version = "0.17.2", default-features = false, features = ["compat"] }
 multihash = { version = "0.13.2", default-features = false, features = ["blake3"] }
 rand = "0.8.3"
 tracing-subscriber = "0.2.18"
