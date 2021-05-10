@@ -19,7 +19,7 @@ telemetry = ["tide", "async_global"]
 [dependencies]
 anyhow = "1.0.40"
 async-global-executor = { version = "2.0.2", optional = true }
-async-io = "1.4.0"
+async-io = "1.4.1"
 async-trait = "0.1.50"
 fnv = "1.0.7"
 futures = "0.3.14"
@@ -28,7 +28,7 @@ lazy_static = "1.4.0"
 libipld = { version = "0.11.0", default-features = false }
 libp2p-bitswap = "0.17.1"
 libp2p-broadcast = "0.3.0"
-libp2p-quic = { git = "https://github.com/ipfs-rust/libp2p-quic" }
+libp2p-quic = "0.3.0"
 names = "0.11.0"
 parking_lot = "0.11.1"
 pin-project = "1.0.7"
@@ -36,7 +36,7 @@ prometheus = "0.12.0"
 thiserror = "1.0.24"
 tide = { version = "0.16.0", optional = true }
 tokio-crate = { package = "tokio", version = "1.5.0", features = ["rt"], optional = true }
-tracing = "0.1.25"
+tracing = "0.1.26"
 void = "1.0.2"
 
 [dependencies.libp2p]
@@ -58,7 +58,7 @@ libipld = { version = "0.11.0", default-features = false, features = ["dag-cbor"
 libp2p-bitswap = { version = "0.17.1", default-features = false, features = ["compat"] }
 multihash = { version = "0.13.2", default-features = false, features = ["blake3"] }
 rand = "0.8.3"
-tracing-subscriber = "0.2.17"
+tracing-subscriber = "0.2.18"
 
 [profile.release]
 debug = true
