@@ -1611,7 +1611,6 @@ dependencies = [
  "async-global-executor",
  "async-process",
  "futures",
- "futures-lite",
  "ipfs-embed-cli",
  "libipld",
  "multihash",

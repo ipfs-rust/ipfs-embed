@@ -10,7 +10,6 @@ anyhow = "1.0.40"
 async-global-executor = "2.0.2"
 async-process = "1.1.0"
 futures = "0.3.14"
-futures-lite = "1.11.3"
 ipfs-embed-cli = { path = "../cli" }
 libipld = { version = "0.11.0", default-features = false, features = ["dag-cbor", "dag-pb", "derive"] }
 multihash = { version = "0.13.2", default-features = false, features = ["blake3"] }

@@ -44,9 +44,9 @@ async fn run() -> Result<()> {
                 };
                 writeln!(stdout, "{}", Event::ListeningOn(peer_id, addr))?;
             }
-            Command::DialAddress(peer, addr) => {
+            Command::AddAddress(peer, addr) => {
                 if peer != peer_id {
-                    ipfs.dial_address(&peer, addr);
+                    ipfs.add_address(&peer, addr);
                 }
             }
             Command::Get(cid) => {
