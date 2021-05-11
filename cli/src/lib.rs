@@ -33,7 +33,7 @@ impl From<Config> for ipfs_embed::Config {
 #[derive(Debug, Eq, PartialEq)]
 pub enum Command {
     ListenOn(Multiaddr),
-    DialAddress(PeerId, Multiaddr),
+    AddAddress(PeerId, Multiaddr),
     Get(Cid),
     Insert(Block<DefaultParams>),
     Alias(String, Option<Cid>),
@@ -46,7 +46,7 @@ impl std::fmt::Display for Command {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::ListenOn(addr) => write!(f, ">listen_on {}", addr)?,
-            Self::DialAddress(peer, addr) => write!(f, ">dial_address {} {}", peer, addr)?,
+            Self::AddAddress(peer, addr) => write!(f, ">add_address {} {}", peer, addr)?,
             Self::Get(cid) => write!(f, ">get {}", cid)?,
             Self::Insert(block) => {
                 write!(f, ">insert {} ", block.cid())?;
@@ -78,10 +78,10 @@ impl std::str::FromStr for Command {
                 let addr = parts.next().unwrap().parse()?;
                 Self::ListenOn(addr)
             }
-            Some(">dial_address") => {
+            Some(">add_address") => {
                 let peer = parts.next().unwrap().parse()?;
                 let addr = parts.next().unwrap().parse()?;
-                Self::DialAddress(peer, addr)
+                Self::AddAddress(peer, addr)
             }
             Some(">get") => {
                 let cid = parts.next().unwrap().parse()?;
@@ -176,7 +176,7 @@ mod tests {
     fn test_command() -> Result<()> {
         let command = &[
             Command::ListenOn("/ip4/0.0.0.0/tcp/0".parse()?),
-            Command::DialAddress(
+            Command::AddAddress(
                 "12D3KooWHQK1bB6y354a2ydJZMo13kLByVgDLBZdtYNFvc5of4Kd".parse()?,
                 "/ip4/10.152.124.10/tcp/42399".parse()?,
             ),
