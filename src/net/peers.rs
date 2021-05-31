@@ -97,6 +97,25 @@ lazy_static! {
         IntCounter::new("peers_dial_failure", "Number of dial failures.").unwrap();
 }
 
+#[inline]
+fn normalize_addr(addr: &mut Multiaddr, peer: &PeerId) {
+    if let Some(Protocol::P2p(_)) = addr.iter().last() {
+    } else {
+        addr.push(Protocol::P2p((*peer).into()));
+    }
+}
+
+#[inline]
+fn normalize_addr_ref<'a>(addr: &'a Multiaddr, peer: &PeerId) -> Cow<'a, Multiaddr> {
+    if let Some(Protocol::P2p(_)) = addr.iter().last() {
+        Cow::Borrowed(addr)
+    } else {
+        let mut addr = addr.clone();
+        addr.push(Protocol::P2p((*peer).into()));
+        Cow::Owned(addr)
+    }
+}
+
 #[derive(Debug)]
 pub struct AddressBook {
     local_node_name: String,
@@ -146,9 +165,7 @@ impl AddressBook {
         );
         let discovered = !self.peers.contains_key(peer);
         let info = self.peers.entry(*peer).or_default();
-        if address.iter().last() != Some(Protocol::P2p((*peer).into())) {
-            address.push(Protocol::P2p((*peer).into()));
-        }
+        normalize_addr(&mut address, peer);
         info.addresses.insert(address, source);
         if discovered {
             self.notify(Event::Discovered(*peer));
@@ -156,13 +173,7 @@ impl AddressBook {
     }
 
     pub fn remove_address(&mut self, peer: &PeerId, address: &Multiaddr) {
-        let address = if address.iter().last() != Some(Protocol::P2p((*peer).into())) {
-            let mut address = address.clone();
-            address.push(Protocol::P2p((*peer).into()));
-            Cow::Owned(address)
-        } else {
-            Cow::Borrowed(address)
-        };
+        let address = normalize_addr_ref(address, peer);
         if let Some(info) = self.peers.get_mut(peer) {
             tracing::trace!("removing address {} for peer {}", address, peer);
             info.addresses.remove(&address);
@@ -272,13 +283,14 @@ impl NetworkBehaviour for AddressBook {
         _: &ConnectionId,
         conn: &ConnectedPoint,
     ) {
+        let mut address = conn.get_remote_address().clone();
+        normalize_addr(&mut address, peer_id);
         self.add_address(
             peer_id,
-            conn.get_remote_address().clone(),
+            address.clone(),
             AddressSource::Peer,
         );
-        self.connections
-            .insert(*peer_id, conn.get_remote_address().clone());
+        self.connections.insert(*peer_id, address);
     }
 
     fn inject_address_change(
@@ -288,13 +300,14 @@ impl NetworkBehaviour for AddressBook {
         _old: &ConnectedPoint,
         new: &ConnectedPoint,
     ) {
+        let mut new = new.get_remote_address().clone();
+        normalize_addr(&mut new, peer_id);
         self.add_address(
             peer_id,
-            new.get_remote_address().clone(),
+            new.clone(),
             AddressSource::Peer,
         );
-        self.connections
-            .insert(*peer_id, new.get_remote_address().clone());
+        self.connections.insert(*peer_id, new);
     }
 
     fn inject_connection_closed(
