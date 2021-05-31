@@ -10,9 +10,7 @@ fn main() -> anyhow::Result<()> {
 
         let mut peers = Vec::with_capacity(network.machines().len());
         for machine in network.machines_mut() {
-            machine
-                .send(Command::ListenOn("/ip4/0.0.0.0/tcp/0".parse().unwrap()))
-                .await;
+            machine.send(Command::ListenOn("/ip4/0.0.0.0/tcp/0".parse().unwrap()));
             if let Some(Event::ListeningOn(peer, addr)) = machine.recv().await {
                 peers.push((peer, addr));
             } else {
@@ -22,7 +20,7 @@ fn main() -> anyhow::Result<()> {
 
         for machine in network.machines_mut() {
             for (peer, addr) in &peers {
-                machine.send(Command::AddAddress(*peer, addr.clone())).await;
+                machine.send(Command::AddAddress(*peer, addr.clone()));
             }
         }
 
@@ -35,9 +33,9 @@ fn main() -> anyhow::Result<()> {
             let (cid, blocks) =
                 ipfs_embed_harness::build_tree(opts.tree_width, opts.tree_depth).unwrap();
             for machine in network.machines_mut() {
-                machine.send(Command::Alias(alias.clone(), Some(cid))).await;
+                machine.send(Command::Alias(alias.clone(), Some(cid)));
                 for block in blocks.iter().rev() {
-                    machine.send(Command::Insert(block.clone())).await;
+                    machine.send(Command::Insert(block.clone()));
                 }
             }
         }
@@ -48,17 +46,15 @@ fn main() -> anyhow::Result<()> {
         let (cid, blocks) =
             ipfs_embed_harness::build_tree(opts.tree_width, opts.tree_depth).unwrap();
         for machine in &mut network.machines_mut()[providers] {
-            machine
-                .send(Command::Alias(root.to_string(), Some(cid)))
-                .await;
+            machine.send(Command::Alias(root.to_string(), Some(cid)));
             for block in blocks.iter().rev() {
-                machine.send(Command::Insert(block.clone())).await;
+                machine.send(Command::Insert(block.clone()));
             }
         }
 
         // flush test and spam data
         for machine in network.machines_mut() {
-            machine.send(Command::Flush).await;
+            machine.send(Command::Flush);
         }
         for machine in network.machines_mut() {
             assert_eq!(machine.recv().await, Some(Event::Flushed));
@@ -71,15 +67,13 @@ fn main() -> anyhow::Result<()> {
         let t0 = Instant::now();
 
         for machine in &mut network.machines_mut()[consumers.clone()] {
-            machine
-                .send(Command::Alias(root.to_string(), Some(cid)))
-                .await;
-            machine.send(Command::Sync(cid)).await;
+            machine.send(Command::Alias(root.to_string(), Some(cid)));
+            machine.send(Command::Sync(cid));
         }
 
         for machine in &mut network.machines_mut()[consumers.clone()] {
             assert_eq!(machine.recv().await, Some(Event::Synced));
-            machine.send(Command::Flush).await;
+            machine.send(Command::Flush);
             assert_eq!(machine.recv().await, Some(Event::Flushed));
         }
 
@@ -95,7 +89,7 @@ fn main() -> anyhow::Result<()> {
         for machine in &mut network.machines_mut()[consumers] {
             // check that data is indeed synced
             for block in &blocks {
-                machine.send(Command::Get(*block.cid())).await;
+                machine.send(Command::Get(*block.cid()));
                 let data = if let Some(Event::Block(data)) = machine.recv().await {
                     data
                 } else {
@@ -104,8 +98,7 @@ fn main() -> anyhow::Result<()> {
                 assert_eq!(&data, block);
             }
         }
-
-        network
+        Ok(())
     })
 }
 

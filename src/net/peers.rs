@@ -285,11 +285,7 @@ impl NetworkBehaviour for AddressBook {
     ) {
         let mut address = conn.get_remote_address().clone();
         normalize_addr(&mut address, peer_id);
-        self.add_address(
-            peer_id,
-            address.clone(),
-            AddressSource::Peer,
-        );
+        self.add_address(peer_id, address.clone(), AddressSource::Peer);
         self.connections.insert(*peer_id, address);
     }
 
@@ -302,11 +298,7 @@ impl NetworkBehaviour for AddressBook {
     ) {
         let mut new = new.get_remote_address().clone();
         normalize_addr(&mut new, peer_id);
-        self.add_address(
-            peer_id,
-            new.clone(),
-            AddressSource::Peer,
-        );
+        self.add_address(peer_id, new.clone(), AddressSource::Peer);
         self.connections.insert(*peer_id, new);
     }
 

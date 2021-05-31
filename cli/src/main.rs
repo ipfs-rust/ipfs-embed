@@ -67,10 +67,6 @@ async fn run() -> Result<()> {
                 ipfs.sync(&cid, ipfs.peers()).await?;
                 writeln!(stdout, "{}", Event::Synced)?;
             }
-            Command::Exit => {
-                break;
-            }
         }
     }
-    Ok(())
 }

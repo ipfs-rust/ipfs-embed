@@ -39,7 +39,6 @@ pub enum Command {
     Alias(String, Option<Cid>),
     Flush,
     Sync(Cid),
-    Exit,
 }
 
 impl std::fmt::Display for Command {
@@ -62,7 +61,6 @@ impl std::fmt::Display for Command {
             }
             Self::Flush => write!(f, ">flush")?,
             Self::Sync(cid) => write!(f, ">sync {}", cid)?,
-            Self::Exit => write!(f, ">exit")?,
         }
         Ok(())
     }
@@ -108,7 +106,6 @@ impl std::str::FromStr for Command {
                 let cid = parts.next().unwrap().parse()?;
                 Self::Sync(cid)
             }
-            Some(">exit") => Self::Exit,
             _ => return Err(anyhow::anyhow!("invalid command `{}`", s)),
         })
     }
@@ -186,7 +183,6 @@ mod tests {
             //Command::Alias("alias".to_string(), Some("".parse()?)),
             Command::Flush,
             //Command::Sync("".parse()?),
-            Command::Exit,
         ];
         for cmd in command.iter() {
             let cmd2: Command = cmd.to_string().parse()?;

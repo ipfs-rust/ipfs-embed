@@ -6,7 +6,7 @@ use ipfs_embed_cli::{Command, Event};
 use libipld::cbor::DagCborCodec;
 use libipld::multihash::Code;
 use libipld::{Block, Cid, DagCbor, DefaultParams};
-use netsim_embed::{Ipv4Range, Network, NetworkBuilder, Wire};
+use netsim_embed::{DelayBuffer, Ipv4Range, Netsim};
 use rand::RngCore;
 use std::time::Duration;
 use structopt::StructOpt;
@@ -41,8 +41,8 @@ pub struct HarnessOpts {
 
 pub fn run_netsim<F, F2>(mut f: F) -> Result<()>
 where
-    F: FnMut(Network<Command, Event>, HarnessOpts) -> F2,
-    F2: Future<Output = Network<Command, Event>> + Send,
+    F: FnMut(Netsim<Command, Event>, HarnessOpts) -> F2,
+    F2: Future<Output = Result<()>>,
 {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -59,13 +59,14 @@ where
         ));
     }
     let temp_dir = TempDir::new("ipfs-embed-harness")?;
-    netsim_embed::namespace::unshare_user()?;
+    netsim_embed::unshare_user()?;
     async_global_executor::block_on(async move {
-        let mut builder = NetworkBuilder::new(Ipv4Range::random_local_subnet());
+        let mut sim = Netsim::new();
+        let net = sim.spawn_network(Ipv4Range::random_local_subnet());
         for i in 0..opts.n_nodes {
             let ipfs_embed_cli = ipfs_embed_cli.clone();
             let path = temp_dir.path().join(i.to_string());
-            let mut wire = Wire::new();
+            let mut wire = DelayBuffer::new();
             wire.set_delay(Duration::from_millis(opts.delay_ms));
             let mut cmd = async_process::Command::new(ipfs_embed_cli);
             cmd.arg("--path").arg(path);
@@ -80,15 +81,11 @@ where
             if opts.enable_mdns {
                 cmd.arg("--enable-mdns");
             }
-            builder.spawn_machine_with_command(wire, cmd);
+            let machine = sim.spawn_machine(cmd, Some(wire)).await;
+            sim.plug(machine, net, None).await;
         }
-        let network = builder.spawn();
-        let mut network = f(network, opts).await;
-        for machine in network.machines_mut() {
-            machine.send(Command::Exit).await;
-        }
-    });
-    Ok(())
+        f(sim, opts).await
+    })
 }
 
 #[derive(Debug, DagCbor)]
