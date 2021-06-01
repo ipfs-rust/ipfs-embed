@@ -98,7 +98,7 @@ lazy_static! {
 }
 
 #[inline]
-fn normalize_addr(addr: &mut Multiaddr, peer: &PeerId) {
+pub(crate) fn normalize_addr(addr: &mut Multiaddr, peer: &PeerId) {
     if let Some(Protocol::P2p(_)) = addr.iter().last() {
     } else {
         addr.push(Protocol::P2p((*peer).into()));

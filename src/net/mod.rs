@@ -199,7 +199,8 @@ impl<P: StoreParams> NetworkService<P> {
         swarm.listeners().cloned().collect()
     }
 
-    pub fn add_external_address(&self, addr: Multiaddr) {
+    pub fn add_external_address(&self, mut addr: Multiaddr) {
+        crate::net::peers::normalize_addr(&mut addr, &self.local_peer_id());
         let mut swarm = self.swarm.lock();
         swarm.add_external_address(addr, AddressScore::Infinite);
         self.waker.wake();
