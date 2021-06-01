@@ -98,7 +98,7 @@ lazy_static! {
 }
 
 #[inline]
-fn normalize_addr(addr: &mut Multiaddr, peer: &PeerId) {
+pub(crate) fn normalize_addr(addr: &mut Multiaddr, peer: &PeerId) {
     if let Some(Protocol::P2p(_)) = addr.iter().last() {
     } else {
         addr.push(Protocol::P2p((*peer).into()));
@@ -147,6 +147,11 @@ impl AddressBook {
     }
 
     pub fn dial(&mut self, peer: &PeerId) {
+        if peer == self.local_peer_id() {
+            tracing::error!("attempting to dial self");
+            return;
+        }
+        tracing::trace!("dialing {}", peer);
         self.actions.push_back(NetworkBehaviourAction::DialPeer {
             peer_id: *peer,
             condition: DialPeerCondition::Disconnected,
@@ -217,6 +222,7 @@ impl AddressBook {
     }
 
     pub fn notify(&mut self, event: Event) {
+        tracing::trace!("{:?}", event);
         self.event_stream
             .retain(|tx| tx.unbounded_send(event.clone()).is_ok());
     }
@@ -318,6 +324,9 @@ impl NetworkBehaviour for AddressBook {
         error: &dyn std::error::Error,
     ) {
         if let Some(peer_id) = peer_id {
+            if self.is_connected(peer_id) {
+                return;
+            }
             tracing::trace!("address reach failure {}", error);
             ADDRESS_REACH_FAILURE.inc();
             self.remove_address(peer_id, addr);
