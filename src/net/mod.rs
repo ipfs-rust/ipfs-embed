@@ -36,6 +36,7 @@ use std::time::Duration;
 
 mod behaviour;
 mod config;
+mod p2p_wrapper;
 mod peers;
 
 pub use crate::net::behaviour::{QueryId, SyncEvent};
@@ -45,7 +46,7 @@ pub use libp2p::core::connection::ListenerId;
 pub use libp2p::kad::record::{Key, Record};
 pub use libp2p::kad::{PeerRecord, Quorum};
 pub use libp2p::swarm::AddressRecord;
-pub use libp2p::{Multiaddr, PeerId};
+pub use libp2p::{Multiaddr, PeerId, TransportError};
 pub use libp2p_bitswap::BitswapStore;
 pub use libp2p_quic::{generate_keypair, ToLibp2p};
 
@@ -85,7 +86,7 @@ impl<P: StoreParams> NetworkService<P> {
             let dh_key = noise::Keypair::<X25519Spec>::new()
                 .into_authentic(&config.node_key.to_keypair())
                 .unwrap();
-            transport
+            let transport = transport
                 .upgrade(Version::V1)
                 .authenticate(NoiseConfig::xx(dh_key).into_authenticated())
                 .multiplex(SelectUpgrade::new(
@@ -93,7 +94,8 @@ impl<P: StoreParams> NetworkService<P> {
                     MplexConfig::new(),
                 ))
                 .timeout(Duration::from_secs(5))
-                .boxed()
+                .boxed();
+            p2p_wrapper::P2pWrapper(transport)
         };
         /*let quic = {
             QuicConfig {
