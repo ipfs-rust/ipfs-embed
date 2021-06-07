@@ -7,7 +7,9 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.40"
+async-process = "1.1.0"
 async-std = { version = "1.9.0", features = ["attributes"] }
+ed25519-dalek = "1.0.1"
 ipfs-embed = { path = ".." }
 libipld = { version = "0.12.0", default-features = false, features = ["dag-cbor"] }
 multihash = { version = "0.14.0", default-features = false, features = ["blake3"] }

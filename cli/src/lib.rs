@@ -1,39 +1,95 @@
 use anyhow::Result;
-use ipfs_embed::{Block, Cid, DefaultParams, Multiaddr, NetworkConfig, PeerId, StorageConfig};
+use ed25519_dalek::{PublicKey, SecretKey};
+use ipfs_embed::{Block, Cid, DefaultParams, Keypair, Multiaddr, PeerId, ToLibp2p};
 use std::path::PathBuf;
-use std::time::Duration;
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "ipfs_embed")]
 pub struct Config {
     #[structopt(long)]
-    path: Option<PathBuf>,
-
+    pub path: Option<PathBuf>,
     #[structopt(long)]
-    node_name: String,
+    pub node_name: Option<String>,
+    #[structopt(long)]
+    pub keypair: u64,
+    #[structopt(long)]
+    pub enable_mdns: bool,
+    #[structopt(long)]
+    pub listen_on: Vec<Multiaddr>,
+    #[structopt(long)]
+    pub bootstrap: Vec<Multiaddr>,
+    #[structopt(long)]
+    pub external: Vec<Multiaddr>,
 }
 
-impl From<Config> for ipfs_embed::Config {
-    fn from(config: Config) -> Self {
-        let sweep_interval = Duration::from_millis(10000);
-        let storage = StorageConfig::new(config.path, 10, sweep_interval);
-
-        let mut network = NetworkConfig {
-            mdns: None,
-            kad: None,
-            ..Default::default()
-        };
-        network.identify.as_mut().unwrap().agent_version = config.node_name;
-
-        Self { storage, network }
+impl Config {
+    pub fn new(keypair: u64) -> Self {
+        Self {
+            path: None,
+            node_name: None,
+            keypair,
+            listen_on: vec!["/ip4/0.0.0.0/tcp/30000".parse().unwrap()],
+            bootstrap: vec![],
+            external: vec![],
+            enable_mdns: false,
+        }
     }
+}
+
+impl From<Config> for async_process::Command {
+    fn from(config: Config) -> Self {
+        let ipfs_embed_cli = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("ipfs-embed-cli");
+        if !ipfs_embed_cli.exists() {
+            panic!(
+                "failed to find the ipfs-embed-cli binary at {}",
+                ipfs_embed_cli.display()
+            );
+        }
+        let mut cmd = Self::new(ipfs_embed_cli);
+        if let Some(path) = config.path.as_ref() {
+            cmd.arg("--path").arg(path);
+        }
+        if let Some(node_name) = config.node_name.as_ref() {
+            cmd.arg("--node-name").arg(node_name);
+        }
+        cmd.arg("--keypair").arg(config.keypair.to_string());
+        for listen_on in &config.listen_on {
+            cmd.arg("--listen-on").arg(listen_on.to_string());
+        }
+        for bootstrap in &config.bootstrap {
+            cmd.arg("--bootstrap").arg(bootstrap.to_string());
+        }
+        for external in &config.external {
+            cmd.arg("--external").arg(external.to_string());
+        }
+        if config.enable_mdns {
+            cmd.arg("--enable-mdns");
+        }
+        cmd
+    }
+}
+
+pub fn keypair(i: u64) -> Keypair {
+    let mut keypair = [0; 32];
+    keypair[..8].copy_from_slice(&i.to_be_bytes());
+    let secret = SecretKey::from_bytes(&keypair).unwrap();
+    let public = PublicKey::from(&secret);
+    Keypair { secret, public }
+}
+
+pub fn peer_id(i: u64) -> PeerId {
+    keypair(i).to_peer_id()
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum Command {
-    ListenOn(Multiaddr),
     AddAddress(PeerId, Multiaddr),
+    Dial(PeerId),
     Get(Cid),
     Insert(Block<DefaultParams>),
     Alias(String, Option<Cid>),
@@ -44,8 +100,8 @@ pub enum Command {
 impl std::fmt::Display for Command {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::ListenOn(addr) => write!(f, ">listen_on {}", addr)?,
-            Self::AddAddress(peer, addr) => write!(f, ">add_address {} {}", peer, addr)?,
+            Self::AddAddress(peer, addr) => write!(f, ">add-address {} {}", peer, addr)?,
+            Self::Dial(peer) => write!(f, ">dial {}", peer)?,
             Self::Get(cid) => write!(f, ">get {}", cid)?,
             Self::Insert(block) => {
                 write!(f, ">insert {} ", block.cid())?;
@@ -72,14 +128,14 @@ impl std::str::FromStr for Command {
     fn from_str(s: &str) -> Result<Self> {
         let mut parts = s.split_whitespace();
         Ok(match parts.next() {
-            Some(">listen_on") => {
-                let addr = parts.next().unwrap().parse()?;
-                Self::ListenOn(addr)
-            }
-            Some(">add_address") => {
+            Some(">add-address") => {
                 let peer = parts.next().unwrap().parse()?;
                 let addr = parts.next().unwrap().parse()?;
                 Self::AddAddress(peer, addr)
+            }
+            Some(">dial") => {
+                let peer = parts.next().unwrap().parse()?;
+                Self::Dial(peer)
             }
             Some(">get") => {
                 let cid = parts.next().unwrap().parse()?;
@@ -113,7 +169,18 @@ impl std::str::FromStr for Command {
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum Event {
-    ListeningOn(PeerId, Multiaddr),
+    NewListener,
+    NewListenAddr(Multiaddr),
+    ExpiredListenAddr(Multiaddr),
+    ListenerClosed,
+    NewExternalAddr(Multiaddr),
+    ExpiredExternalAddr(Multiaddr),
+    Discovered(PeerId),
+    Unreachable(PeerId),
+    Connected(PeerId),
+    Disconnected(PeerId),
+    Subscribed(PeerId, String),
+    Unsubscribed(PeerId, String),
     Block(Block<DefaultParams>),
     Flushed,
     Synced,
@@ -122,7 +189,18 @@ pub enum Event {
 impl std::fmt::Display for Event {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::ListeningOn(peer, addr) => write!(f, "<listening_on {} {}", peer, addr)?,
+            Self::NewListener => write!(f, "<new-listener")?,
+            Self::NewListenAddr(addr) => write!(f, "<new-listen-addr {}", addr)?,
+            Self::ExpiredListenAddr(addr) => write!(f, "<expired-listen-addr {}", addr)?,
+            Self::ListenerClosed => write!(f, "<listener-closed")?,
+            Self::NewExternalAddr(addr) => write!(f, "<new-external-addr {}", addr)?,
+            Self::ExpiredExternalAddr(addr) => write!(f, "<expired-external-addr {}", addr)?,
+            Self::Discovered(peer) => write!(f, "<discovered {}", peer)?,
+            Self::Unreachable(peer) => write!(f, "<unreachable {}", peer)?,
+            Self::Connected(peer) => write!(f, "<connected {}", peer)?,
+            Self::Disconnected(peer) => write!(f, "<disconnected {}", peer)?,
+            Self::Subscribed(peer, topic) => write!(f, "<subscribed {} {}", peer, topic)?,
+            Self::Unsubscribed(peer, topic) => write!(f, "<unsubscribed {} {}", peer, topic)?,
             Self::Block(block) => {
                 write!(f, "<block {} ", block.cid())?;
                 for byte in block.data() {
@@ -142,10 +220,49 @@ impl std::str::FromStr for Event {
     fn from_str(s: &str) -> Result<Self> {
         let mut parts = s.split_whitespace();
         Ok(match parts.next() {
-            Some("<listening_on") => {
-                let peer = parts.next().unwrap().parse()?;
+            Some("<new-listener") => Self::NewListener,
+            Some("<new-listen-addr") => {
                 let addr = parts.next().unwrap().parse()?;
-                Self::ListeningOn(peer, addr)
+                Self::NewListenAddr(addr)
+            }
+            Some("<expired-listen-addr") => {
+                let addr = parts.next().unwrap().parse()?;
+                Self::ExpiredListenAddr(addr)
+            }
+            Some("<listener-closed") => Self::ListenerClosed,
+            Some("<new-external-addr") => {
+                let addr = parts.next().unwrap().parse()?;
+                Self::NewExternalAddr(addr)
+            }
+            Some("<expired-external-addr") => {
+                let addr = parts.next().unwrap().parse()?;
+                Self::ExpiredExternalAddr(addr)
+            }
+            Some("<discovered") => {
+                let peer = parts.next().unwrap().parse()?;
+                Self::Discovered(peer)
+            }
+            Some("<unreachable") => {
+                let peer = parts.next().unwrap().parse()?;
+                Self::Unreachable(peer)
+            }
+            Some("<connected") => {
+                let peer = parts.next().unwrap().parse()?;
+                Self::Connected(peer)
+            }
+            Some("<disconnected") => {
+                let peer = parts.next().unwrap().parse()?;
+                Self::Disconnected(peer)
+            }
+            Some("<subscribed") => {
+                let peer = parts.next().unwrap().parse()?;
+                let topic = parts.next().unwrap().to_string();
+                Self::Subscribed(peer, topic)
+            }
+            Some("<unsubscribed") => {
+                let peer = parts.next().unwrap().parse()?;
+                let topic = parts.next().unwrap().to_string();
+                Self::Unsubscribed(peer, topic)
             }
             Some("<block") => {
                 let cid = parts.next().unwrap().parse()?;

@@ -28,7 +28,7 @@ lazy_static = "1.4.0"
 libipld = { version = "0.12.0", default-features = false }
 libp2p-bitswap = "0.18.0"
 libp2p-broadcast = "0.4.0"
-libp2p-quic = "0.3.1"
+libp2p-quic = "0.4.0"
 names = "0.11.0"
 parking_lot = "0.11.1"
 pin-project = "1.0.7"
