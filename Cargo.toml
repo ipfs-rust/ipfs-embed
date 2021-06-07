@@ -62,3 +62,6 @@ tracing-subscriber = "0.2.18"
 
 [profile.release]
 debug = true
+
+[patch.crates-io]
+libp2p = { path = "../rust-libp2p" }

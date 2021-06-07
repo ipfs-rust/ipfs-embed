@@ -87,7 +87,7 @@ impl<P: StoreParams> NetworkService<P> {
                 .into_authentic(&config.node_key.to_keypair())
                 .unwrap();
             let transport = transport
-                .upgrade(Version::V1)
+                .upgrade(Version::V1SimOpen)
                 .authenticate(NoiseConfig::xx(dh_key).into_authenticated())
                 .multiplex(SelectUpgrade::new(
                     YamuxConfig::default(),
