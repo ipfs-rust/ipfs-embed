@@ -1645,6 +1645,7 @@ dependencies = [
 [[package]]
 name = "libp2p"
 version = "0.38.0"
+source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open#f096d31deabe0e4eaf08ea2c1dd63ceb5574bf94"
 dependencies = [
  "atomic",
  "bytes",
@@ -1675,8 +1676,7 @@ dependencies = [
 [[package]]
 name = "libp2p-bitswap"
 version = "0.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "873b525ea4700128f1531be92859e1a673e0ea476879b7b9df83a4939526cf4e"
+source = "git+https://github.com/ipfs-rust/libp2p-bitswap?branch=sim-open#2d81161634b2d4086f63987e728fd933c3e16402"
 dependencies = [
  "async-trait",
  "fnv",
@@ -1685,8 +1685,6 @@ dependencies = [
  "libipld",
  "libp2p",
  "prometheus",
- "prost",
- "prost-build",
  "thiserror",
  "tracing",
  "unsigned-varint 0.7.0",
@@ -1695,8 +1693,7 @@ dependencies = [
 [[package]]
 name = "libp2p-broadcast"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72cb0e39c68735f5b5f81e61a9b2ce99fa5ff47c2bb69208764d3548dc3d37e8"
+source = "git+https://github.com/ipfs-rust/libp2p-broadcast?branch=sim-open#2ab76909e906a7352d0cc3a3e2a8822e15f73a4e"
 dependencies = [
  "fnv",
  "futures",
@@ -1706,6 +1703,7 @@ dependencies = [
 [[package]]
 name = "libp2p-core"
 version = "0.29.0"
+source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open#f096d31deabe0e4eaf08ea2c1dd63ceb5574bf94"
 dependencies = [
  "asn1_der",
  "bs58",
@@ -1738,6 +1736,7 @@ dependencies = [
 [[package]]
 name = "libp2p-dns"
 version = "0.29.0"
+source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open#f096d31deabe0e4eaf08ea2c1dd63ceb5574bf94"
 dependencies = [
  "async-std-resolver",
  "futures",
@@ -1750,6 +1749,7 @@ dependencies = [
 [[package]]
 name = "libp2p-gossipsub"
 version = "0.32.0"
+source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open#f096d31deabe0e4eaf08ea2c1dd63ceb5574bf94"
 dependencies = [
  "asynchronous-codec",
  "base64 0.13.0",
@@ -1774,6 +1774,7 @@ dependencies = [
 [[package]]
 name = "libp2p-identify"
 version = "0.30.0"
+source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open#f096d31deabe0e4eaf08ea2c1dd63ceb5574bf94"
 dependencies = [
  "futures",
  "libp2p-core",
@@ -1788,6 +1789,7 @@ dependencies = [
 [[package]]
 name = "libp2p-kad"
 version = "0.31.0"
+source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open#f096d31deabe0e4eaf08ea2c1dd63ceb5574bf94"
 dependencies = [
  "arrayvec",
  "asynchronous-codec",
@@ -1812,6 +1814,7 @@ dependencies = [
 [[package]]
 name = "libp2p-mdns"
 version = "0.31.0"
+source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open#f096d31deabe0e4eaf08ea2c1dd63ceb5574bf94"
 dependencies = [
  "async-io",
  "data-encoding",
@@ -1831,6 +1834,7 @@ dependencies = [
 [[package]]
 name = "libp2p-mplex"
 version = "0.29.0"
+source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open#f096d31deabe0e4eaf08ea2c1dd63ceb5574bf94"
 dependencies = [
  "asynchronous-codec",
  "bytes",
@@ -1847,6 +1851,7 @@ dependencies = [
 [[package]]
 name = "libp2p-noise"
 version = "0.32.0"
+source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open#f096d31deabe0e4eaf08ea2c1dd63ceb5574bf94"
 dependencies = [
  "bytes",
  "curve25519-dalek",
@@ -1867,6 +1872,7 @@ dependencies = [
 [[package]]
 name = "libp2p-ping"
 version = "0.30.0"
+source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open#f096d31deabe0e4eaf08ea2c1dd63ceb5574bf94"
 dependencies = [
  "futures",
  "libp2p-core",
@@ -1880,6 +1886,7 @@ dependencies = [
 [[package]]
 name = "libp2p-pnet"
 version = "0.21.0"
+source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open#f096d31deabe0e4eaf08ea2c1dd63ceb5574bf94"
 dependencies = [
  "futures",
  "log",
@@ -1916,6 +1923,7 @@ dependencies = [
 [[package]]
 name = "libp2p-request-response"
 version = "0.12.0"
+source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open#f096d31deabe0e4eaf08ea2c1dd63ceb5574bf94"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1934,6 +1942,7 @@ dependencies = [
 [[package]]
 name = "libp2p-swarm"
 version = "0.30.0"
+source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open#f096d31deabe0e4eaf08ea2c1dd63ceb5574bf94"
 dependencies = [
  "either",
  "futures",
@@ -1948,6 +1957,7 @@ dependencies = [
 [[package]]
 name = "libp2p-swarm-derive"
 version = "0.23.0"
+source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open#f096d31deabe0e4eaf08ea2c1dd63ceb5574bf94"
 dependencies = [
  "quote",
  "syn",
@@ -1956,6 +1966,7 @@ dependencies = [
 [[package]]
 name = "libp2p-tcp"
 version = "0.29.0"
+source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open#f096d31deabe0e4eaf08ea2c1dd63ceb5574bf94"
 dependencies = [
  "async-io",
  "futures",
@@ -1973,6 +1984,7 @@ dependencies = [
 [[package]]
 name = "libp2p-yamux"
 version = "0.33.0"
+source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open#f096d31deabe0e4eaf08ea2c1dd63ceb5574bf94"
 dependencies = [
  "futures",
  "libp2p-core",
@@ -2257,6 +2269,7 @@ checksum = "e5ce46fe64a9d73be07dcbe690a38ce1b293be448fd8ce1e6c1b8062c9f72c6a"
 [[package]]
 name = "multistream-select"
 version = "0.10.3"
+source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open#f096d31deabe0e4eaf08ea2c1dd63ceb5574bf94"
 dependencies = [
  "bytes",
  "futures",
