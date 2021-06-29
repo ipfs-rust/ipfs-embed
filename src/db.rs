@@ -100,13 +100,14 @@ struct GuardAndValue<'a, A, B> {
 impl<'a, A, B> GuardAndValue<'a, A, B> {
     fn try_new<E>(
         guard: MutexGuard<'a, A>,
-        f: impl Fn(&'a mut A) -> std::result::Result<B, E>,
+        f: impl Fn(&'a mut MutexGuard<'a, A>) -> std::result::Result<B, E>,
     ) -> std::result::Result<Self, E> {
         // box it so it stays in the same place
         let mut guard = Box::new(guard);
+        let guard_ref = guard.as_mut();
         let value = unsafe {
             // extend the lifetime of the &mut A to the lifetime of the struct, 'a
-            f(&mut *(&mut guard as *mut Box<MutexGuard<A>> as *mut A))?
+            f(std::mem::transmute(guard_ref))?
         };
         Ok(GuardAndValue { guard, value })
     }
@@ -141,20 +142,40 @@ where
     }
 
     pub fn iter(&self) -> Result<impl Iterator<Item = Cid>> {
-        let cids = observe_query("iter", || self.0.value.get_block_cids::<Vec<Cid>>())?;
+        let cids = self.0.value.get_block_cids::<Vec<Cid>>()?;
         Ok(cids.into_iter())
     }
 
     pub fn contains(&self, cid: &Cid) -> Result<bool> {
-        observe_query("contains", || self.0.value.has_block(cid))
+        Ok(self.0.value.has_block(cid)?)
     }
 
     pub fn get(&self, cid: &Cid) -> Result<Option<Vec<u8>>> {
-        observe_query("get", || self.0.value.get_block(cid))
+        Ok(self.0.value.get_block(cid)?)
     }
 
     pub fn insert(&self, block: &Block<S>) -> Result<()> {
-        observe_query("insert", || self.0.value.put_block(block, None))
+        Ok(self.0.value.put_block(block, None)?)
+    }
+
+    pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>> {
+        Ok(self.0.value.resolve(alias)?)
+    }
+
+    pub fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
+        Ok(self.0.value.alias(alias, cid)?)
+    }
+
+    pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
+        Ok(self.0.value.reverse_alias(cid)?)
+    }
+
+    pub fn missing_blocks(&self, cid: &Cid) -> Result<Vec<Cid>> {
+        Ok(self.0.value.get_missing_blocks(cid)?)
+    }
+
+    pub fn commit(self) -> Result<()> {
+        Ok(self.0.value.commit()?)
     }
 }
 
@@ -241,26 +262,43 @@ where
         temp: &TempPin,
         iter: impl IntoIterator<Item = Cid> + Send + 'static,
     ) -> Result<()> {
-        observe_query("temp_pin", || {
-            self.store.lock().extend_temp_pin(&temp, iter)
-        })
+        let txn = self.transaction()?;
+        txn.temp_pin(temp, iter)?;
+        txn.commit()?;
+        Ok(())
+        // observe_query("temp_pin", || {
+        //     self.store.lock().extend_temp_pin(&temp, iter)
+        // })
     }
 
     pub fn iter(&self) -> Result<impl Iterator<Item = Cid>> {
-        let cids = observe_query("iter", || self.store.lock().get_block_cids::<Vec<Cid>>())?;
-        Ok(cids.into_iter())
+        self.transaction()?.iter()
+        // let cids = observe_query("iter", || self.store.lock().get_block_cids::<Vec<Cid>>())?;
+        // Ok(cids.into_iter())
     }
 
     pub fn contains(&self, cid: &Cid) -> Result<bool> {
-        observe_query("contains", || self.store.lock().has_block(cid))
+        let txn = self.transaction()?;
+        let res = txn.contains(cid);
+        drop(txn);
+        res
+        // observe_query("contains", || self.store.lock().transaction()?.has_block(cid))
     }
 
     pub fn get(&self, cid: &Cid) -> Result<Option<Vec<u8>>> {
-        observe_query("get", || self.store.lock().get_block(cid))
+        let txn = self.transaction()?;
+        let res = txn.get(cid);
+        drop(txn);
+        res
+        // observe_query("get", || self.store.lock().transaction()?.get_block(cid))
     }
 
     pub fn insert(&self, block: &Block<S>) -> Result<()> {
-        observe_query("insert", || self.store.lock().put_block(block, None))
+        let txn = self.transaction()?;
+        let res = txn.insert(block);
+        txn.commit()?;
+        res
+        // observe_query("insert", || self.store.lock().put_block(block, None))
     }
 
     pub async fn evict(&self) -> Result<()> {
@@ -284,21 +322,28 @@ where
     }
 
     pub fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
-        observe_query("alias", || self.store.lock().alias(alias, cid))
+        let txn = self.transaction()?;
+        txn.alias(alias, cid)?;
+        txn.commit()?;
+        Ok(())
+        // observe_query("alias", || self.store.lock().alias(alias, cid))
     }
 
     pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>> {
-        observe_query("resolve", || self.store.lock().resolve(alias))
+        let txn = self.transaction()?;
+        let result = txn.resolve(alias)?;
+        txn.commit()?;
+        Ok(result)
+        // observe_query("resolve", || self.store.lock().resolve(alias))
     }
 
     pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
-        observe_query("reverse_alias", || self.store.lock().reverse_alias(cid))
+        self.transaction()?.reverse_alias(cid)
+        // observe_query("reverse_alias", || self.store.lock().reverse_alias(cid))
     }
 
     pub fn missing_blocks(&self, cid: &Cid) -> Result<Vec<Cid>> {
-        observe_query("missing_blocks", || {
-            self.store.lock().get_missing_blocks(cid)
-        })
+        self.transaction()?.missing_blocks(cid)
     }
 
     pub async fn flush(&self) -> Result<()> {
