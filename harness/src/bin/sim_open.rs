@@ -1,6 +1,6 @@
 #[cfg(target_os = "linux")]
 fn main() -> anyhow::Result<()> {
-    use ipfs_embed_cli::{Config, Command, Event};
+    use ipfs_embed_cli::{Command, Config, Event};
     use ipfs_embed_harness::{MachineExt, MultiaddrExt};
     use netsim_embed::{DelayBuffer, Ipv4Range, Netsim};
     use std::time::Duration;

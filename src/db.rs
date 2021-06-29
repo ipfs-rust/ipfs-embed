@@ -6,7 +6,7 @@ use lazy_static::lazy_static;
 use libipld::codec::References;
 use libipld::store::StoreParams;
 use libipld::{Block, Cid, Ipld, Result};
-use parking_lot::{Condvar, Mutex};
+use parking_lot::{Condvar, Mutex, MutexGuard};
 use prometheus::core::{Collector, Desc};
 use prometheus::proto::MetricFamily;
 use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry};
@@ -88,6 +88,76 @@ impl<S: StoreParams> Drop for StorageService<S> {
     }
 }
 
+/// Keeps a parking_lot mutex guard and a value that is valid only as long as the guard exists together.
+///
+/// struct fields are dropped in the same order as they are declared, so the value will be dropped first
+struct GuardAndValue<'a, A, B> {
+    value: B,
+    // do not change the order!
+    guard: Box<MutexGuard<'a, A>>,
+}
+
+impl<'a, A, B> GuardAndValue<'a, A, B> {
+    fn try_new<E>(
+        guard: MutexGuard<'a, A>,
+        f: impl Fn(&'a mut A) -> std::result::Result<B, E>,
+    ) -> std::result::Result<Self, E> {
+        // box it so it stays in the same place
+        let mut guard = Box::new(guard);
+        let value = unsafe {
+            // extend the lifetime of the &mut A to the lifetime of the struct, 'a
+            f(&mut *(&mut guard as *mut Box<MutexGuard<A>> as *mut A))?
+        };
+        Ok(GuardAndValue { guard, value })
+    }
+}
+
+pub struct Transaction<'a, S>(
+    GuardAndValue<
+        'a,
+        ipfs_sqlite_block_store::BlockStore<S>,
+        ipfs_sqlite_block_store::Transaction<'a, S>,
+    >,
+);
+
+impl<'a, S: StoreParams> Transaction<'a, S>
+where
+    S: StoreParams,
+    Ipld: References<S::Codecs>,
+{
+    pub fn create_temp_pin(&self) -> Result<TempPin> {
+        Ok(self.0.value.temp_pin())
+    }
+
+    pub fn temp_pin(
+        &self,
+        temp: &TempPin,
+        iter: impl IntoIterator<Item = Cid> + Send + 'static,
+    ) -> Result<()> {
+        for link in iter {
+            self.0.value.extend_temp_pin(&temp, &link)?;
+        }
+        Ok(())
+    }
+
+    pub fn iter(&self) -> Result<impl Iterator<Item = Cid>> {
+        let cids = observe_query("iter", || self.0.value.get_block_cids::<Vec<Cid>>())?;
+        Ok(cids.into_iter())
+    }
+
+    pub fn contains(&self, cid: &Cid) -> Result<bool> {
+        observe_query("contains", || self.0.value.has_block(cid))
+    }
+
+    pub fn get(&self, cid: &Cid) -> Result<Option<Vec<u8>>> {
+        observe_query("get", || self.0.value.get_block(cid))
+    }
+
+    pub fn insert(&self, block: &Block<S>) -> Result<()> {
+        observe_query("insert", || self.0.value.put_block(block, None))
+    }
+}
+
 impl<S: StoreParams> StorageService<S>
 where
     Ipld: References<S::Codecs>,
@@ -151,6 +221,13 @@ where
             _gc_task: Arc::new(gc_task),
             exit: exit2,
         })
+    }
+
+    pub fn transaction(&self) -> Result<Transaction<'_, S>> {
+        Ok(Transaction(GuardAndValue::try_new(
+            self.store.lock(),
+            |x| x.transaction(),
+        )?))
     }
 
     pub fn create_temp_pin(&self) -> Result<TempPin> {
