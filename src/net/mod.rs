@@ -10,7 +10,7 @@ use libipld::store::StoreParams;
 use libipld::{Cid, Result};
 use libp2p::core::either::EitherTransport;
 use libp2p::core::transport::Transport;
-use libp2p::core::upgrade::SelectUpgrade;
+use libp2p::core::upgrade::{AuthenticationVersion, SelectUpgrade};
 #[cfg(feature = "async_global")]
 use libp2p::dns::DnsConfig as Dns;
 #[cfg(all(feature = "tokio", not(feature = "async_global")))]
@@ -88,7 +88,10 @@ impl<P: StoreParams> NetworkService<P> {
                 .unwrap();
             let transport = transport
                 .upgrade()
-                .authenticate(NoiseConfig::xx(dh_key).into_authenticated())
+                .authenticate_with_version(
+                    NoiseConfig::xx(dh_key).into_authenticated(),
+                    AuthenticationVersion::V1SimOpen,
+                )
                 .multiplex(SelectUpgrade::new(
                     YamuxConfig::default(),
                     MplexConfig::new(),
