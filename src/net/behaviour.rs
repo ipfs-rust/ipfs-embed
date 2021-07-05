@@ -154,7 +154,7 @@ pub struct KadPutRecordError(pub libp2p::kad::PutRecordError);
 impl<P: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBackendBehaviour<P> {
     fn inject_event(&mut self, event: KademliaEvent) {
         tracing::trace!("kademlia event {:?}", event);
-        if let KademliaEvent::QueryResult { id, result, .. } = event {
+        if let KademliaEvent::OutboundQueryCompleted { id, result, .. } = event {
             match result {
                 QueryResult::Bootstrap(Ok(BootstrapOk { num_remaining, .. })) => {
                     tracing::trace!("remaining {}", num_remaining);
