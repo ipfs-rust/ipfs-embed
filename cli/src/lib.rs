@@ -289,7 +289,6 @@ mod tests {
     #[test]
     fn test_command() -> Result<()> {
         let command = &[
-            Command::ListenOn("/ip4/0.0.0.0/tcp/0".parse()?),
             Command::AddAddress(
                 "12D3KooWHQK1bB6y354a2ydJZMo13kLByVgDLBZdtYNFvc5of4Kd".parse()?,
                 "/ip4/10.152.124.10/tcp/42399".parse()?,
@@ -311,10 +310,7 @@ mod tests {
     #[test]
     fn test_event() -> Result<()> {
         let event = &[
-            Event::ListeningOn(
-                "12D3KooWHQK1bB6y354a2ydJZMo13kLByVgDLBZdtYNFvc5of4Kd".parse()?,
-                "/ip4/10.152.124.10/tcp/42399".parse()?,
-            ),
+            Event::NewListenAddr("/ip4/10.152.124.10/tcp/42399".parse()?),
             //Event::Block(Block::new_unchecked("".parse()?, "hello world")),
             Event::Flushed,
             Event::Synced,
