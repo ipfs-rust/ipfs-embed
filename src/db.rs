@@ -153,10 +153,36 @@ where
         })
     }
 
-    pub fn create_temp_pin(&self) -> Result<TempPin> {
-        observe_query::<_, std::io::Error, _>("create_temp_pin", || {
-            Ok(self.store.lock().temp_pin())
+    pub fn ro<F: FnOnce(&mut Batch<'_, S>) -> Result<R>, R>(
+        &self,
+        op: &'static str,
+        f: F,
+    ) -> Result<R> {
+        observe_query(op, || {
+            let mut lock = self.store.lock();
+            let mut txn = Batch(lock.transaction()?);
+            f(&mut txn)
         })
+    }
+
+    pub fn rw<F: FnOnce(&mut Batch<'_, S>) -> Result<R>, R>(
+        &self,
+        op: &'static str,
+        f: F,
+    ) -> Result<R> {
+        observe_query(op, || {
+            let mut lock = self.store.lock();
+            let mut txn = Batch(lock.transaction()?);
+            let res = f(&mut txn);
+            if res.is_ok() {
+                txn.0.commit()?;
+            }
+            res
+        })
+    }
+
+    pub fn create_temp_pin(&self) -> Result<TempPin> {
+        self.rw("create_temp_pin", |x| x.create_temp_pin())
     }
 
     pub fn temp_pin(
@@ -164,26 +190,39 @@ where
         temp: &TempPin,
         iter: impl IntoIterator<Item = Cid> + Send + 'static,
     ) -> Result<()> {
-        observe_query("temp_pin", || {
-            self.store.lock().extend_temp_pin(&temp, iter)
-        })
+        self.rw("temp_pin", |x| x.temp_pin(temp, iter))
     }
 
     pub fn iter(&self) -> Result<impl Iterator<Item = Cid>> {
-        let cids = observe_query("iter", || self.store.lock().get_block_cids::<Vec<Cid>>())?;
-        Ok(cids.into_iter())
+        self.ro("iter", |x| x.iter())
     }
 
     pub fn contains(&self, cid: &Cid) -> Result<bool> {
-        observe_query("contains", || self.store.lock().has_block(cid))
+        self.ro("contains", |x| x.contains(cid))
     }
 
     pub fn get(&self, cid: &Cid) -> Result<Option<Vec<u8>>> {
-        observe_query("get", || self.store.lock().get_block(cid))
+        self.ro("get", |x| x.get(cid))
     }
 
     pub fn insert(&self, block: &Block<S>) -> Result<()> {
-        observe_query("insert", || self.store.lock().put_block(block, None))
+        self.rw("insert", |x| x.insert(block))
+    }
+
+    pub fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
+        self.rw("alias", |x| x.alias(alias, cid))
+    }
+
+    pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>> {
+        self.ro("resolve", |x| x.resolve(alias))
+    }
+
+    pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
+        self.ro("reverse_alias", |x| x.reverse_alias(cid))
+    }
+
+    pub fn missing_blocks(&self, cid: &Cid) -> Result<Vec<Cid>> {
+        self.ro("missing_blocks", |x| x.missing_blocks(cid))
     }
 
     pub async fn evict(&self) -> Result<()> {
@@ -204,24 +243,6 @@ where
                 Ok(())
             })
             .await?
-    }
-
-    pub fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
-        observe_query("alias", || self.store.lock().alias(alias, cid))
-    }
-
-    pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>> {
-        observe_query("resolve", || self.store.lock().resolve(alias))
-    }
-
-    pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
-        observe_query("reverse_alias", || self.store.lock().reverse_alias(cid))
-    }
-
-    pub fn missing_blocks(&self, cid: &Cid) -> Result<Vec<Cid>> {
-        observe_query("missing_blocks", || {
-            self.store.lock().get_missing_blocks(cid)
-        })
     }
 
     pub async fn flush(&self) -> Result<()> {
@@ -257,10 +278,9 @@ lazy_static! {
     .unwrap();
 }
 
-fn observe_query<T, E, F>(name: &'static str, query: F) -> Result<T>
+fn observe_query<T, F>(name: &'static str, query: F) -> Result<T>
 where
-    E: std::error::Error + Send + Sync + 'static,
-    F: FnOnce() -> Result<T, E>,
+    F: FnOnce() -> Result<T>,
 {
     QUERIES_TOTAL.with_label_values(&[name]).inc();
     let timer = QUERY_DURATION.with_label_values(&[name]).start_timer();
@@ -270,7 +290,7 @@ where
     } else {
         timer.stop_and_discard();
     }
-    Ok(res?)
+    res
 }
 
 async fn observe_future<T, F>(name: &'static str, query: F) -> Result<T>
@@ -330,6 +350,63 @@ impl<S: StoreParams> SqliteStoreCollector<S> {
         )
         .unwrap();
         Self { store, desc }
+    }
+}
+
+/// A handle for performing batch operations on an ipfs storage
+pub struct Batch<'a, S>(ipfs_sqlite_block_store::Transaction<'a, S>);
+
+impl<'a, S: StoreParams> Batch<'a, S>
+where
+    S: StoreParams,
+    Ipld: References<S::Codecs>,
+{
+    pub fn create_temp_pin(&self) -> Result<TempPin> {
+        Ok(self.0.temp_pin())
+    }
+
+    pub fn temp_pin(
+        &self,
+        temp: &TempPin,
+        iter: impl IntoIterator<Item = Cid> + Send + 'static,
+    ) -> Result<()> {
+        for link in iter {
+            self.0.extend_temp_pin(&temp, &link)?;
+        }
+        Ok(())
+    }
+
+    pub fn iter(&self) -> Result<impl Iterator<Item = Cid>> {
+        let cids = self.0.get_block_cids::<Vec<Cid>>()?;
+        Ok(cids.into_iter())
+    }
+
+    pub fn contains(&self, cid: &Cid) -> Result<bool> {
+        Ok(self.0.has_block(cid)?)
+    }
+
+    pub fn get(&mut self, cid: &Cid) -> Result<Option<Vec<u8>>> {
+        Ok(self.0.get_block(cid)?)
+    }
+
+    pub fn insert(&mut self, block: &Block<S>) -> Result<()> {
+        Ok(self.0.put_block(block, None)?)
+    }
+
+    pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>> {
+        Ok(self.0.resolve(alias)?)
+    }
+
+    pub fn alias(&mut self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
+        Ok(self.0.alias(alias, cid)?)
+    }
+
+    pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
+        Ok(self.0.reverse_alias(cid)?)
+    }
+
+    pub fn missing_blocks(&self, cid: &Cid) -> Result<Vec<Cid>> {
+        Ok(self.0.get_missing_blocks(cid)?)
     }
 }
 
