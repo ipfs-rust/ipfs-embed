@@ -6,8 +6,10 @@ pub use libp2p::kad::record::store::MemoryStoreConfig as KadConfig;
 pub use libp2p::mdns::MdnsConfig;
 pub use libp2p::ping::PingConfig;
 pub use libp2p_bitswap::BitswapConfig;
+pub use libp2p_blake_streams::StreamSyncConfig;
 pub use libp2p_broadcast::BroadcastConfig;
 pub use libp2p_quic::{Keypair, ToLibp2p, TransportConfig};
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Network configuration.
@@ -40,6 +42,8 @@ pub struct NetworkConfig {
     pub broadcast: Option<BroadcastConfig>,
     /// Bitswap config.
     pub bitswap: Option<BitswapConfig>,
+    /// Streams config.
+    pub streams: Option<StreamSyncConfig>,
 }
 
 /// `DNS` configuration.
@@ -53,7 +57,7 @@ pub struct DnsConfig {
 
 impl NetworkConfig {
     /// Creates a new network configuration.
-    pub fn new(node_key: Keypair) -> Self {
+    pub fn new(path: PathBuf, node_key: Keypair) -> Self {
         let node_name = names::Generator::with_naming(names::Name::Numbered)
             .next()
             .unwrap();
@@ -67,6 +71,7 @@ impl NetworkConfig {
             .unwrap();
         quic.receive_window(4_000_000).unwrap();
         quic.send_window(4_000_000);
+        let node_key2 = Keypair::from_bytes(&node_key.to_bytes()).unwrap();
         Self {
             node_name,
             node_key,
@@ -80,12 +85,7 @@ impl NetworkConfig {
             gossipsub: Some(GossipsubConfig::default()),
             broadcast: Some(BroadcastConfig::default()),
             bitswap: Some(BitswapConfig::default()),
+            streams: Some(StreamSyncConfig::new(path, node_key2)),
         }
-    }
-}
-
-impl Default for NetworkConfig {
-    fn default() -> Self {
-        Self::new(libp2p_quic::generate_keypair())
     }
 }

@@ -14,9 +14,10 @@ use crate::db::StorageService;
 pub use crate::db::{StorageConfig, TempPin};
 pub use crate::net::{
     generate_keypair, AddressRecord, AddressSource, BitswapConfig, BroadcastConfig, DnsConfig,
-    Event, GossipsubConfig, IdentifyConfig, KadConfig, Key, Keypair, ListenerEvent, ListenerId,
-    MdnsConfig, Multiaddr, NetworkConfig, PeerId, PeerInfo, PeerRecord, PingConfig, Quorum, Record,
-    SyncEvent, SyncQuery, ToLibp2p, TransportConfig,
+    Event, GossipsubConfig, Head, IdentifyConfig, KadConfig, Key, Keypair, ListenerEvent,
+    ListenerId, LocalStreamWriter, MdnsConfig, Multiaddr, NetworkConfig, PeerId, PeerInfo,
+    PeerRecord, PingConfig, PublicKey, Quorum, Record, SecretKey, SignedHead, StreamId,
+    StreamReader, SwarmEvents, SyncEvent, SyncQuery, ToLibp2p, TransportConfig,
 };
 use crate::net::{BitswapStore, NetworkService};
 #[cfg(feature = "telemetry")]
@@ -35,6 +36,7 @@ use libp2p::kad::kbucket::Key as BucketKey;
 pub use libp2p::multiaddr;
 use prometheus::Registry;
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 
 mod db;
@@ -57,10 +59,10 @@ pub struct Config {
 impl Config {
     /// Creates a default configuration from a `path` and a `cache_size`. If the `path` is `None`,
     /// ipfs will use an in-memory block store.
-    pub fn new(path: Option<std::path::PathBuf>, cache_size: u64) -> Self {
+    pub fn new(path: &Path, keypair: Keypair) -> Self {
         let sweep_interval = std::time::Duration::from_millis(10000);
-        let storage = StorageConfig::new(path, cache_size, sweep_interval);
-        let network = NetworkConfig::default();
+        let storage = StorageConfig::new(Some(path.join("blocks")), 0, sweep_interval);
+        let network = NetworkConfig::new(path.join("streams"), keypair);
         Self { storage, network }
     }
 }
@@ -120,6 +122,11 @@ where
         let bitswap = BitswapStorage(storage.clone());
         let network = NetworkService::new(config.network, bitswap, executor).await?;
         Ok(Self { storage, network })
+    }
+
+    /// Returns the local `PublicKey`.
+    pub fn local_public_key(&self) -> PublicKey {
+        self.network.local_public_key()
     }
 
     /// Returns the local `PeerId`.
@@ -378,8 +385,48 @@ where
     }
 
     /// Subscribes to the swarm event stream.
-    pub fn swarm_events(&self) -> impl Stream<Item = Event> {
-        self.network.event_stream()
+    pub fn swarm_events(&self) -> SwarmEvents {
+        self.network.swarm_events()
+    }
+
+    /// Returns the streams both local and replicated.
+    pub fn streams(&self) -> Result<Vec<StreamId>> {
+        self.network.streams()
+    }
+
+    /// Returns the current head of a stream.
+    pub fn stream_head(&self, id: &StreamId) -> Result<Option<Head>> {
+        self.network.stream_head(id)
+    }
+
+    /// Returns a reader for the slice.
+    pub fn stream_slice(&self, id: &StreamId, start: u64, len: u64) -> Result<StreamReader> {
+        self.network.stream_slice(id, start, len)
+    }
+
+    /// Removes a local or replicated stream.
+    pub fn stream_remove(&self, id: &StreamId) -> Result<()> {
+        self.network.stream_remove(id)
+    }
+
+    /// Returns a writter to append to a local stream.
+    pub fn stream_append(&self, id: u64) -> Result<LocalStreamWriter> {
+        self.network.stream_append(id)
+    }
+
+    /// Subscribes to a replicated stream.
+    pub fn stream_subscribe(&self, id: &StreamId) -> Result<()> {
+        self.network.stream_subscribe(id)
+    }
+
+    /// Adds the peers to a replicated stream.
+    pub fn stream_add_peers(&self, id: &StreamId, peers: impl Iterator<Item = PeerId>) {
+        self.network.stream_add_peers(id, peers)
+    }
+
+    /// Updates the head of a replicated stream.
+    pub fn stream_update_head(&self, head: SignedHead) {
+        self.network.stream_update_head(head)
     }
 }
 

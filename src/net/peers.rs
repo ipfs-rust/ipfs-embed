@@ -9,9 +9,12 @@ use libp2p::multiaddr::Protocol;
 use libp2p::swarm::protocols_handler::DummyProtocolsHandler;
 use libp2p::swarm::{DialPeerCondition, NetworkBehaviour, NetworkBehaviourAction, PollParameters};
 use libp2p::{Multiaddr, PeerId};
+use libp2p_blake_streams::Head;
+use libp2p_quic::PublicKey;
 use prometheus::{IntCounter, IntGauge, Registry};
 use std::borrow::Cow;
 use std::collections::VecDeque;
+use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -29,6 +32,7 @@ pub enum Event {
     Disconnected(PeerId),
     Subscribed(PeerId, String),
     Unsubscribed(PeerId, String),
+    NewHead(Head),
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -120,6 +124,7 @@ fn normalize_addr_ref<'a>(addr: &'a Multiaddr, peer: &PeerId) -> Cow<'a, Multiad
 pub struct AddressBook {
     local_node_name: String,
     local_peer_id: PeerId,
+    local_public_key: PublicKey,
     peers: FnvHashMap<PeerId, PeerInfo>,
     connections: FnvHashMap<PeerId, Multiaddr>,
     event_stream: Vec<mpsc::UnboundedSender<Event>>,
@@ -127,15 +132,24 @@ pub struct AddressBook {
 }
 
 impl AddressBook {
-    pub fn new(local_peer_id: PeerId, local_node_name: String) -> Self {
+    pub fn new(
+        local_peer_id: PeerId,
+        local_node_name: String,
+        local_public_key: PublicKey,
+    ) -> Self {
         Self {
             local_node_name,
             local_peer_id,
+            local_public_key,
             peers: Default::default(),
             connections: Default::default(),
             event_stream: Default::default(),
             actions: Default::default(),
         }
+    }
+
+    pub fn local_public_key(&self) -> &PublicKey {
+        &self.local_public_key
     }
 
     pub fn local_node_name(&self) -> &str {
@@ -215,10 +229,10 @@ impl AddressBook {
         }
     }
 
-    pub fn event_stream(&mut self) -> impl Stream<Item = Event> {
+    pub fn swarm_events(&mut self) -> SwarmEvents {
         let (tx, rx) = mpsc::unbounded();
         self.event_stream.push(tx);
-        rx
+        SwarmEvents(rx)
     }
 
     pub fn notify(&mut self, event: Event) {
@@ -238,6 +252,16 @@ impl AddressBook {
         registry.register(Box::new(ADDRESS_REACH_FAILURE.clone()))?;
         registry.register(Box::new(DIAL_FAILURE.clone()))?;
         Ok(())
+    }
+}
+
+pub struct SwarmEvents(mpsc::UnboundedReceiver<Event>);
+
+impl Stream for SwarmEvents {
+    type Item = Event;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.0).poll_next(cx)
     }
 }
 
