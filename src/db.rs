@@ -6,7 +6,7 @@ use lazy_static::lazy_static;
 use libipld::codec::References;
 use libipld::store::StoreParams;
 use libipld::{Block, Cid, Ipld, Result};
-use parking_lot::{Condvar, Mutex, MutexGuard};
+use parking_lot::{Condvar, Mutex};
 use prometheus::core::{Collector, Desc};
 use prometheus::proto::MetricFamily;
 use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry};
@@ -88,46 +88,15 @@ impl<S: StoreParams> Drop for StorageService<S> {
     }
 }
 
-/// Keeps a parking_lot mutex guard and a value that is valid only as long as the guard exists together.
-///
-/// struct fields are dropped in the same order as they are declared, so the value will be dropped first
-struct GuardAndValue<'a, A, B> {
-    value: B,
-    // do not change the order!
-    guard: Box<MutexGuard<'a, A>>,
-}
+pub struct Batch<'a, S>(ipfs_sqlite_block_store::Transaction<'a, S>);
 
-impl<'a, A, B> GuardAndValue<'a, A, B> {
-    fn try_new<E>(
-        guard: MutexGuard<'a, A>,
-        f: impl Fn(&'a mut MutexGuard<'a, A>) -> std::result::Result<B, E>,
-    ) -> std::result::Result<Self, E> {
-        // box it so it stays in the same place
-        let mut guard = Box::new(guard);
-        let guard_ref = guard.as_mut();
-        let value = unsafe {
-            // extend the lifetime of the &mut A to the lifetime of the struct, 'a
-            f(std::mem::transmute(guard_ref))?
-        };
-        Ok(GuardAndValue { guard, value })
-    }
-}
-
-pub struct Transaction<'a, S>(
-    GuardAndValue<
-        'a,
-        ipfs_sqlite_block_store::BlockStore<S>,
-        ipfs_sqlite_block_store::Transaction<'a, S>,
-    >,
-);
-
-impl<'a, S: StoreParams> Transaction<'a, S>
+impl<'a, S: StoreParams> Batch<'a, S>
 where
     S: StoreParams,
     Ipld: References<S::Codecs>,
 {
     pub fn create_temp_pin(&self) -> Result<TempPin> {
-        Ok(self.0.value.temp_pin())
+        Ok(self.0.temp_pin())
     }
 
     pub fn temp_pin(
@@ -136,46 +105,42 @@ where
         iter: impl IntoIterator<Item = Cid> + Send + 'static,
     ) -> Result<()> {
         for link in iter {
-            self.0.value.extend_temp_pin(&temp, &link)?;
+            self.0.extend_temp_pin(&temp, &link)?;
         }
         Ok(())
     }
 
     pub fn iter(&self) -> Result<impl Iterator<Item = Cid>> {
-        let cids = self.0.value.get_block_cids::<Vec<Cid>>()?;
+        let cids = self.0.get_block_cids::<Vec<Cid>>()?;
         Ok(cids.into_iter())
     }
 
     pub fn contains(&self, cid: &Cid) -> Result<bool> {
-        Ok(self.0.value.has_block(cid)?)
+        Ok(self.0.has_block(cid)?)
     }
 
     pub fn get(&self, cid: &Cid) -> Result<Option<Vec<u8>>> {
-        Ok(self.0.value.get_block(cid)?)
+        Ok(self.0.get_block(cid)?)
     }
 
-    pub fn insert(&self, block: &Block<S>) -> Result<()> {
-        Ok(self.0.value.put_block(block, None)?)
+    pub fn insert(&mut self, block: &Block<S>) -> Result<()> {
+        Ok(self.0.put_block(block, None)?)
     }
 
     pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>> {
-        Ok(self.0.value.resolve(alias)?)
+        Ok(self.0.resolve(alias)?)
     }
 
-    pub fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
-        Ok(self.0.value.alias(alias, cid)?)
+    pub fn alias(&mut self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
+        Ok(self.0.alias(alias, cid)?)
     }
 
     pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
-        Ok(self.0.value.reverse_alias(cid)?)
+        Ok(self.0.reverse_alias(cid)?)
     }
 
     pub fn missing_blocks(&self, cid: &Cid) -> Result<Vec<Cid>> {
-        Ok(self.0.value.get_missing_blocks(cid)?)
-    }
-
-    pub fn commit(self) -> Result<()> {
-        Ok(self.0.value.commit()?)
+        Ok(self.0.get_missing_blocks(cid)?)
     }
 }
 
@@ -244,17 +209,36 @@ where
         })
     }
 
-    pub fn transaction(&self) -> Result<Transaction<'_, S>> {
-        Ok(Transaction(GuardAndValue::try_new(
-            self.store.lock(),
-            |x| x.transaction(),
-        )?))
+    pub fn ro<F: FnOnce(&Batch<'_, S>) -> Result<R>, R>(
+        &self,
+        op: &'static str,
+        f: F,
+    ) -> Result<R> {
+        observe_query(op, || {
+            let mut lock = self.store.lock();
+            let mut txn = Batch(lock.transaction()?);
+            f(&mut txn)
+        })
+    }
+
+    pub fn rw<F: FnOnce(&mut Batch<'_, S>) -> Result<R>, R>(
+        &self,
+        op: &'static str,
+        f: F,
+    ) -> Result<R> {
+        observe_query(op, || {
+            let mut lock = self.store.lock();
+            let mut txn = Batch(lock.transaction()?);
+            let res = f(&mut txn);
+            if res.is_ok() {
+                txn.0.commit()?;
+            }
+            res
+        })
     }
 
     pub fn create_temp_pin(&self) -> Result<TempPin> {
-        observe_query::<_, std::io::Error, _>("create_temp_pin", || {
-            Ok(self.store.lock().temp_pin())
-        })
+        self.rw("create_temp_pin", |x| x.create_temp_pin())
     }
 
     pub fn temp_pin(
@@ -262,43 +246,23 @@ where
         temp: &TempPin,
         iter: impl IntoIterator<Item = Cid> + Send + 'static,
     ) -> Result<()> {
-        let txn = self.transaction()?;
-        txn.temp_pin(temp, iter)?;
-        txn.commit()?;
-        Ok(())
-        // observe_query("temp_pin", || {
-        //     self.store.lock().extend_temp_pin(&temp, iter)
-        // })
+        self.rw("temp_pin", |x| x.temp_pin(temp, iter))
     }
 
     pub fn iter(&self) -> Result<impl Iterator<Item = Cid>> {
-        self.transaction()?.iter()
-        // let cids = observe_query("iter", || self.store.lock().get_block_cids::<Vec<Cid>>())?;
-        // Ok(cids.into_iter())
+        self.ro("iter", |x| x.iter())
     }
 
     pub fn contains(&self, cid: &Cid) -> Result<bool> {
-        let txn = self.transaction()?;
-        let res = txn.contains(cid);
-        drop(txn);
-        res
-        // observe_query("contains", || self.store.lock().transaction()?.has_block(cid))
+        self.ro("contains", |x| x.contains(cid))
     }
 
     pub fn get(&self, cid: &Cid) -> Result<Option<Vec<u8>>> {
-        let txn = self.transaction()?;
-        let res = txn.get(cid);
-        drop(txn);
-        res
-        // observe_query("get", || self.store.lock().transaction()?.get_block(cid))
+        self.ro("get", |x| x.get(cid))
     }
 
     pub fn insert(&self, block: &Block<S>) -> Result<()> {
-        let txn = self.transaction()?;
-        let res = txn.insert(block);
-        txn.commit()?;
-        res
-        // observe_query("insert", || self.store.lock().put_block(block, None))
+        self.rw("insert", |x| x.insert(block))
     }
 
     pub async fn evict(&self) -> Result<()> {
@@ -322,28 +286,19 @@ where
     }
 
     pub fn alias(&self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
-        let txn = self.transaction()?;
-        txn.alias(alias, cid)?;
-        txn.commit()?;
-        Ok(())
-        // observe_query("alias", || self.store.lock().alias(alias, cid))
+        self.rw("alias", |x| x.alias(alias, cid))
     }
 
     pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>> {
-        let txn = self.transaction()?;
-        let result = txn.resolve(alias)?;
-        txn.commit()?;
-        Ok(result)
-        // observe_query("resolve", || self.store.lock().resolve(alias))
+        self.ro("resolve", |x| x.resolve(alias))
     }
 
     pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
-        self.transaction()?.reverse_alias(cid)
-        // observe_query("reverse_alias", || self.store.lock().reverse_alias(cid))
+        self.ro("reverse_alias", |x| x.reverse_alias(cid))
     }
 
     pub fn missing_blocks(&self, cid: &Cid) -> Result<Vec<Cid>> {
-        self.transaction()?.missing_blocks(cid)
+        self.ro("missing_blocks", |x| x.missing_blocks(cid))
     }
 
     pub async fn flush(&self) -> Result<()> {
@@ -379,10 +334,9 @@ lazy_static! {
     .unwrap();
 }
 
-fn observe_query<T, E, F>(name: &'static str, query: F) -> Result<T>
+fn observe_query<T, F>(name: &'static str, query: F) -> Result<T>
 where
-    E: std::error::Error + Send + Sync + 'static,
-    F: FnOnce() -> Result<T, E>,
+    F: FnOnce() -> Result<T>,
 {
     QUERIES_TOTAL.with_label_values(&[name]).inc();
     let timer = QUERY_DURATION.with_label_values(&[name]).start_timer();

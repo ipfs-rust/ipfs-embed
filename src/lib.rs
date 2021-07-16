@@ -22,6 +22,7 @@ use crate::net::{BitswapStore, NetworkService};
 #[cfg(feature = "telemetry")]
 pub use crate::telemetry::telemetry;
 use async_trait::async_trait;
+pub use db::Batch;
 use executor::Executor;
 use futures::stream::Stream;
 use libipld::codec::References;
@@ -294,6 +295,24 @@ where
         } else {
             Err(BlockNotFound(*cid).into())
         }
+    }
+
+    /// Perform a set of readonly storage operations in a batch
+    pub async fn read_batch<F: FnOnce(&Batch<'_, P>) -> Result<R>, R>(
+        &self,
+        op: &'static str,
+        f: F,
+    ) -> Result<R> {
+        self.storage.ro(op, f)
+    }
+
+    /// Perform a set of read and write storage operations in a batch
+    pub async fn write_batch<F: FnOnce(&mut Batch<'_, P>) -> Result<R>, R>(
+        &self,
+        op: &'static str,
+        f: F,
+    ) -> Result<R> {
+        self.storage.rw(op, f)
     }
 
     /// Either returns a block if it's in the block store or tries to retrieve it from
