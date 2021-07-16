@@ -1,6 +1,7 @@
 #[cfg(target_os = "linux")]
 fn main() -> anyhow::Result<()> {
     use ipfs_embed_cli::{Command, Event};
+    use ipfs_embed_harness::{MachineExt, MultiaddrExt};
     use libipld::alias;
     use std::time::Instant;
 
@@ -10,11 +11,14 @@ fn main() -> anyhow::Result<()> {
 
         let mut peers = Vec::with_capacity(network.machines().len());
         for machine in network.machines_mut() {
-            machine.send(Command::ListenOn("/ip4/0.0.0.0/tcp/0".parse().unwrap()));
-            if let Some(Event::ListeningOn(peer, addr)) = machine.recv().await {
-                peers.push((peer, addr));
-            } else {
-                unreachable!();
+            let peer = machine.peer_id();
+            loop {
+                if let Some(Event::NewListenAddr(addr)) = machine.recv().await {
+                    if !addr.is_loopback() {
+                        peers.push((peer, addr));
+                        break;
+                    }
+                }
             }
         }
 
@@ -57,7 +61,11 @@ fn main() -> anyhow::Result<()> {
             machine.send(Command::Flush);
         }
         for machine in network.machines_mut() {
-            assert_eq!(machine.recv().await, Some(Event::Flushed));
+            loop {
+                if let Some(Event::Flushed) = machine.recv().await {
+                    break;
+                }
+            }
         }
 
         // compute total size of data to be synced
@@ -72,9 +80,17 @@ fn main() -> anyhow::Result<()> {
         }
 
         for machine in &mut network.machines_mut()[consumers.clone()] {
-            assert_eq!(machine.recv().await, Some(Event::Synced));
+            loop {
+                if let Some(Event::Synced) = machine.recv().await {
+                    break;
+                }
+            }
             machine.send(Command::Flush);
-            assert_eq!(machine.recv().await, Some(Event::Flushed));
+            loop {
+                if let Some(Event::Flushed) = machine.recv().await {
+                    break;
+                }
+            }
         }
 
         println!(
@@ -90,12 +106,12 @@ fn main() -> anyhow::Result<()> {
             // check that data is indeed synced
             for block in &blocks {
                 machine.send(Command::Get(*block.cid()));
-                let data = if let Some(Event::Block(data)) = machine.recv().await {
-                    data
-                } else {
-                    unreachable!();
-                };
-                assert_eq!(&data, block);
+                loop {
+                    if let Some(Event::Block(data)) = machine.recv().await {
+                        assert_eq!(&data, block);
+                        break;
+                    }
+                }
             }
         }
         Ok(())

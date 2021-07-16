@@ -154,7 +154,7 @@ pub struct KadPutRecordError(pub libp2p::kad::PutRecordError);
 impl<P: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBackendBehaviour<P> {
     fn inject_event(&mut self, event: KademliaEvent) {
         tracing::trace!("kademlia event {:?}", event);
-        if let KademliaEvent::QueryResult { id, result, .. } = event {
+        if let KademliaEvent::OutboundQueryCompleted { id, result, .. } = event {
             match result {
                 QueryResult::Bootstrap(Ok(BootstrapOk { num_remaining, .. })) => {
                     tracing::trace!("remaining {}", num_remaining);
@@ -272,14 +272,14 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<PingEvent> for NetworkBackendB
                 peer,
                 result: Result::Ok(PingSuccess::Ping { rtt }),
             } => {
-                tracing::trace!("ping: rtt to {} is {} ms", peer, rtt.as_millis());
+                //tracing::trace!("ping: rtt to {} is {} ms", peer, rtt.as_millis());
                 self.peers.set_rtt(&peer, Some(rtt));
             }
             PingEvent {
-                peer,
+                peer: _,
                 result: Result::Ok(PingSuccess::Pong),
             } => {
-                tracing::trace!("ping: pong from {}", peer);
+                //tracing::trace!("ping: pong from {}", peer);
             }
             PingEvent {
                 peer,
