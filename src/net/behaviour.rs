@@ -272,14 +272,14 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<PingEvent> for NetworkBackendB
                 peer,
                 result: Result::Ok(PingSuccess::Ping { rtt }),
             } => {
-                tracing::trace!("ping: rtt to {} is {} ms", peer, rtt.as_millis());
+                //tracing::trace!("ping: rtt to {} is {} ms", peer, rtt.as_millis());
                 self.peers.set_rtt(&peer, Some(rtt));
             }
             PingEvent {
-                peer,
+                peer: _,
                 result: Result::Ok(PingSuccess::Pong),
             } => {
-                tracing::trace!("ping: pong from {}", peer);
+                //tracing::trace!("ping: pong from {}", peer);
             }
             PingEvent {
                 peer,

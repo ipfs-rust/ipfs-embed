@@ -90,7 +90,7 @@ impl<P: StoreParams> NetworkService<P> {
                 .upgrade()
                 .authenticate_with_version(
                     NoiseConfig::xx(dh_key).into_authenticated(),
-                    AuthenticationVersion::V1SimOpen,
+                    AuthenticationVersion::V1SimultaneousOpen,
                 )
                 .multiplex(SelectUpgrade::new(
                     YamuxConfig::default(),
