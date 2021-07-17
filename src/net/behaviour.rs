@@ -165,6 +165,7 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBack
                         if let Some(QueryChannel::Bootstrap(ch)) = self.queries.remove(&id.into()) {
                             ch.send(Ok(())).ok();
                         }
+                        self.peers.notify(Event::Bootstrapped);
                     }
                 }
                 QueryResult::Bootstrap(Err(err)) => {
@@ -513,6 +514,10 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             tx.send(Err(NotBootstrapped.into())).ok();
         }
         rx
+    }
+
+    pub fn is_bootstrapped(&self) -> bool {
+        self.bootstrap_complete
     }
 
     pub fn get_closest_peers<K>(&mut self, key: K) -> GetClosestPeersChannel

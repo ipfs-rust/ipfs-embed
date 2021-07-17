@@ -292,6 +292,11 @@ impl<P: StoreParams> NetworkService<P> {
         Ok(())
     }
 
+    pub fn is_bootstrapped(&self) -> bool {
+        let swarm = self.swarm.lock();
+        swarm.behaviour().is_bootstrapped()
+    }
+
     pub async fn get_closest_peers<K>(&self, key: K) -> Result<Vec<PeerId>>
     where
         K: Into<BucketKey<K>> + Into<Vec<u8>> + Clone,

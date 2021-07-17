@@ -33,6 +33,7 @@ pub enum Event {
     Subscribed(PeerId, String),
     Unsubscribed(PeerId, String),
     NewHead(Head),
+    Bootstrapped,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

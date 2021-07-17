@@ -218,6 +218,11 @@ where
         Ok(())
     }
 
+    /// Returns true if the dht was bootstrapped.
+    pub fn is_bootstrapped(&self) -> bool {
+        self.network.is_bootstrapped()
+    }
+
     /// Gets the closest peer to a key. Useful for finding the `Multiaddr` of a `PeerId`.
     pub async fn get_closest_peers<K>(&self, key: K) -> Result<()>
     where
