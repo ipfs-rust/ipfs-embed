@@ -27,7 +27,7 @@ ipfs-sqlite-block-store = "0.6.1"
 lazy_static = "1.4.0"
 libipld = { version = "0.12.0", default-features = false }
 libp2p-bitswap = "0.19.0"
-libp2p-blake-streams = { path = "../blake-streams/libp2p" } #git = "https://github.com/ipfs-rust/blake-streams" }
+libp2p-blake-streams = "0.1.0"
 libp2p-broadcast = "0.5.0"
 libp2p-quic = "0.5.0"
 names = "0.11.0"

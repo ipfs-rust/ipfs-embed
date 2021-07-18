@@ -14,7 +14,7 @@ use crate::db::StorageService;
 pub use crate::db::{StorageConfig, TempPin};
 pub use crate::net::{
     generate_keypair, AddressRecord, AddressSource, BitswapConfig, BroadcastConfig, DnsConfig,
-    Event, GossipsubConfig, Head, IdentifyConfig, KadConfig, Key, Keypair, ListenerEvent,
+    DocId, Event, GossipsubConfig, Head, IdentifyConfig, KadConfig, Key, Keypair, ListenerEvent,
     ListenerId, LocalStreamWriter, MdnsConfig, Multiaddr, NetworkConfig, PeerId, PeerInfo,
     PeerRecord, PingConfig, PublicKey, Quorum, Record, SecretKey, SignedHead, StreamId,
     StreamReader, SwarmEvents, SyncEvent, SyncQuery, ToLibp2p, TransportConfig,
@@ -394,9 +394,24 @@ where
         self.network.swarm_events()
     }
 
+    /// Returns the documents both local and replicated.
+    pub fn docs(&self) -> Result<Vec<DocId>> {
+        self.network.docs()
+    }
+
     /// Returns the streams both local and replicated.
     pub fn streams(&self) -> Result<Vec<StreamId>> {
         self.network.streams()
+    }
+
+    /// Returns the streams both local and replicated for the given document id.
+    pub fn substreams(&self, doc: DocId) -> Result<Vec<StreamId>> {
+        self.network.substreams(doc)
+    }
+
+    /// Adds the peers to a replicated stream.
+    pub fn stream_add_peers(&self, doc: DocId, peers: impl Iterator<Item = PeerId>) {
+        self.network.stream_add_peers(doc, peers)
     }
 
     /// Returns the current head of a stream.
@@ -415,18 +430,13 @@ where
     }
 
     /// Returns a writter to append to a local stream.
-    pub fn stream_append(&self, id: u64) -> Result<LocalStreamWriter> {
+    pub fn stream_append(&self, id: DocId) -> Result<LocalStreamWriter> {
         self.network.stream_append(id)
     }
 
     /// Subscribes to a replicated stream.
     pub fn stream_subscribe(&self, id: &StreamId) -> Result<()> {
         self.network.stream_subscribe(id)
-    }
-
-    /// Adds the peers to a replicated stream.
-    pub fn stream_add_peers(&self, id: &StreamId, peers: impl Iterator<Item = PeerId>) {
-        self.network.stream_add_peers(id, peers)
     }
 
     /// Updates the head of a replicated stream.

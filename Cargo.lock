@@ -154,6 +154,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b"
 
 [[package]]
+name = "arrayvec"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be4dc07131ffa69b8072d35f5007352af944213cde02545e2103680baed38fcd"
+
+[[package]]
 name = "asn1_der"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -434,11 +440,12 @@ checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
 
 [[package]]
 name = "bao"
-version = "0.10.1"
-source = "git+https://github.com/oconnor663/bao?branch=master#1a432c76671931b3d1e63bc7654e0222ac807e48"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0459c2bb916c8dd306cdb368bd09ff245763b9d6be6ccc7e2b8a3975eda3c9c"
 dependencies = [
  "arrayref",
- "arrayvec",
+ "arrayvec 0.7.1",
  "blake3",
 ]
 
@@ -478,12 +485,15 @@ checksum = "cf1de2fe8c75bc145a2f577add951f8134889b4795d47466a54a5c846d691693"
 [[package]]
 name = "blake-streams-core"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f00a470483f082507fd96377e89383dfbbb60a77ecb4a5a6544e0efb562c642"
 dependencies = [
  "anyhow",
  "bao",
  "base64 0.13.0",
  "ed25519-dalek",
  "fnv",
+ "getrandom 0.2.3",
  "parking_lot",
  "rkyv",
  "sled",
@@ -509,7 +519,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b64485778c4f16a6a5a9d335e80d449ac6c70cdd6a06d2af18a6f6f775a125b3"
 dependencies = [
  "arrayref",
- "arrayvec",
+ "arrayvec 0.5.2",
  "cc",
  "cfg-if 0.1.10",
  "constant_time_eq",
@@ -1798,6 +1808,8 @@ dependencies = [
 [[package]]
 name = "libp2p-blake-streams"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ec9bb69c746f1f6c61c352fae944971f29380d66b1b885b0299a28f1b4ad904"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1916,7 +1928,7 @@ version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "50ed78489c87924235665a0ab345b298ee34dff0f7ad62c0ba6608b2144fb75e"
 dependencies = [
- "arrayvec",
+ "arrayvec 0.5.2",
  "asynchronous-codec",
  "bytes",
  "either",

@@ -48,7 +48,9 @@ pub use libp2p::kad::{PeerRecord, Quorum};
 pub use libp2p::swarm::AddressRecord;
 pub use libp2p::{Multiaddr, PeerId, TransportError};
 pub use libp2p_bitswap::BitswapStore;
-pub use libp2p_blake_streams::{Head, LocalStreamWriter, SignedHead, StreamId, StreamReader};
+pub use libp2p_blake_streams::{
+    DocId, Head, LocalStreamWriter, SignedHead, StreamId, StreamReader,
+};
 pub use libp2p_quic::{generate_keypair, PublicKey, SecretKey, ToLibp2p};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -414,9 +416,24 @@ impl<P: StoreParams> NetworkService<P> {
         swarm.behaviour_mut().swarm_events()
     }
 
+    pub fn docs(&self) -> Result<Vec<DocId>> {
+        let mut swarm = self.swarm.lock();
+        swarm.behaviour_mut().streams().docs()
+    }
+
     pub fn streams(&self) -> Result<Vec<StreamId>> {
         let mut swarm = self.swarm.lock();
         swarm.behaviour_mut().streams().streams()
+    }
+
+    pub fn substreams(&self, doc: DocId) -> Result<Vec<StreamId>> {
+        let mut swarm = self.swarm.lock();
+        swarm.behaviour_mut().streams().substreams(doc)
+    }
+
+    pub fn stream_add_peers(&self, doc: DocId, peers: impl Iterator<Item = PeerId>) {
+        let mut swarm = self.swarm.lock();
+        swarm.behaviour_mut().streams().add_peers(doc, peers)
     }
 
     pub fn stream_head(&self, id: &StreamId) -> Result<Option<Head>> {
@@ -434,7 +451,7 @@ impl<P: StoreParams> NetworkService<P> {
         swarm.behaviour_mut().streams().remove(id)
     }
 
-    pub fn stream_append(&self, id: u64) -> Result<LocalStreamWriter> {
+    pub fn stream_append(&self, id: DocId) -> Result<LocalStreamWriter> {
         let mut swarm = self.swarm.lock();
         swarm.behaviour_mut().streams().append(id)
     }
@@ -442,11 +459,6 @@ impl<P: StoreParams> NetworkService<P> {
     pub fn stream_subscribe(&self, id: &StreamId) -> Result<()> {
         let mut swarm = self.swarm.lock();
         swarm.behaviour_mut().streams().subscribe(id)
-    }
-
-    pub fn stream_add_peers(&self, id: &StreamId, peers: impl Iterator<Item = PeerId>) {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().add_peers(id, peers)
     }
 
     pub fn stream_update_head(&self, head: SignedHead) {
