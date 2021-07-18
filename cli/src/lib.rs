@@ -1,6 +1,6 @@
 use anyhow::Result;
 use ed25519_dalek::{PublicKey, SecretKey};
-use ipfs_embed::{Block, Cid, DefaultParams, Keypair, Multiaddr, PeerId, ToLibp2p};
+use ipfs_embed::{Block, Cid, DefaultParams, Keypair, Multiaddr, PeerId, StreamId, ToLibp2p};
 use std::path::PathBuf;
 use structopt::StructOpt;
 
@@ -184,6 +184,8 @@ pub enum Event {
     Block(Block<DefaultParams>),
     Flushed,
     Synced,
+    Bootstrapped,
+    NewHead(StreamId, u64),
 }
 
 impl std::fmt::Display for Event {
@@ -209,6 +211,8 @@ impl std::fmt::Display for Event {
             }
             Self::Flushed => write!(f, "<flushed")?,
             Self::Synced => write!(f, "<synced")?,
+            Self::Bootstrapped => write!(f, "<bootstrapped")?,
+            Self::NewHead(id, offset) => write!(f, "<newhead {} {}", id, offset)?,
         }
         Ok(())
     }
@@ -277,6 +281,12 @@ impl std::str::FromStr for Event {
             }
             Some("<flushed") => Self::Flushed,
             Some("<synced") => Self::Synced,
+            Some("<bootstrapped") => Self::Bootstrapped,
+            Some("<newhead") => {
+                let id = parts.next().unwrap().parse()?;
+                let offset = parts.next().unwrap().parse()?;
+                Self::NewHead(id, offset)
+            }
             _ => return Err(anyhow::anyhow!("invalid event `{}`", s)),
         })
     }

@@ -421,12 +421,13 @@ impl NetworkBehaviour for AddressBook {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::generate_keypair;
     use futures::stream::StreamExt;
 
     #[async_std::test]
     async fn test_dial_basic() {
-        let mut book = AddressBook::new(PeerId::random(), "".into());
-        let mut stream = book.event_stream();
+        let mut book = AddressBook::new(PeerId::random(), "".into(), generate_keypair().public);
+        let mut stream = book.swarm_events();
         let peer_a = PeerId::random();
         let addr_1: Multiaddr = "/ip4/1.1.1.1/tcp/3333".parse().unwrap();
         let mut addr_1_2 = addr_1.clone();
@@ -449,8 +450,8 @@ mod tests {
 
     #[async_std::test]
     async fn test_dial_with_added_addrs() {
-        let mut book = AddressBook::new(PeerId::random(), "".into());
-        let mut stream = book.event_stream();
+        let mut book = AddressBook::new(PeerId::random(), "".into(), generate_keypair().public);
+        let mut stream = book.swarm_events();
         let peer_a = PeerId::random();
         let addr_1: Multiaddr = "/ip4/1.1.1.1/tcp/3333".parse().unwrap();
         let addr_2: Multiaddr = "/ip4/2.2.2.2/tcp/3333".parse().unwrap();

@@ -20,7 +20,7 @@ fn tracing_try_init() {
 #[async_std::main]
 async fn main() -> anyhow::Result<()> {
     tracing_try_init();
-    let config = Config::new(None, 1024 * 1024);
+    let config = Config::default();
     let ipfs = Ipfs::<Sp>::new(config).await?;
     let peer: PeerId = "QmRSGx67Kq8w7xSBDia7hQfbfuvauMQGgxcwSWw976x4BS".parse()?;
     let addr: Multiaddr = "/ip4/54.173.33.96/tcp/4001".parse()?;

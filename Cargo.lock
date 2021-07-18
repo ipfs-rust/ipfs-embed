@@ -1550,6 +1550,7 @@ dependencies = [
  "pin-project 1.0.7",
  "prometheus",
  "rand 0.8.4",
+ "tempdir",
  "thiserror",
  "tide",
  "tokio",

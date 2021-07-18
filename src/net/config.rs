@@ -1,3 +1,4 @@
+use crate::generate_keypair;
 use libipld::store::{DefaultParams, StoreParams};
 pub use libp2p::dns::{ResolverConfig, ResolverOpts};
 pub use libp2p::gossipsub::GossipsubConfig;
@@ -87,5 +88,11 @@ impl NetworkConfig {
             bitswap: Some(BitswapConfig::default()),
             streams: Some(StreamSyncConfig::new(path, node_key2)),
         }
+    }
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self::new(Default::default(), generate_keypair())
     }
 }

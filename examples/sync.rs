@@ -1,6 +1,6 @@
 use anyhow::Result;
 use futures::stream::StreamExt;
-use ipfs_embed::{Config, Ipfs};
+use ipfs_embed::{generate_keypair, Config, Ipfs};
 use libipld::cbor::DagCborCodec;
 use libipld::multihash::Code;
 use libipld::store::DefaultParams;
@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    let mut config = Config::new(Some("/tmp/local1".into()), 1000);
+    let mut config = Config::new("/tmp/local1".as_ref(), generate_keypair());
     config.network.kad = None;
     let a = Ipfs::<DefaultParams>::new(config).await?;
     a.listen_on("/ip4/127.0.0.1/tcp/0".parse()?)?
@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
         .await
         .unwrap();
 
-    let mut config = Config::new(Some("/tmp/local2".into()), 1000);
+    let mut config = Config::new("/tmp/local2".as_ref(), generate_keypair());
     config.network.kad = None;
     let b = Ipfs::<DefaultParams>::new(config).await?;
 
