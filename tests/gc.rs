@@ -1,11 +1,14 @@
 use anyhow::Result;
 use fnv::FnvHashSet;
-use ipfs_embed::{Block, Cid, Config, DefaultParams, Ipfs, NetworkConfig, StorageConfig};
+use ipfs_embed::{
+    generate_keypair, Block, Cid, Config, DefaultParams, Ipfs, NetworkConfig, StorageConfig,
+};
 use libipld::cbor::DagCborCodec;
 use libipld::multihash::Code;
 use libipld::DagCbor;
 use rand::{thread_rng, RngCore};
 use std::time::{Duration, Instant};
+use tempdir::TempDir;
 
 fn tracing_try_init() {
     tracing_subscriber::fmt()
@@ -45,18 +48,21 @@ struct Node {
 struct DagBuilder {
     ipfs: Ipfs<DefaultParams>,
     heads: FnvHashSet<Cid>,
+    _tmp: TempDir,
 }
 
 impl DagBuilder {
     async fn new() -> Result<Self> {
+        let tmp = TempDir::new("gc-test")?;
         let config = Config {
             storage: StorageConfig::new(None, 0, Duration::from_secs(1000)),
-            network: NetworkConfig::default(),
+            network: NetworkConfig::new(tmp.path().into(), generate_keypair()),
         };
         let ipfs = Ipfs::new(config).await?;
         Ok(Self {
             ipfs,
             heads: Default::default(),
+            _tmp: tmp,
         })
     }
 

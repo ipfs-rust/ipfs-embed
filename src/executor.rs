@@ -111,12 +111,18 @@ impl<T> Future for JoinHandle<T> {
 
 #[cfg(test)]
 mod test {
-    use crate::{Config, DefaultParams, Ipfs};
+    use crate::{generate_keypair, Config, DefaultParams, Ipfs};
+    use tempdir::TempDir;
 
     #[test]
     fn should_work_with_async_global_per_default() {
         use futures::executor::block_on;
-        block_on(Ipfs::<DefaultParams>::new(Config::new(None, 100))).unwrap();
+        let tmp = TempDir::new("ipfs-embed").unwrap();
+        block_on(Ipfs::<DefaultParams>::new(Config::new(
+            tmp.path(),
+            generate_keypair(),
+        )))
+        .unwrap();
     }
 
     #[cfg(feature = "tokio")]
@@ -126,8 +132,9 @@ mod test {
     )]
     fn should_panic_without_a_tokio_runtime() {
         use futures::executor::block_on;
+        let tmp = TempDir::new("ipfs-embed").unwrap();
         let _ = block_on(Ipfs::<DefaultParams>::new0(
-            Config::new(None, 100),
+            Config::new(tmp.path(), generate_keypair()),
             crate::Executor::Tokio,
         ));
     }
@@ -135,11 +142,12 @@ mod test {
     #[cfg(feature = "tokio")]
     #[test]
     fn should_not_panic_with_a_tokio_runtime() {
+        let tmp = TempDir::new("ipfs-embed").unwrap();
         let rt = tokio_crate::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
         rt.block_on(Ipfs::<DefaultParams>::new0(
-            Config::new(None, 100),
+            Config::new(tmp.path(), generate_keypair()),
             crate::Executor::Tokio,
         ))
         .unwrap();

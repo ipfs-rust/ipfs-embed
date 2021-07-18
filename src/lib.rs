@@ -5,8 +5,7 @@
 //! # #[async_std::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! # use ipfs_embed::{Config, DefaultParams, Ipfs};
-//! # let cache_size = 100;
-//! let ipfs = Ipfs::<DefaultParams>::new(Config::new(None, cache_size)).await?;
+//! let ipfs = Ipfs::<DefaultParams>::new(Config::default()).await?;
 //! ipfs.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 //! # Ok(()) }
 //! ```
@@ -14,9 +13,10 @@ use crate::db::StorageService;
 pub use crate::db::{StorageConfig, TempPin};
 pub use crate::net::{
     generate_keypair, AddressRecord, AddressSource, BitswapConfig, BroadcastConfig, DnsConfig,
-    Event, GossipsubConfig, IdentifyConfig, KadConfig, Key, Keypair, ListenerEvent, ListenerId,
-    MdnsConfig, Multiaddr, NetworkConfig, PeerId, PeerInfo, PeerRecord, PingConfig, Quorum, Record,
-    SyncEvent, SyncQuery, ToLibp2p, TransportConfig,
+    DocId, Event, GossipsubConfig, Head, IdentifyConfig, KadConfig, Key, Keypair, ListenerEvent,
+    ListenerId, LocalStreamWriter, MdnsConfig, Multiaddr, NetworkConfig, PeerId, PeerInfo,
+    PeerRecord, PingConfig, PublicKey, Quorum, Record, SecretKey, SignedHead, StreamId,
+    StreamReader, SwarmEvents, SyncEvent, SyncQuery, ToLibp2p, TransportConfig,
 };
 use crate::net::{BitswapStore, NetworkService};
 #[cfg(feature = "telemetry")]
@@ -35,6 +35,7 @@ use libp2p::kad::kbucket::Key as BucketKey;
 pub use libp2p::multiaddr;
 use prometheus::Registry;
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 
 mod db;
@@ -57,11 +58,17 @@ pub struct Config {
 impl Config {
     /// Creates a default configuration from a `path` and a `cache_size`. If the `path` is `None`,
     /// ipfs will use an in-memory block store.
-    pub fn new(path: Option<std::path::PathBuf>, cache_size: u64) -> Self {
+    pub fn new(path: &Path, keypair: Keypair) -> Self {
         let sweep_interval = std::time::Duration::from_millis(10000);
-        let storage = StorageConfig::new(path, cache_size, sweep_interval);
-        let network = NetworkConfig::default();
+        let storage = StorageConfig::new(Some(path.join("blocks")), 0, sweep_interval);
+        let network = NetworkConfig::new(path.join("streams"), keypair);
         Self { storage, network }
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self::new(Path::new("."), generate_keypair())
     }
 }
 
@@ -120,6 +127,11 @@ where
         let bitswap = BitswapStorage(storage.clone());
         let network = NetworkService::new(config.network, bitswap, executor).await?;
         Ok(Self { storage, network })
+    }
+
+    /// Returns the local `PublicKey`.
+    pub fn local_public_key(&self) -> PublicKey {
+        self.network.local_public_key()
     }
 
     /// Returns the local `PeerId`.
@@ -209,6 +221,11 @@ where
     pub async fn bootstrap(&self, nodes: &[(PeerId, Multiaddr)]) -> Result<()> {
         self.network.bootstrap(nodes).await?;
         Ok(())
+    }
+
+    /// Returns true if the dht was bootstrapped.
+    pub fn is_bootstrapped(&self) -> bool {
+        self.network.is_bootstrapped()
     }
 
     /// Gets the closest peer to a key. Useful for finding the `Multiaddr` of a `PeerId`.
@@ -378,8 +395,58 @@ where
     }
 
     /// Subscribes to the swarm event stream.
-    pub fn swarm_events(&self) -> impl Stream<Item = Event> {
-        self.network.event_stream()
+    pub fn swarm_events(&self) -> SwarmEvents {
+        self.network.swarm_events()
+    }
+
+    /// Returns the documents both local and replicated.
+    pub fn docs(&self) -> Result<Vec<DocId>> {
+        self.network.docs()
+    }
+
+    /// Returns the streams both local and replicated.
+    pub fn streams(&self) -> Result<Vec<StreamId>> {
+        self.network.streams()
+    }
+
+    /// Returns the streams both local and replicated for the given document id.
+    pub fn substreams(&self, doc: DocId) -> Result<Vec<StreamId>> {
+        self.network.substreams(doc)
+    }
+
+    /// Adds the peers to a replicated stream.
+    pub fn stream_add_peers(&self, doc: DocId, peers: impl Iterator<Item = PeerId>) {
+        self.network.stream_add_peers(doc, peers)
+    }
+
+    /// Returns the current head of a stream.
+    pub fn stream_head(&self, id: &StreamId) -> Result<Option<Head>> {
+        self.network.stream_head(id)
+    }
+
+    /// Returns a reader for the slice.
+    pub fn stream_slice(&self, id: &StreamId, start: u64, len: u64) -> Result<StreamReader> {
+        self.network.stream_slice(id, start, len)
+    }
+
+    /// Removes a local or replicated stream.
+    pub fn stream_remove(&self, id: &StreamId) -> Result<()> {
+        self.network.stream_remove(id)
+    }
+
+    /// Returns a writter to append to a local stream.
+    pub fn stream_append(&self, id: DocId) -> Result<LocalStreamWriter> {
+        self.network.stream_append(id)
+    }
+
+    /// Subscribes to a replicated stream.
+    pub fn stream_subscribe(&self, id: &StreamId) -> Result<()> {
+        self.network.stream_subscribe(id)
+    }
+
+    /// Updates the head of a replicated stream.
+    pub fn stream_update_head(&self, head: SignedHead) {
+        self.network.stream_update_head(head)
     }
 }
 
@@ -448,6 +515,7 @@ mod tests {
     use libipld::store::DefaultParams;
     use libipld::{alias, ipld};
     use std::time::Duration;
+    use tempdir::TempDir;
 
     fn tracing_try_init() {
         tracing_subscriber::fmt()
@@ -456,11 +524,12 @@ mod tests {
             .ok();
     }
 
-    async fn create_store(enable_mdns: bool) -> Result<Ipfs<DefaultParams>> {
+    async fn create_store(enable_mdns: bool) -> Result<(Ipfs<DefaultParams>, TempDir)> {
+        let tmp = TempDir::new("ipfs-embed")?;
         let sweep_interval = Duration::from_millis(10000);
         let storage = StorageConfig::new(None, 10, sweep_interval);
 
-        let mut network = NetworkConfig::default();
+        let mut network = NetworkConfig::new(tmp.path().into(), generate_keypair());
         if !enable_mdns {
             network.mdns = None;
         }
@@ -470,7 +539,7 @@ mod tests {
             .next()
             .await
             .unwrap();
-        Ok(ipfs)
+        Ok((ipfs, tmp))
     }
 
     fn create_block(bytes: &[u8]) -> Result<Block<DefaultParams>> {
@@ -480,7 +549,7 @@ mod tests {
     #[async_std::test]
     async fn test_local_store() -> Result<()> {
         tracing_try_init();
-        let store = create_store(false).await?;
+        let (store, _tmp) = create_store(false).await?;
         let block = create_block(b"test_local_store")?;
         let tmp = store.create_temp_pin()?;
         store.temp_pin(&tmp, block.cid())?;
@@ -494,8 +563,8 @@ mod tests {
     #[ignore] // test is too unreliable for ci
     async fn test_exchange_mdns() -> Result<()> {
         tracing_try_init();
-        let store1 = create_store(true).await?;
-        let store2 = create_store(true).await?;
+        let (store1, _tmp) = create_store(true).await?;
+        let (store2, _tmp) = create_store(true).await?;
         let block = create_block(b"test_exchange_mdns")?;
         let tmp1 = store1.create_temp_pin()?;
         store1.temp_pin(&tmp1, block.cid())?;
@@ -514,9 +583,9 @@ mod tests {
     #[ignore] // test is too unreliable for ci
     async fn test_exchange_kad() -> Result<()> {
         tracing_try_init();
-        let store = create_store(false).await?;
-        let store1 = create_store(false).await?;
-        let store2 = create_store(false).await?;
+        let (store, _tmp) = create_store(false).await?;
+        let (store1, _tmp) = create_store(false).await?;
+        let (store2, _tmp) = create_store(false).await?;
 
         let addr = store.listeners()[0].clone();
         let peer_id = store.local_peer_id();
@@ -549,7 +618,7 @@ mod tests {
     #[async_std::test]
     async fn test_provider_not_found() -> Result<()> {
         tracing_try_init();
-        let store1 = create_store(true).await?;
+        let (store1, _tmp) = create_store(true).await?;
         let block = create_block(b"test_provider_not_found")?;
         if store1
             .fetch(block.cid(), vec![store1.local_peer_id()])
@@ -594,8 +663,8 @@ mod tests {
     #[async_std::test]
     async fn test_sync() -> Result<()> {
         tracing_try_init();
-        let local1 = create_store(false).await?;
-        let local2 = create_store(false).await?;
+        let (local1, _tmp) = create_store(false).await?;
+        let (local2, _tmp) = create_store(false).await?;
         local1.add_address(&local2.local_peer_id(), local2.listeners()[0].clone());
         local2.add_address(&local1.local_peer_id(), local1.listeners()[0].clone());
 
@@ -666,20 +735,29 @@ mod tests {
         let stores = [create_store(false).await?, create_store(false).await?];
         async_std::task::sleep(Duration::from_millis(100)).await;
         stores[0]
-            .bootstrap(&[(stores[1].local_peer_id(), stores[1].listeners()[0].clone())])
+            .0
+            .bootstrap(&[(
+                stores[1].0.local_peer_id(),
+                stores[1].0.listeners()[0].clone(),
+            )])
             .await?;
         stores[1]
-            .bootstrap(&[(stores[0].local_peer_id(), stores[0].listeners()[0].clone())])
+            .0
+            .bootstrap(&[(
+                stores[0].0.local_peer_id(),
+                stores[0].0.listeners()[0].clone(),
+            )])
             .await?;
         let key: Key = b"key".to_vec().into();
 
         stores[0]
+            .0
             .put_record(
                 Record::new(key.clone(), b"hello world".to_vec()),
                 Quorum::One,
             )
             .await?;
-        let records = stores[1].get_record(&key, Quorum::One).await?;
+        let records = stores[1].0.get_record(&key, Quorum::One).await?;
         assert_eq!(records.len(), 1);
         Ok(())
     }
@@ -698,8 +776,8 @@ mod tests {
         ];
         let mut subscriptions = vec![];
         let topic = "topic";
-        for store in &stores {
-            for other in &stores {
+        for (store, _) in &stores {
+            for (other, _) in &stores {
                 if store.local_peer_id() != other.local_peer_id() {
                     store.dial_address(&other.local_peer_id(), other.listeners()[0].clone());
                 }
@@ -709,7 +787,10 @@ mod tests {
 
         async_std::task::sleep(Duration::from_millis(500)).await;
 
-        stores[0].publish(&topic, b"hello gossip".to_vec()).unwrap();
+        stores[0]
+            .0
+            .publish(&topic, b"hello gossip".to_vec())
+            .unwrap();
 
         for subscription in &mut subscriptions[1..] {
             let msg = subscription.next().await.unwrap();
@@ -717,6 +798,7 @@ mod tests {
         }
 
         stores[0]
+            .0
             .broadcast(&topic, b"hello broadcast".to_vec())
             .unwrap();
 
@@ -731,7 +813,8 @@ mod tests {
     #[async_std::test]
     async fn test_batch_read() -> Result<()> {
         tracing_try_init();
-        let network = NetworkConfig::default();
+        let tmp = TempDir::new("ipfs-embed")?;
+        let network = NetworkConfig::new(tmp.path().into(), generate_keypair());
         let storage = StorageConfig::new(None, 1000000, Duration::from_secs(3600));
         let ipfs = Ipfs::<DefaultParams>::new(Config { storage, network }).await?;
         let a = create_block(b"a")?;
@@ -747,7 +830,8 @@ mod tests {
     #[async_std::test]
     async fn test_batch_write() -> Result<()> {
         tracing_try_init();
-        let network = NetworkConfig::default();
+        let tmp = TempDir::new("ipfs-embed")?;
+        let network = NetworkConfig::new(tmp.path().into(), generate_keypair());
         let storage = StorageConfig::new(None, 1000000, Duration::from_secs(3600));
         let ipfs = Ipfs::<DefaultParams>::new(Config { storage, network }).await?;
         let a = create_block(b"a")?;
@@ -774,8 +858,8 @@ mod tests {
     async fn test_bitswap_sync_chain() -> Result<()> {
         use std::time::Instant;
         tracing_try_init();
-        let a = create_store(true).await?;
-        let b = create_store(true).await?;
+        let (a, _tmp) = create_store(true).await?;
+        let (b, _tmp) = create_store(true).await?;
         let root = alias!(root);
 
         let (cid, blocks) = test_util::build_tree(1, 1000)?;
@@ -814,8 +898,8 @@ mod tests {
     async fn test_bitswap_sync_tree() -> Result<()> {
         use std::time::Instant;
         tracing_try_init();
-        let a = create_store(true).await?;
-        let b = create_store(true).await?;
+        let (a, _tmp) = create_store(true).await?;
+        let (b, _tmp) = create_store(true).await?;
         let root = alias!(root);
 
         let (cid, blocks) = test_util::build_tree(10, 4)?;

@@ -9,7 +9,7 @@ async fn main() -> anyhow::Result<()> {
     println!("executor threads: {}", threads()?);
     println!("{}", comms()?.join(""));
 
-    let config = Config::new(None, 1024 * 1024);
+    let config = Config::default();
     let ipfs = Ipfs::<DefaultParams>::new(config).await?;
     async_std::task::sleep(Duration::from_millis(10)).await;
     println!("ipfs-embed threads: {}", threads()?);
@@ -20,7 +20,7 @@ async fn main() -> anyhow::Result<()> {
     println!("after ipfs-embed drop threads: {}", threads()?);
     println!("{}", comms()?.join(""));
 
-    let config = Config::new(None, 1024 * 1024);
+    let config = Config::default();
     let ipfs = Ipfs::<DefaultParams>::new(config).await?;
     async_std::task::sleep(Duration::from_millis(10)).await;
     println!("threads after 2nd ipfs: {}", threads()?);
@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
     async_std::task::sleep(Duration::from_millis(10)).await;
     println!("{}", comms()?.join(""));
 
-    let config = Config::new(None, 1024 * 1024);
+    let config = Config::default();
     let ipfs = Ipfs::<DefaultParams>::new(config).await?;
     async_std::task::sleep(Duration::from_millis(10)).await;
     println!("threads after 3nd ipfs: {}", threads()?);
@@ -43,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
     println!("{}", comms()?.join(""));
 
     for _ in 0..128 {
-        let config = Config::new(None, 1024 * 1024);
+        let config = Config::default();
         let ipfs = Ipfs::<DefaultParams>::new(config).await?;
         drop(ipfs);
     }

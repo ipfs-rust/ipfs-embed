@@ -81,6 +81,8 @@ async fn run() -> Result<()> {
                 ipfs_embed::Event::Unsubscribed(peer_id, topic) => {
                     Some(Event::Unsubscribed(peer_id, topic))
                 }
+                ipfs_embed::Event::Bootstrapped => Some(Event::Bootstrapped),
+                ipfs_embed::Event::NewHead(head) => Some(Event::NewHead(*head.id(), head.len())),
             };
             if let Some(event) = event {
                 println!("{}", event);

@@ -98,6 +98,8 @@ where
             .with_size_targets(size)
             .with_pragma_synchronous(Synchronous::Normal);
         let store = if let Some(path) = config.path {
+            std::fs::create_dir_all(&path)?;
+            let path = path.join("db");
             let tracker = SqliteCacheTracker::open(&path, |access, _| Some(access))?;
             BlockStore::open(path, store_config.with_cache_tracker(tracker))?
         } else {

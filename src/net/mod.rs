@@ -41,14 +41,17 @@ mod peers;
 
 pub use crate::net::behaviour::{QueryId, SyncEvent};
 pub use crate::net::config::*;
-pub use crate::net::peers::{AddressSource, Event, PeerInfo};
+pub use crate::net::peers::{AddressSource, Event, PeerInfo, SwarmEvents};
 pub use libp2p::core::connection::ListenerId;
 pub use libp2p::kad::record::{Key, Record};
 pub use libp2p::kad::{PeerRecord, Quorum};
 pub use libp2p::swarm::AddressRecord;
 pub use libp2p::{Multiaddr, PeerId, TransportError};
 pub use libp2p_bitswap::BitswapStore;
-pub use libp2p_quic::{generate_keypair, ToLibp2p};
+pub use libp2p_blake_streams::{
+    DocId, Head, LocalStreamWriter, SignedHead, StreamId, StreamReader,
+};
+pub use libp2p_quic::{generate_keypair, PublicKey, SecretKey, ToLibp2p};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ListenerEvent {
@@ -167,6 +170,11 @@ impl<P: StoreParams> NetworkService<P> {
         })
     }
 
+    pub fn local_public_key(&self) -> PublicKey {
+        let swarm = self.swarm.lock();
+        *swarm.behaviour().local_public_key()
+    }
+
     pub fn local_peer_id(&self) -> PeerId {
         let swarm = self.swarm.lock();
         *swarm.local_peer_id()
@@ -179,7 +187,7 @@ impl<P: StoreParams> NetworkService<P> {
 
     pub fn listen_on(&self, addr: Multiaddr) -> Result<impl Stream<Item = ListenerEvent>> {
         let mut swarm = self.swarm.lock();
-        let stream = swarm.behaviour_mut().event_stream();
+        let stream = swarm.behaviour_mut().swarm_events();
         let listener = swarm.listen_on(addr)?;
         self.waker.wake();
         Ok(stream
@@ -284,6 +292,11 @@ impl<P: StoreParams> NetworkService<P> {
         rx.await??;
         tracing::trace!("boostrap complete");
         Ok(())
+    }
+
+    pub fn is_bootstrapped(&self) -> bool {
+        let swarm = self.swarm.lock();
+        swarm.behaviour().is_bootstrapped()
     }
 
     pub async fn get_closest_peers<K>(&self, key: K) -> Result<Vec<PeerId>>
@@ -398,9 +411,59 @@ impl<P: StoreParams> NetworkService<P> {
         swarm.behaviour().register_metrics(registry)
     }
 
-    pub fn event_stream(&self) -> impl Stream<Item = Event> {
+    pub fn swarm_events(&self) -> SwarmEvents {
         let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().event_stream()
+        swarm.behaviour_mut().swarm_events()
+    }
+
+    pub fn docs(&self) -> Result<Vec<DocId>> {
+        let mut swarm = self.swarm.lock();
+        swarm.behaviour_mut().streams().docs()
+    }
+
+    pub fn streams(&self) -> Result<Vec<StreamId>> {
+        let mut swarm = self.swarm.lock();
+        swarm.behaviour_mut().streams().streams()
+    }
+
+    pub fn substreams(&self, doc: DocId) -> Result<Vec<StreamId>> {
+        let mut swarm = self.swarm.lock();
+        swarm.behaviour_mut().streams().substreams(doc)
+    }
+
+    pub fn stream_add_peers(&self, doc: DocId, peers: impl Iterator<Item = PeerId>) {
+        let mut swarm = self.swarm.lock();
+        swarm.behaviour_mut().streams().add_peers(doc, peers)
+    }
+
+    pub fn stream_head(&self, id: &StreamId) -> Result<Option<Head>> {
+        let mut swarm = self.swarm.lock();
+        swarm.behaviour_mut().streams().head(id)
+    }
+
+    pub fn stream_slice(&self, id: &StreamId, start: u64, len: u64) -> Result<StreamReader> {
+        let mut swarm = self.swarm.lock();
+        swarm.behaviour_mut().streams().slice(id, start, len)
+    }
+
+    pub fn stream_remove(&self, id: &StreamId) -> Result<()> {
+        let mut swarm = self.swarm.lock();
+        swarm.behaviour_mut().streams().remove(id)
+    }
+
+    pub fn stream_append(&self, id: DocId) -> Result<LocalStreamWriter> {
+        let mut swarm = self.swarm.lock();
+        swarm.behaviour_mut().streams().append(id)
+    }
+
+    pub fn stream_subscribe(&self, id: &StreamId) -> Result<()> {
+        let mut swarm = self.swarm.lock();
+        swarm.behaviour_mut().streams().subscribe(id)
+    }
+
+    pub fn stream_update_head(&self, head: SignedHead) {
+        let mut swarm = self.swarm.lock();
+        swarm.behaviour_mut().streams().update_head(head)
     }
 }
 

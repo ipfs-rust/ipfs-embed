@@ -1,5 +1,5 @@
 use crate::net::config::NetworkConfig;
-use crate::net::peers::{AddressBook, AddressSource, Event, PeerInfo};
+use crate::net::peers::{AddressBook, AddressSource, Event, PeerInfo, SwarmEvents};
 use fnv::FnvHashMap;
 use futures::channel::{mpsc, oneshot};
 use futures::stream::Stream;
@@ -23,8 +23,9 @@ use libp2p::swarm::NetworkBehaviourEventProcess;
 use libp2p::NetworkBehaviour;
 use libp2p::{Multiaddr, PeerId};
 use libp2p_bitswap::{Bitswap, BitswapEvent, BitswapStore};
+use libp2p_blake_streams::{StreamSync, StreamSyncEvent};
 use libp2p_broadcast::{Broadcast, BroadcastEvent, Topic};
-use libp2p_quic::ToLibp2p;
+use libp2p_quic::{PublicKey, ToLibp2p};
 use prometheus::Registry;
 use std::collections::HashSet;
 use thiserror::Error;
@@ -91,6 +92,7 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     bitswap: Toggle<Bitswap<P>>,
     gossipsub: Toggle<Gossipsub>,
     broadcast: Toggle<Broadcast>,
+    streams: Toggle<StreamSync>,
 
     #[behaviour(ignore)]
     bootstrap_complete: bool,
@@ -163,6 +165,7 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBack
                         if let Some(QueryChannel::Bootstrap(ch)) = self.queries.remove(&id.into()) {
                             ch.send(Ok(())).ok();
                         }
+                        self.peers.notify(Event::Bootstrapped);
                     }
                 }
                 QueryResult::Bootstrap(Err(err)) => {
@@ -378,6 +381,16 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<BroadcastEvent> for NetworkBac
     }
 }
 
+impl<P: StoreParams> NetworkBehaviourEventProcess<StreamSyncEvent> for NetworkBackendBehaviour<P> {
+    fn inject_event(&mut self, event: StreamSyncEvent) {
+        match event {
+            StreamSyncEvent::NewHead(head) => {
+                self.peers.notify(Event::NewHead(head));
+            }
+        }
+    }
+}
+
 impl<P: StoreParams> NetworkBehaviourEventProcess<void::Void> for NetworkBackendBehaviour<P> {
     fn inject_event(&mut self, _event: void::Void) {}
 }
@@ -388,6 +401,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         config: &mut NetworkConfig,
         store: S,
     ) -> Result<Self> {
+        let public = config.node_key.public;
         let node_key = config.node_key.to_keypair();
         let node_name = config.node_name.clone();
         let peer_id = node_key.public().into_peer_id();
@@ -422,9 +436,14 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             .bitswap
             .take()
             .map(|config| Bitswap::new(config, store));
+        let streams = if let Some(config) = config.streams.take() {
+            Some(StreamSync::new(config)?)
+        } else {
+            None
+        };
         Ok(Self {
             bootstrap_complete: false,
-            peers: AddressBook::new(peer_id, node_name),
+            peers: AddressBook::new(peer_id, node_name, public),
             mdns: mdns.into(),
             kad: kad.into(),
             ping: ping.into(),
@@ -432,9 +451,14 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             bitswap: bitswap.into(),
             gossipsub: gossipsub.into(),
             broadcast: broadcast.into(),
+            streams: streams.into(),
             queries: Default::default(),
             subscriptions: Default::default(),
         })
+    }
+
+    pub fn local_public_key(&self) -> &PublicKey {
+        self.peers.local_public_key()
     }
 
     pub fn local_node_name(&self) -> &str {
@@ -490,6 +514,10 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             tx.send(Err(NotBootstrapped.into())).ok();
         }
         rx
+    }
+
+    pub fn is_bootstrapped(&self) -> bool {
+        self.bootstrap_complete
     }
 
     pub fn get_closest_peers<K>(&mut self, key: K) -> GetClosestPeersChannel
@@ -692,7 +720,11 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         Ok(())
     }
 
-    pub fn event_stream(&mut self) -> impl Stream<Item = Event> {
-        self.peers.event_stream()
+    pub fn swarm_events(&mut self) -> SwarmEvents {
+        self.peers.swarm_events()
+    }
+
+    pub fn streams(&mut self) -> &mut StreamSync {
+        self.streams.as_mut().expect("streams enabled")
     }
 }
