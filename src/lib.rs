@@ -22,6 +22,7 @@ use crate::net::{BitswapStore, NetworkService};
 #[cfg(feature = "telemetry")]
 pub use crate::telemetry::telemetry;
 use async_trait::async_trait;
+pub use db::Batch;
 use executor::Executor;
 use futures::stream::Stream;
 use libipld::codec::References;
@@ -351,6 +352,22 @@ where
     /// all writes have been persisted to disk.
     pub async fn flush(&self) -> Result<()> {
         self.storage.flush().await
+    }
+
+    /// Perform a set of storage operations in a batch, and discards the result.
+    ///
+    /// You should keep a batch open for as short as possible.
+    /// You *must not* create a batch inside a batch, or use the outer ipfs.
+    pub fn read_batch<F: FnOnce(&mut Batch<'_, P>) -> Result<R>, R>(&self, f: F) -> Result<R> {
+        self.storage.ro("read_batch", f)
+    }
+
+    /// Perform a set of storage operations in a batch, and stores the result.
+    ///
+    /// You should keep a batch open for as short as possible.
+    /// You *must not* create a batch inside a batch, or use the outer ipfs.
+    pub fn write_batch<R>(&self, f: impl FnOnce(&mut Batch<'_, P>) -> Result<R>) -> Result<R> {
+        self.storage.rw("write_batch", f)
     }
 
     /// Registers prometheus metrics in a registry.
@@ -708,6 +725,47 @@ mod tests {
             assert_eq!(msg.as_slice(), &b"hello broadcast"[..]);
         }
 
+        Ok(())
+    }
+
+    #[async_std::test]
+    async fn test_batch_read() -> Result<()> {
+        tracing_try_init();
+        let network = NetworkConfig::default();
+        let storage = StorageConfig::new(None, 1000000, Duration::from_secs(3600));
+        let ipfs = Ipfs::<DefaultParams>::new(Config { storage, network }).await?;
+        let a = create_block(b"a")?;
+        let b = create_block(b"b")?;
+        ipfs.insert(&a)?;
+        ipfs.insert(&b)?;
+        let has_blocks =
+            ipfs.read_batch(|db| Ok(db.contains(a.cid())? && db.contains(b.cid())?))?;
+        assert!(has_blocks);
+        Ok(())
+    }
+
+    #[async_std::test]
+    async fn test_batch_write() -> Result<()> {
+        tracing_try_init();
+        let network = NetworkConfig::default();
+        let storage = StorageConfig::new(None, 1000000, Duration::from_secs(3600));
+        let ipfs = Ipfs::<DefaultParams>::new(Config { storage, network }).await?;
+        let a = create_block(b"a")?;
+        let b = create_block(b"b")?;
+        let c = create_block(b"c")?;
+        let d = create_block(b"d")?;
+        ipfs.write_batch(|db| {
+            db.insert(&a)?;
+            db.insert(&b)?;
+            Ok(())
+        })?;
+        assert!(ipfs.contains(a.cid())? && ipfs.contains(b.cid())?);
+        let _: anyhow::Result<()> = ipfs.write_batch(|db| {
+            db.insert(&c)?;
+            db.insert(&d)?;
+            anyhow::bail!("nope!");
+        });
+        assert!(!ipfs.contains(c.cid())? && ipfs.contains(b.cid())?);
         Ok(())
     }
 
