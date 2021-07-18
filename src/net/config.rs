@@ -93,6 +93,8 @@ impl NetworkConfig {
 
 impl Default for NetworkConfig {
     fn default() -> Self {
-        Self::new(Default::default(), generate_keypair())
+        let mut config = Self::new(Default::default(), generate_keypair());
+        config.streams = None;
+        config
     }
 }
