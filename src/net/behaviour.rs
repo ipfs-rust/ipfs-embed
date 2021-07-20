@@ -28,6 +28,7 @@ use libp2p_broadcast::{Broadcast, BroadcastEvent, Topic};
 use libp2p_quic::{PublicKey, ToLibp2p};
 use prometheus::Registry;
 use std::collections::HashSet;
+use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -83,7 +84,7 @@ enum QueryChannel {
 #[derive(Clone, Debug, PartialEq)]
 pub enum GossipEvent {
     Subscribed(PeerId),
-    Message(PeerId, Vec<u8>),
+    Message(PeerId, Arc<[u8]>),
     Unsubscribed(PeerId),
 }
 /// Behaviour type.
@@ -345,7 +346,7 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<GossipsubEvent> for NetworkBac
             } => {
                 self.notify_subscribers(
                     &*topic.to_string(),
-                    GossipEvent::Message(source.unwrap_or(propagation_source), data),
+                    GossipEvent::Message(source.unwrap_or(propagation_source), data.into()),
                 );
             }
             GossipsubEvent::Subscribed { peer_id, topic, .. } => {
@@ -368,7 +369,7 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<BroadcastEvent> for NetworkBac
         match event {
             BroadcastEvent::Received(peer_id, topic, data) => {
                 let topic = std::str::from_utf8(&topic).unwrap();
-                self.notify_subscribers(topic, GossipEvent::Message(peer_id, data.to_vec()));
+                self.notify_subscribers(topic, GossipEvent::Message(peer_id, data));
             }
             BroadcastEvent::Subscribed(peer_id, topic) => {
                 if let Ok(topic) = std::str::from_utf8(&topic) {
