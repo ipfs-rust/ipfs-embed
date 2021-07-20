@@ -355,7 +355,7 @@ impl<P: StoreParams> NetworkService<P> {
         self.waker.wake();
     }
 
-    pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = Vec<u8>>> {
+    pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = (PeerId, Vec<u8>)>> {
         let mut swarm = self.swarm.lock();
         let stream = swarm.behaviour_mut().subscribe(topic)?;
         self.waker.wake();

@@ -99,7 +99,7 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     #[behaviour(ignore)]
     queries: FnvHashMap<QueryId, QueryChannel>,
     #[behaviour(ignore)]
-    subscriptions: FnvHashMap<String, Vec<mpsc::UnboundedSender<Vec<u8>>>>,
+    subscriptions: FnvHashMap<String, Vec<mpsc::UnboundedSender<(PeerId, Vec<u8>)>>>,
 }
 
 impl<P: StoreParams> NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendBehaviour<P> {
@@ -328,12 +328,22 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<GossipsubEvent> for NetworkBac
     fn inject_event(&mut self, event: GossipsubEvent) {
         match event {
             GossipsubEvent::Message {
-                message: GossipsubMessage { data, topic, .. },
+                message:
+                    GossipsubMessage {
+                        data,
+                        topic,
+                        source,
+                        ..
+                    },
+                propagation_source,
                 ..
             } => {
                 if let Some(subscribers) = self.subscriptions.get_mut(topic.as_str()) {
-                    subscribers
-                        .retain(|subscriber| subscriber.unbounded_send(data.clone()).is_ok());
+                    subscribers.retain(|subscriber| {
+                        subscriber
+                            .unbounded_send((source.unwrap_or(propagation_source), data.clone()))
+                            .is_ok()
+                    });
                     if subscribers.is_empty() {
                         self.unsubscribe(topic.as_str());
                         self.subscriptions.remove(topic.as_str());
@@ -355,11 +365,12 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<GossipsubEvent> for NetworkBac
 impl<P: StoreParams> NetworkBehaviourEventProcess<BroadcastEvent> for NetworkBackendBehaviour<P> {
     fn inject_event(&mut self, event: BroadcastEvent) {
         match event {
-            BroadcastEvent::Received(_peer_id, topic, data) => {
+            BroadcastEvent::Received(peer_id, topic, data) => {
                 let topic = std::str::from_utf8(&topic).unwrap();
                 if let Some(subscribers) = self.subscriptions.get_mut(topic) {
-                    subscribers
-                        .retain(|subscriber| subscriber.unbounded_send(data.to_vec()).is_ok());
+                    subscribers.retain(|subscriber| {
+                        subscriber.unbounded_send((peer_id, data.to_vec())).is_ok()
+                    });
                     if subscribers.is_empty() {
                         self.unsubscribe(topic);
                         self.subscriptions.remove(topic);
@@ -615,7 +626,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         }
     }
 
-    pub fn subscribe(&mut self, topic: &str) -> Result<impl Stream<Item = Vec<u8>>> {
+    pub fn subscribe(&mut self, topic: &str) -> Result<impl Stream<Item = (PeerId, Vec<u8>)>> {
         if self.gossipsub.as_ref().is_none() && self.broadcast.as_ref().is_none() {
             return Err(DisabledProtocol.into());
         }

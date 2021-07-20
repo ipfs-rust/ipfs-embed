@@ -269,7 +269,7 @@ where
 
     /// Subscribes to a `topic` returning a `Stream` of messages. If all `Stream`s for
     /// a topic are dropped it unsubscribes from the `topic`.
-    pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = Vec<u8>>> {
+    pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = (PeerId, Vec<u8>)>> {
         self.network.subscribe(topic)
     }
 
@@ -793,7 +793,8 @@ mod tests {
             .unwrap();
 
         for subscription in &mut subscriptions[1..] {
-            let msg = subscription.next().await.unwrap();
+            let (peer, msg) = subscription.next().await.unwrap();
+            assert_eq!(peer, stores[0].0.local_peer_id());
             assert_eq!(msg.as_slice(), &b"hello gossip"[..]);
         }
 
@@ -803,7 +804,8 @@ mod tests {
             .unwrap();
 
         for subscription in &mut subscriptions[1..] {
-            let msg = subscription.next().await.unwrap();
+            let (peer, msg) = subscription.next().await.unwrap();
+            assert_eq!(peer, stores[0].0.local_peer_id());
             assert_eq!(msg.as_slice(), &b"hello broadcast"[..]);
         }
 
