@@ -816,7 +816,7 @@ mod tests {
                     // store 0 is the sender
                     Box::new(std::iter::once(GossipEvent::Message(
                         stores[0].0.local_peer_id(),
-                        b"hello gossip".to_vec(),
+                        b"hello gossip".to_vec().into(),
                     ))) as Box<dyn Iterator<Item = GossipEvent>>
                 } else {
                     Box::new(std::iter::empty())
@@ -844,7 +844,7 @@ mod tests {
         for subscription in &mut subscriptions[1..] {
             if let GossipEvent::Message(p, data) = subscription.next().await.unwrap() {
                 assert_eq!(p, stores[0].0.local_peer_id());
-                assert_eq!(data.as_slice(), &b"hello broadcast"[..]);
+                assert_eq!(data[..], b"hello broadcast"[..]);
             } else {
                 panic!()
             }
