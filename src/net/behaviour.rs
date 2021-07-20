@@ -80,7 +80,12 @@ enum QueryChannel {
     GetRecord(oneshot::Sender<Result<Vec<PeerRecord>>>),
     PutRecord(oneshot::Sender<Result<()>>),
 }
-
+#[derive(Clone, Debug, PartialEq)]
+pub enum GossipEvent {
+    Subscribed(PeerId),
+    Message(PeerId, Vec<u8>),
+    Unsubscribed(PeerId),
+}
 /// Behaviour type.
 #[derive(NetworkBehaviour)]
 pub struct NetworkBackendBehaviour<P: StoreParams> {
@@ -99,7 +104,7 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     #[behaviour(ignore)]
     queries: FnvHashMap<QueryId, QueryChannel>,
     #[behaviour(ignore)]
-    subscriptions: FnvHashMap<String, Vec<mpsc::UnboundedSender<(PeerId, Vec<u8>)>>>,
+    subscriptions: FnvHashMap<String, Vec<mpsc::UnboundedSender<GossipEvent>>>,
 }
 
 impl<P: StoreParams> NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendBehaviour<P> {
@@ -338,25 +343,21 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<GossipsubEvent> for NetworkBac
                 propagation_source,
                 ..
             } => {
-                if let Some(subscribers) = self.subscriptions.get_mut(topic.as_str()) {
-                    subscribers.retain(|subscriber| {
-                        subscriber
-                            .unbounded_send((source.unwrap_or(propagation_source), data.clone()))
-                            .is_ok()
-                    });
-                    if subscribers.is_empty() {
-                        self.unsubscribe(topic.as_str());
-                        self.subscriptions.remove(topic.as_str());
-                    }
-                }
+                self.notify_subscribers(
+                    &*topic.to_string(),
+                    GossipEvent::Message(source.unwrap_or(propagation_source), data),
+                );
             }
             GossipsubEvent::Subscribed { peer_id, topic, .. } => {
                 self.peers
                     .notify(Event::Subscribed(peer_id, topic.to_string()));
+
+                self.notify_subscribers(&*topic.to_string(), GossipEvent::Subscribed(peer_id));
             }
             GossipsubEvent::Unsubscribed { peer_id, topic, .. } => {
                 self.peers
                     .notify(Event::Unsubscribed(peer_id, topic.to_string()));
+                self.notify_subscribers(&*topic.to_string(), GossipEvent::Unsubscribed(peer_id));
             }
         }
     }
@@ -367,25 +368,19 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<BroadcastEvent> for NetworkBac
         match event {
             BroadcastEvent::Received(peer_id, topic, data) => {
                 let topic = std::str::from_utf8(&topic).unwrap();
-                if let Some(subscribers) = self.subscriptions.get_mut(topic) {
-                    subscribers.retain(|subscriber| {
-                        subscriber.unbounded_send((peer_id, data.to_vec())).is_ok()
-                    });
-                    if subscribers.is_empty() {
-                        self.unsubscribe(topic);
-                        self.subscriptions.remove(topic);
-                    }
-                }
+                self.notify_subscribers(topic, GossipEvent::Message(peer_id, data.to_vec()));
             }
             BroadcastEvent::Subscribed(peer_id, topic) => {
                 if let Ok(topic) = std::str::from_utf8(&topic) {
                     self.peers.notify(Event::Subscribed(peer_id, topic.into()));
+                    self.notify_subscribers(topic, GossipEvent::Subscribed(peer_id));
                 }
             }
             BroadcastEvent::Unsubscribed(peer_id, topic) => {
                 if let Ok(topic) = std::str::from_utf8(&topic) {
                     self.peers
                         .notify(Event::Unsubscribed(peer_id, topic.into()));
+                    self.notify_subscribers(topic, GossipEvent::Unsubscribed(peer_id));
                 }
             }
         }
@@ -626,7 +621,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         }
     }
 
-    pub fn subscribe(&mut self, topic: &str) -> Result<impl Stream<Item = (PeerId, Vec<u8>)>> {
+    pub fn subscribe(&mut self, topic: &str) -> Result<impl Stream<Item = GossipEvent>> {
         if self.gossipsub.as_ref().is_none() && self.broadcast.as_ref().is_none() {
             return Err(DisabledProtocol.into());
         }
@@ -660,6 +655,16 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         }
         if let Some(broadcast) = self.broadcast.as_mut() {
             broadcast.unsubscribe(&broadcast_topic);
+        }
+    }
+
+    fn notify_subscribers(&mut self, topic: &str, event: GossipEvent) {
+        if let Some(subscribers) = self.subscriptions.get_mut(topic) {
+            subscribers.retain(|subscriber| subscriber.unbounded_send(event.clone()).is_ok());
+            if subscribers.is_empty() {
+                self.unsubscribe(topic);
+                self.subscriptions.remove(topic);
+            }
         }
     }
 
