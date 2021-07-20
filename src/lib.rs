@@ -13,9 +13,9 @@ use crate::db::StorageService;
 pub use crate::db::{StorageConfig, TempPin};
 pub use crate::net::{
     generate_keypair, AddressRecord, AddressSource, BitswapConfig, BroadcastConfig, DnsConfig,
-    DocId, Event, GossipsubConfig, Head, IdentifyConfig, KadConfig, Key, Keypair, ListenerEvent,
-    ListenerId, LocalStreamWriter, MdnsConfig, Multiaddr, NetworkConfig, PeerId, PeerInfo,
-    PeerRecord, PingConfig, PublicKey, Quorum, Record, SecretKey, SignedHead, StreamId,
+    DocId, Event, GossipEvent, GossipsubConfig, Head, IdentifyConfig, KadConfig, Key, Keypair,
+    ListenerEvent, ListenerId, LocalStreamWriter, MdnsConfig, Multiaddr, NetworkConfig, PeerId,
+    PeerInfo, PeerRecord, PingConfig, PublicKey, Quorum, Record, SecretKey, SignedHead, StreamId,
     StreamReader, SwarmEvents, SyncEvent, SyncQuery, ToLibp2p, TransportConfig,
 };
 use crate::net::{BitswapStore, NetworkService};
@@ -269,7 +269,7 @@ where
 
     /// Subscribes to a `topic` returning a `Stream` of messages. If all `Stream`s for
     /// a topic are dropped it unsubscribes from the `topic`.
-    pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = Vec<u8>>> {
+    pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = GossipEvent>> {
         self.network.subscribe(topic)
     }
 
@@ -507,6 +507,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_std::future::timeout;
     use futures::join;
     use futures::stream::StreamExt;
     use libipld::cbor::DagCborCodec;
@@ -782,9 +783,13 @@ mod tests {
                     store.dial_address(&other.local_peer_id(), other.listeners()[0].clone());
                 }
             }
-            subscriptions.push(store.subscribe(topic)?);
         }
 
+        async_std::task::sleep(Duration::from_millis(500)).await;
+        // Make sure everyone is peered before subscribing
+        for (store, _) in &stores {
+            subscriptions.push(store.subscribe(topic)?);
+        }
         async_std::task::sleep(Duration::from_millis(500)).await;
 
         stores[0]
@@ -792,21 +797,86 @@ mod tests {
             .publish(&topic, b"hello gossip".to_vec())
             .unwrap();
 
-        for subscription in &mut subscriptions[1..] {
-            let msg = subscription.next().await.unwrap();
-            assert_eq!(msg.as_slice(), &b"hello gossip"[..]);
+        for (idx, subscription) in subscriptions.iter_mut().enumerate() {
+            let mut expected = stores
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| {
+                    if i == idx {
+                        None
+                    } else {
+                        Some(s.0.local_peer_id())
+                    }
+                })
+                .flat_map(|p| {
+                    // once for gossipsub, once for broadcast
+                    vec![GossipEvent::Subscribed(p), GossipEvent::Subscribed(p)].into_iter()
+                })
+                .chain(if idx != 0 {
+                    // store 0 is the sender
+                    Box::new(std::iter::once(GossipEvent::Message(
+                        stores[0].0.local_peer_id(),
+                        b"hello gossip".to_vec(),
+                    ))) as Box<dyn Iterator<Item = GossipEvent>>
+                } else {
+                    Box::new(std::iter::empty())
+                })
+                .collect::<Vec<GossipEvent>>();
+            while !expected.is_empty() {
+                let ev = timeout(Duration::from_millis(100), subscription.next())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(expected.contains(&ev));
+                if let Some(idx) = expected.iter().position(|e| e == &ev) {
+                    // Can't retain, as there might be multiple messages
+                    expected.remove(idx);
+                }
+            }
         }
 
+        // Check broadcast subscription
         stores[0]
             .0
             .broadcast(&topic, b"hello broadcast".to_vec())
             .unwrap();
 
         for subscription in &mut subscriptions[1..] {
-            let msg = subscription.next().await.unwrap();
-            assert_eq!(msg.as_slice(), &b"hello broadcast"[..]);
+            if let GossipEvent::Message(p, data) = subscription.next().await.unwrap() {
+                assert_eq!(p, stores[0].0.local_peer_id());
+                assert_eq!(data.as_slice(), &b"hello broadcast"[..]);
+            } else {
+                panic!()
+            }
         }
 
+        // trigger cleanup
+        stores[0]
+            .0
+            .broadcast(&topic, b"r u still listening?".to_vec())
+            .unwrap();
+
+        let mut last_sub = subscriptions.drain(..1).next().unwrap();
+        drop(subscriptions);
+        let mut expected = stores[1..]
+            .iter()
+            .map(|s| s.0.local_peer_id())
+            .flat_map(|p| {
+                // once for gossipsub, once for broadcast
+                vec![GossipEvent::Unsubscribed(p), GossipEvent::Unsubscribed(p)].into_iter()
+            })
+            .collect::<Vec<_>>();
+        while !expected.is_empty() {
+            let ev = timeout(Duration::from_millis(100), last_sub.next())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(expected.contains(&ev));
+            if let Some(idx) = expected.iter().position(|e| e == &ev) {
+                // Can't retain, as there might be multiple messages
+                expected.remove(idx);
+            }
+        }
         Ok(())
     }
 

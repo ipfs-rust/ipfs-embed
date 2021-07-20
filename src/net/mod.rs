@@ -39,7 +39,7 @@ mod config;
 mod p2p_wrapper;
 mod peers;
 
-pub use crate::net::behaviour::{QueryId, SyncEvent};
+pub use crate::net::behaviour::{GossipEvent, QueryId, SyncEvent};
 pub use crate::net::config::*;
 pub use crate::net::peers::{AddressSource, Event, PeerInfo, SwarmEvents};
 pub use libp2p::core::connection::ListenerId;
@@ -355,7 +355,7 @@ impl<P: StoreParams> NetworkService<P> {
         self.waker.wake();
     }
 
-    pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = Vec<u8>>> {
+    pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = GossipEvent>> {
         let mut swarm = self.swarm.lock();
         let stream = swarm.behaviour_mut().subscribe(topic)?;
         self.waker.wake();
