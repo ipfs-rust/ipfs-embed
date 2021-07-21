@@ -16,6 +16,9 @@ use std::time::Duration;
 /// Network configuration.
 #[derive(Debug)]
 pub struct NetworkConfig {
+    /// Enable adding loopback addresses to the address book. Should be
+    /// enabled during testing and disabled in production.
+    pub enable_loopback: bool,
     /// Node name.
     pub node_name: String,
     /// Node key.
@@ -74,6 +77,7 @@ impl NetworkConfig {
         quic.send_window(4_000_000);
         let node_key2 = Keypair::from_bytes(&node_key.to_bytes()).unwrap();
         Self {
+            enable_loopback: true,
             node_name,
             node_key,
             psk: None,

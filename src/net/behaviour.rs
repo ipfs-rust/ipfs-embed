@@ -450,7 +450,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         };
         Ok(Self {
             bootstrap_complete: false,
-            peers: AddressBook::new(peer_id, node_name, public),
+            peers: AddressBook::new(peer_id, node_name, public, config.enable_loopback),
             mdns: mdns.into(),
             kad: kad.into(),
             ping: ping.into(),

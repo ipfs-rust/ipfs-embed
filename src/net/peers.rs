@@ -138,6 +138,7 @@ impl MultiaddrExt for Multiaddr {
 
 #[derive(Debug)]
 pub struct AddressBook {
+    enable_loopback: bool,
     local_node_name: String,
     local_peer_id: PeerId,
     local_public_key: PublicKey,
@@ -152,8 +153,10 @@ impl AddressBook {
         local_peer_id: PeerId,
         local_node_name: String,
         local_public_key: PublicKey,
+        enable_loopback: bool,
     ) -> Self {
         Self {
+            enable_loopback,
             local_node_name,
             local_peer_id,
             local_public_key,
@@ -192,7 +195,7 @@ impl AddressBook {
         if peer == self.local_peer_id() {
             return;
         }
-        if address.is_loopback() {
+        if self.enable_loopback && address.is_loopback() {
             return;
         }
         tracing::trace!(
@@ -444,7 +447,7 @@ mod tests {
 
     #[async_std::test]
     async fn test_dial_basic() {
-        let mut book = AddressBook::new(PeerId::random(), "".into(), generate_keypair().public);
+        let mut book = AddressBook::new(PeerId::random(), "".into(), generate_keypair().public, false);
         let mut stream = book.swarm_events();
         let peer_a = PeerId::random();
         let addr_1: Multiaddr = "/ip4/1.1.1.1/tcp/3333".parse().unwrap();
@@ -468,7 +471,7 @@ mod tests {
 
     #[async_std::test]
     async fn test_dial_with_added_addrs() {
-        let mut book = AddressBook::new(PeerId::random(), "".into(), generate_keypair().public);
+        let mut book = AddressBook::new(PeerId::random(), "".into(), generate_keypair().public, false);
         let mut stream = book.swarm_events();
         let peer_a = PeerId::random();
         let addr_1: Multiaddr = "/ip4/1.1.1.1/tcp/3333".parse().unwrap();
