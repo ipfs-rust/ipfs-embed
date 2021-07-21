@@ -195,7 +195,7 @@ impl AddressBook {
         if peer == self.local_peer_id() {
             return;
         }
-        if self.enable_loopback && address.is_loopback() {
+        if !self.enable_loopback && address.is_loopback() {
             return;
         }
         tracing::trace!(
