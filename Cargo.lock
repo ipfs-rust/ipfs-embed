@@ -1526,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "ipfs-embed"
-version = "0.22.1"
+version = "0.22.2"
 dependencies = [
  "anyhow",
  "async-global-executor",
