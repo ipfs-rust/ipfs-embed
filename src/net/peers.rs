@@ -121,6 +121,21 @@ fn normalize_addr_ref<'a>(addr: &'a Multiaddr, peer: &PeerId) -> Cow<'a, Multiad
     }
 }
 
+trait MultiaddrExt {
+    fn is_loopback(&self) -> bool;
+}
+
+impl MultiaddrExt for Multiaddr {
+    fn is_loopback(&self) -> bool {
+        if let Some(Protocol::Ip4(addr)) = self.iter().next() {
+            if !addr.is_loopback() {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 #[derive(Debug)]
 pub struct AddressBook {
     local_node_name: String,
@@ -175,6 +190,9 @@ impl AddressBook {
 
     pub fn add_address(&mut self, peer: &PeerId, mut address: Multiaddr, source: AddressSource) {
         if peer == self.local_peer_id() {
+            return;
+        }
+        if address.is_loopback() {
             return;
         }
         tracing::trace!(
