@@ -92,9 +92,13 @@ jobs:
       if: contains(matrix.platform.target, 'linux-gnu')
       run: cargo build -p ipfs-embed-cli -p ipfs-embed-harness --release
 
-    - name: Run netsim integration tests
+    - name: Run bitswap integration test
       if: contains(matrix.platform.target, 'linux-gnu')
       run: ./target/release/bitswap
+
+    - name: Run sim-open integration test
+      if: contains(matrix.platform.target, 'linux-gnu')
+      run: ./target/release/sim_open
 
   lint-rust:
     runs-on: ubuntu-latest

@@ -64,3 +64,6 @@ tracing-subscriber = "0.2.19"
 
 [profile.release]
 debug = true
+
+[patch.crates-io]
+libp2p = { git = "https://github.com/dvc94ch/rust-libp2p", branch = "sim-open-2" }
