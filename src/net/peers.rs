@@ -447,7 +447,12 @@ mod tests {
 
     #[async_std::test]
     async fn test_dial_basic() {
-        let mut book = AddressBook::new(PeerId::random(), "".into(), generate_keypair().public, false);
+        let mut book = AddressBook::new(
+            PeerId::random(),
+            "".into(),
+            generate_keypair().public,
+            false,
+        );
         let mut stream = book.swarm_events();
         let peer_a = PeerId::random();
         let addr_1: Multiaddr = "/ip4/1.1.1.1/tcp/3333".parse().unwrap();
@@ -471,7 +476,12 @@ mod tests {
 
     #[async_std::test]
     async fn test_dial_with_added_addrs() {
-        let mut book = AddressBook::new(PeerId::random(), "".into(), generate_keypair().public, false);
+        let mut book = AddressBook::new(
+            PeerId::random(),
+            "".into(),
+            generate_keypair().public,
+            false,
+        );
         let mut stream = book.swarm_events();
         let peer_a = PeerId::random();
         let addr_1: Multiaddr = "/ip4/1.1.1.1/tcp/3333".parse().unwrap();
