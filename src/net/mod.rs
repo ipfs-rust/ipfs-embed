@@ -436,7 +436,7 @@ impl<P: StoreParams> NetworkService<P> {
         swarm.behaviour_mut().streams().add_peers(doc, peers)
     }
 
-    pub fn stream_head(&self, id: &StreamId) -> Result<Option<Head>> {
+    pub fn stream_head(&self, id: &StreamId) -> Result<Option<SignedHead>> {
         let mut swarm = self.swarm.lock();
         swarm.behaviour_mut().streams().head(id)
     }

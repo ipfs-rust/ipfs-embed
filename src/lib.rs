@@ -420,7 +420,7 @@ where
     }
 
     /// Returns the current head of a stream.
-    pub fn stream_head(&self, id: &StreamId) -> Result<Option<Head>> {
+    pub fn stream_head(&self, id: &StreamId) -> Result<Option<SignedHead>> {
         self.network.stream_head(id)
     }
 
