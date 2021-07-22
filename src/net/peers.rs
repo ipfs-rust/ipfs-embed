@@ -198,15 +198,10 @@ impl AddressBook {
         if !self.enable_loopback && address.is_loopback() {
             return;
         }
-        tracing::trace!(
-            "adding address {} for peer {} from {:?}",
-            address,
-            peer,
-            source
-        );
         let discovered = !self.peers.contains_key(peer);
         let info = self.peers.entry(*peer).or_default();
         normalize_addr(&mut address, peer);
+        tracing::trace!("adding address {} from {:?}", address, source);
         info.addresses.insert(address, source);
         if discovered {
             self.notify(Event::Discovered(*peer));
@@ -216,7 +211,7 @@ impl AddressBook {
     pub fn remove_address(&mut self, peer: &PeerId, address: &Multiaddr) {
         let address = normalize_addr_ref(address, peer);
         if let Some(info) = self.peers.get_mut(peer) {
-            tracing::trace!("removing address {} for peer {}", address, peer);
+            tracing::trace!("removing address {}", address);
             info.addresses.remove(&address);
         }
     }
