@@ -5,6 +5,7 @@ use futures::channel::{mpsc, oneshot};
 use futures::stream::Stream;
 use libipld::store::StoreParams;
 use libipld::{Cid, Result};
+use libp2p::dcutr::behaviour::{Behaviour as Dcutr, Event as DcutrEvent};
 use libp2p::gossipsub::{
     Gossipsub, GossipsubEvent, GossipsubMessage, IdentTopic, MessageAuthenticity,
 };
@@ -18,6 +19,8 @@ use libp2p::kad::{
 };
 use libp2p::mdns::{Mdns, MdnsEvent};
 use libp2p::ping::{Ping, PingEvent, PingFailure, PingSuccess};
+use libp2p::relay::v2::client::{Client, Event as ClientEvent};
+use libp2p::relay::v2::relay::{Event as RelayEvent, Relay};
 use libp2p::swarm::toggle::Toggle;
 use libp2p::swarm::NetworkBehaviourEventProcess;
 use libp2p::NetworkBehaviour;
@@ -81,12 +84,14 @@ enum QueryChannel {
     GetRecord(oneshot::Sender<Result<Vec<PeerRecord>>>),
     PutRecord(oneshot::Sender<Result<()>>),
 }
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum GossipEvent {
     Subscribed(PeerId),
     Message(PeerId, Arc<[u8]>),
     Unsubscribed(PeerId),
 }
+
 /// Behaviour type.
 #[derive(NetworkBehaviour)]
 pub struct NetworkBackendBehaviour<P: StoreParams> {
@@ -99,6 +104,9 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     gossipsub: Toggle<Gossipsub>,
     broadcast: Toggle<Broadcast>,
     streams: Toggle<StreamSync>,
+    relay: Toggle<Relay>,
+    relay_client: Client,
+    dcutr: Dcutr,
 
     #[behaviour(ignore)]
     bootstrap_complete: bool,
@@ -401,16 +409,58 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<void::Void> for NetworkBackend
     fn inject_event(&mut self, _event: void::Void) {}
 }
 
+impl<P: StoreParams> NetworkBehaviourEventProcess<RelayEvent> for NetworkBackendBehaviour<P> {
+    fn inject_event(&mut self, event: RelayEvent) {
+        // TODO: log events?
+        tracing::info!("{:?}", event);
+        /*match event {
+            RelayEvent::ReservationReqAccepted { src_peer_id, renewed } => {}
+            RelayEvent::ReservationReqAcceptFailed { src_peer_id, error } => {}
+            RelayEvent::ReservationReqDenied { src_peer_id } => {}
+            RelayEvent::ReservationReqDenyFailed { src_peer_id, error } => {}
+            RelayEvent::ReservationTimedOut { src_peer_id } => {}
+            RelayEvent::CircuitReqDenied { src_peer_id, dst_peer_id } => {}
+            RelayEvent::CircuitReqDenyFailed { src_peer_id, dst_peer_id, error } => {}
+            RelayEvent::CircuitReqAccepted { src_peer_id, dst_peer_id } => {}
+            RelayEvent::CircuitReqAcceptFailed { src_peer_id, dst_peer_id, error } => {}
+            RelayEvent::CircuitClosed { src_peer_id, dst_peer_id, error } => {}
+        }*/
+    }
+}
+
+impl<P: StoreParams> NetworkBehaviourEventProcess<ClientEvent> for NetworkBackendBehaviour<P> {
+    fn inject_event(&mut self, event: ClientEvent) {
+        // TODO: log events?
+        tracing::info!("{:?}", event);
+        /*match event {
+            ClientEvent::ReservationReqAccepted { relay_peer_id, renewal } => {}
+            ClientEvent::ReservationReqFailed { relay_peer_id, renewal } => {}
+            ClientEvent::OutboundCircuitReqFailed { relay_peer_id } => {}
+            ClientEvent::InboundCircuitReqDenied { src_peer_id } => {}
+            ClientEvent::InboundCircuitReqDenyFailed { src_peer_id, error } => {}
+        }*/
+    }
+}
+
+impl<P: StoreParams> NetworkBehaviourEventProcess<DcutrEvent> for NetworkBackendBehaviour<P> {
+    fn inject_event(&mut self, event: DcutrEvent) {
+        tracing::info!("{:?}", event);
+        match event {
+        }
+    }
+}
+
 impl<P: StoreParams> NetworkBackendBehaviour<P> {
     /// Create a Kademlia behaviour with the IPFS bootstrap nodes.
     pub async fn new<S: BitswapStore<Params = P>>(
         config: &mut NetworkConfig,
+        relay_client: Client,
         store: S,
     ) -> Result<Self> {
         let public = config.node_key.public;
         let node_key = config.node_key.to_keypair();
         let node_name = config.node_name.clone();
-        let peer_id = node_key.public().into_peer_id();
+        let peer_id = node_key.public().to_peer_id();
         let mdns = if let Some(config) = config.mdns.take() {
             Some(Mdns::new(config).await?)
         } else {
@@ -447,6 +497,11 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         } else {
             None
         };
+        let relay = if let Some(config) = config.relay.take() {
+            Some(Relay::new(peer_id, config))
+        } else {
+            None
+        };
         Ok(Self {
             bootstrap_complete: false,
             peers: AddressBook::new(peer_id, node_name, public, config.enable_loopback),
@@ -458,6 +513,9 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             gossipsub: gossipsub.into(),
             broadcast: broadcast.into(),
             streams: streams.into(),
+            relay: relay.into(),
+            relay_client,
+            dcutr: Dcutr::new(),
             queries: Default::default(),
             subscriptions: Default::default(),
         })

@@ -35,6 +35,9 @@ async fn run() -> Result<()> {
         kad: None,
         ..Default::default()
     };
+    if config.enable_relay {
+        network.enable_relay();
+    }
     let node_name = if let Some(node_name) = config.node_name {
         node_name
     } else {

@@ -57,6 +57,8 @@ impl<C, E> MachineExt for netsim_embed::Machine<C, E> {
 
 pub trait MultiaddrExt {
     fn is_loopback(&self) -> bool;
+    fn is_tcp(&self) -> bool;
+    fn is_relay(&self) -> bool;
 }
 
 impl MultiaddrExt for Multiaddr {
@@ -67,6 +69,22 @@ impl MultiaddrExt for Multiaddr {
             }
         }
         true
+    }
+
+    fn is_tcp(&self) -> bool {
+        if let Some(multiaddr::Protocol::Tcp(_)) = self.iter().nth(1) {
+            true
+        } else {
+            false
+        }
+    }
+
+    fn is_relay(&self) -> bool {
+        if let Some(multiaddr::Protocol::P2pCircuit) = self.iter().nth(3) {
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -101,6 +119,7 @@ where
                 bootstrap: vec![],
                 external: vec![],
                 enable_mdns: opts.enable_mdns,
+                enable_relay: false,
             };
             let mut delay = DelayBuffer::new();
             delay.set_delay(Duration::from_millis(opts.delay_ms));

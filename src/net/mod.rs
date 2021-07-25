@@ -8,7 +8,7 @@ use futures::{channel::mpsc, future, pin_mut};
 use libipld::error::BlockNotFound;
 use libipld::store::StoreParams;
 use libipld::{Cid, Result};
-use libp2p::core::either::EitherTransport;
+use libp2p::core::either::{EitherOutput, EitherTransport};
 use libp2p::core::transport::Transport;
 use libp2p::core::upgrade::{AuthenticationVersion, SelectUpgrade};
 #[cfg(feature = "async_global")]
@@ -19,12 +19,14 @@ use libp2p::kad::kbucket::Key as BucketKey;
 use libp2p::mplex::MplexConfig;
 use libp2p::noise::{self, NoiseConfig, X25519Spec};
 use libp2p::pnet::{PnetConfig, PreSharedKey};
+use libp2p::relay::v2::client::Client;
 use libp2p::swarm::{AddressScore, Swarm, SwarmBuilder};
 #[cfg(feature = "async_global")]
 use libp2p::tcp::TcpConfig;
 #[cfg(all(feature = "tokio", not(feature = "async_global")))]
 use libp2p::tcp::TokioTcpConfig as TcpConfig;
 use libp2p::yamux::YamuxConfig;
+use libp2p_quic::{QuicConfig, NoiseCrypto};
 use parking_lot::Mutex;
 use prometheus::Registry;
 use std::collections::HashSet;
@@ -74,10 +76,10 @@ impl<P: StoreParams> NetworkService<P> {
         executor: Executor,
     ) -> Result<Self> {
         let peer_id = config.node_key.to_peer_id();
-        let behaviour = NetworkBackendBehaviour::<P>::new(&mut config, store).await?;
 
-        let tcp = {
+        let (tcp, relay_client) = {
             let transport = TcpConfig::new().nodelay(true).port_reuse(true);
+            let (transport, relay_client) = Client::new_transport_and_behaviour(peer_id, transport);
             let transport = if let Some(psk) = config.psk {
                 let psk = PreSharedKey::new(psk);
                 EitherTransport::Left(
@@ -101,10 +103,11 @@ impl<P: StoreParams> NetworkService<P> {
                 ))
                 .timeout(Duration::from_secs(5))
                 .boxed();
-            p2p_wrapper::P2pWrapper(transport)
+            (p2p_wrapper::P2pWrapper(transport), relay_client)
         };
-        /*let quic = {
-            QuicConfig {
+        let behaviour = NetworkBackendBehaviour::<P>::new(&mut config, relay_client, store).await?;
+        let quic = {
+            QuicConfig::<NoiseCrypto> {
                 keypair: config.node_key,
                 transport: config.quic,
                 ..Default::default()
@@ -116,8 +119,7 @@ impl<P: StoreParams> NetworkService<P> {
         let quic_or_tcp = quic.or_transport(tcp).map(|either, _| match either {
             EitherOutput::First(first) => first,
             EitherOutput::Second(second) => second,
-        });*/
-        let quic_or_tcp = tcp;
+        });
         #[cfg(feature = "async_global")]
         let transport = if let Some(config) = config.dns {
             Dns::custom(quic_or_tcp, config.config, config.opts)
@@ -134,17 +136,13 @@ impl<P: StoreParams> NetworkService<P> {
         };
 
         let exec = executor.clone();
-        let swarm = SwarmBuilder::new(transport, behaviour, peer_id)
+        let mut swarm = SwarmBuilder::new(transport, behaviour, peer_id)
             .executor(Box::new(move |fut| {
                 exec.spawn(fut).detach();
             }))
             .build();
-        /*
         // Required for swarm book keeping.
-        swarm
-            .listen_on("/ip4/0.0.0.0/udp/0/quic".parse().unwrap())
-            .unwrap();
-        */
+        swarm.listen_on("/ip4/0.0.0.0/udp/0/quic".parse()?)?;
 
         let swarm = Arc::new(Mutex::new(swarm));
         let swarm2 = swarm.clone();

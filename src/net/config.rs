@@ -6,6 +6,7 @@ pub use libp2p::identify::IdentifyConfig;
 pub use libp2p::kad::record::store::MemoryStoreConfig as KadConfig;
 pub use libp2p::mdns::MdnsConfig;
 pub use libp2p::ping::PingConfig;
+pub use libp2p::relay::v2::relay::Config as RelayConfig;
 pub use libp2p_bitswap::BitswapConfig;
 pub use libp2p_blake_streams::StreamSyncConfig;
 pub use libp2p_broadcast::BroadcastConfig;
@@ -48,6 +49,8 @@ pub struct NetworkConfig {
     pub bitswap: Option<BitswapConfig>,
     /// Streams config.
     pub streams: Option<StreamSyncConfig>,
+    /// Relay config.
+    pub relay: Option<RelayConfig>,
 }
 
 /// `DNS` configuration.
@@ -91,7 +94,12 @@ impl NetworkConfig {
             broadcast: Some(BroadcastConfig::default()),
             bitswap: Some(BitswapConfig::default()),
             streams: Some(StreamSyncConfig::new(path, node_key2)),
+            relay: None,
         }
+    }
+
+    pub fn enable_relay(&mut self) {
+        self.relay = Some(Default::default());
     }
 }
 

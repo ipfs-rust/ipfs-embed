@@ -1756,13 +1756,13 @@ dependencies = [
 [[package]]
 name = "libp2p"
 version = "0.39.1"
-source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open-2#1dced70ed616c4f6fca1eb6624f815f4b7610e03"
 dependencies = [
  "atomic",
  "bytes",
  "futures",
  "lazy_static",
  "libp2p-core",
+ "libp2p-dcutr",
  "libp2p-dns",
  "libp2p-gossipsub",
  "libp2p-identify",
@@ -1772,6 +1772,7 @@ dependencies = [
  "libp2p-noise",
  "libp2p-ping",
  "libp2p-pnet",
+ "libp2p-relay",
  "libp2p-request-response",
  "libp2p-swarm",
  "libp2p-swarm-derive",
@@ -1833,8 +1834,7 @@ dependencies = [
 
 [[package]]
 name = "libp2p-core"
-version = "0.29.0"
-source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open-2#1dced70ed616c4f6fca1eb6624f815f4b7610e03"
+version = "0.30.0"
 dependencies = [
  "asn1_der",
  "bs58",
@@ -1865,9 +1865,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "libp2p-dcutr"
+version = "0.1.0"
+dependencies = [
+ "asynchronous-codec",
+ "bytes",
+ "futures",
+ "futures-timer",
+ "libp2p-core",
+ "libp2p-swarm",
+ "prost 0.7.0",
+ "prost-build 0.7.0",
+ "unsigned-varint",
+]
+
+[[package]]
 name = "libp2p-dns"
-version = "0.29.0"
-source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open-2#1dced70ed616c4f6fca1eb6624f815f4b7610e03"
+version = "0.30.0"
 dependencies = [
  "async-std-resolver",
  "futures",
@@ -1879,8 +1893,7 @@ dependencies = [
 
 [[package]]
 name = "libp2p-gossipsub"
-version = "0.32.0"
-source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open-2#1dced70ed616c4f6fca1eb6624f815f4b7610e03"
+version = "0.33.0"
 dependencies = [
  "asynchronous-codec",
  "base64 0.13.0",
@@ -1904,8 +1917,7 @@ dependencies = [
 
 [[package]]
 name = "libp2p-identify"
-version = "0.30.0"
-source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open-2#1dced70ed616c4f6fca1eb6624f815f4b7610e03"
+version = "0.31.0"
 dependencies = [
  "futures",
  "libp2p-core",
@@ -1919,8 +1931,7 @@ dependencies = [
 
 [[package]]
 name = "libp2p-kad"
-version = "0.31.0"
-source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open-2#1dced70ed616c4f6fca1eb6624f815f4b7610e03"
+version = "0.32.0"
 dependencies = [
  "arrayvec 0.5.2",
  "asynchronous-codec",
@@ -1944,8 +1955,7 @@ dependencies = [
 
 [[package]]
 name = "libp2p-mdns"
-version = "0.31.0"
-source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open-2#1dced70ed616c4f6fca1eb6624f815f4b7610e03"
+version = "0.32.0"
 dependencies = [
  "async-io",
  "data-encoding",
@@ -1964,8 +1974,7 @@ dependencies = [
 
 [[package]]
 name = "libp2p-mplex"
-version = "0.29.0"
-source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open-2#1dced70ed616c4f6fca1eb6624f815f4b7610e03"
+version = "0.30.0"
 dependencies = [
  "asynchronous-codec",
  "bytes",
@@ -1981,8 +1990,7 @@ dependencies = [
 
 [[package]]
 name = "libp2p-noise"
-version = "0.32.0"
-source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open-2#1dced70ed616c4f6fca1eb6624f815f4b7610e03"
+version = "0.33.0"
 dependencies = [
  "bytes",
  "curve25519-dalek",
@@ -2002,8 +2010,7 @@ dependencies = [
 
 [[package]]
 name = "libp2p-ping"
-version = "0.30.0"
-source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open-2#1dced70ed616c4f6fca1eb6624f815f4b7610e03"
+version = "0.31.0"
 dependencies = [
  "futures",
  "libp2p-core",
@@ -2017,7 +2024,6 @@ dependencies = [
 [[package]]
 name = "libp2p-pnet"
 version = "0.21.0"
-source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open-2#1dced70ed616c4f6fca1eb6624f815f4b7610e03"
 dependencies = [
  "futures",
  "log",
@@ -2029,14 +2035,13 @@ dependencies = [
 
 [[package]]
 name = "libp2p-quic"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1de8fda3ccc284d52049fab92db2b1fcd9d6b0ac4e09760456a2d4d6ada585a7"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-global-executor",
  "async-io",
  "bytes",
+ "ed25519-dalek",
  "fnv",
  "futures",
  "if-watch",
@@ -2052,9 +2057,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "libp2p-relay"
+version = "0.4.0"
+dependencies = [
+ "asynchronous-codec",
+ "bytes",
+ "futures",
+ "futures-timer",
+ "libp2p-core",
+ "libp2p-swarm",
+ "log",
+ "pin-project 1.0.7",
+ "prost 0.8.0",
+ "prost-build 0.8.0",
+ "rand 0.8.4",
+ "smallvec",
+ "static_assertions",
+ "thiserror",
+ "unsigned-varint",
+ "void",
+ "wasm-timer",
+]
+
+[[package]]
 name = "libp2p-request-response"
-version = "0.12.0"
-source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open-2#1dced70ed616c4f6fca1eb6624f815f4b7610e03"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2072,8 +2099,7 @@ dependencies = [
 
 [[package]]
 name = "libp2p-swarm"
-version = "0.30.0"
-source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open-2#1dced70ed616c4f6fca1eb6624f815f4b7610e03"
+version = "0.31.0"
 dependencies = [
  "either",
  "futures",
@@ -2088,7 +2114,6 @@ dependencies = [
 [[package]]
 name = "libp2p-swarm-derive"
 version = "0.24.0"
-source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open-2#1dced70ed616c4f6fca1eb6624f815f4b7610e03"
 dependencies = [
  "quote",
  "syn",
@@ -2096,8 +2121,7 @@ dependencies = [
 
 [[package]]
 name = "libp2p-tcp"
-version = "0.29.0"
-source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open-2#1dced70ed616c4f6fca1eb6624f815f4b7610e03"
+version = "0.30.0"
 dependencies = [
  "async-io",
  "futures",
@@ -2114,8 +2138,7 @@ dependencies = [
 
 [[package]]
 name = "libp2p-yamux"
-version = "0.33.0"
-source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open-2#1dced70ed616c4f6fca1eb6624f815f4b7610e03"
+version = "0.34.0"
 dependencies = [
  "futures",
  "libp2p-core",
@@ -2154,9 +2177,9 @@ dependencies = [
 
 [[package]]
 name = "libsecp256k1"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd1137239ab33b41aa9637a88a28249e5e70c40a42ccc92db7f12cc356c1fcd7"
+checksum = "c9d220bc1feda2ac231cb78c3d26f27676b8cf82c96971f7aeef3d0cf2797c73"
 dependencies = [
  "arrayref",
  "base64 0.12.3",
@@ -2292,18 +2315,18 @@ dependencies = [
 
 [[package]]
 name = "minicbor"
-version = "0.8.1"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51aa5bb0ca22415daca596a227b507f880ad1b2318a87fa9325312a5d285ca0d"
+checksum = "c1508afeb4e48bc51cf3aa15f8d3ac12ef948c88352138b58fe8004660b5ed5d"
 dependencies = [
  "minicbor-derive",
 ]
 
 [[package]]
 name = "minicbor-derive"
-version = "0.6.3"
+version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f2b9e8883d58e34b18facd16c4564a77ea50fce028ad3d0ee6753440e37acc8"
+checksum = "54999f917cd092b13904737e26631aa2b2b88d625db68e4bab461dcd8006c788"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2398,7 +2421,6 @@ checksum = "e5ce46fe64a9d73be07dcbe690a38ce1b293be448fd8ce1e6c1b8062c9f72c6a"
 [[package]]
 name = "multistream-select"
 version = "0.11.0"
-source = "git+https://github.com/dvc94ch/rust-libp2p?branch=sim-open-2#1dced70ed616c4f6fca1eb6624f815f4b7610e03"
 dependencies = [
  "bytes",
  "futures",
@@ -2420,9 +2442,9 @@ dependencies = [
 
 [[package]]
 name = "netsim-embed"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66215c0e6eb320907d20e4dab6f8cb4b22911b9c180c1ab4f4cb4a6a155c34c6"
+checksum = "258b4524327a04ce1bb6a0667b7b93c7a5ed8b42415ea77255b1bb05c8a8965c"
 dependencies = [
  "async-global-executor",
  "async-process",
@@ -2451,9 +2473,9 @@ dependencies = [
 
 [[package]]
 name = "netsim-embed-machine"
-version = "0.4.2"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce2163a11dee9bbe1d74163a79a0eac0fae832f9d63d4f99d6bc8fcc8c7812b7"
+checksum = "a8b12cb54c976fe69a4209735c65d70553cad88d60feed99d14c0fc362fe8e3c"
 dependencies = [
  "async-global-executor",
  "async-io",
@@ -2467,9 +2489,9 @@ dependencies = [
 
 [[package]]
 name = "netsim-embed-nat"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16ed574c766222e406102cd45e6464f8b09978ce9f036dbccaf6e3b670db43f4"
+checksum = "7513d04a25b4e34578cbf9f68ebde5b9d3177045c1f0eac85aa73b200643cef6"
 dependencies = [
  "futures",
  "log",
@@ -2479,9 +2501,9 @@ dependencies = [
 
 [[package]]
 name = "netsim-embed-router"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb3b5a39ec54045e5031eb5696bcff948734c340098045da6c5d41e5ae8e86a4"
+checksum = "375628ede17ac6aa3f6f9428d9c9f9f08ac5248f38798fd10fed941ac463213b"
 dependencies = [
  "async-global-executor",
  "futures",
@@ -2925,9 +2947,9 @@ checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
 
 [[package]]
 name = "quinn-noise"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83e7626a7a184fe86b38d5b3a87722695d3108a89a3d856a75e42e1cfb49db34"
+checksum = "5e1c50d22f398d489a79753d17bab5a6f9fb48e5cc537ce50b0bb9312ae07ea9"
 dependencies = [
  "bytes",
  "chacha20poly1305",

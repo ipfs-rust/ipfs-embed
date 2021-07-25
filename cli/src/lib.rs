@@ -21,6 +21,8 @@ pub struct Config {
     pub bootstrap: Vec<Multiaddr>,
     #[structopt(long)]
     pub external: Vec<Multiaddr>,
+    #[structopt(long)]
+    pub enable_relay: bool,
 }
 
 impl Config {
@@ -33,6 +35,7 @@ impl Config {
             bootstrap: vec![],
             external: vec![],
             enable_mdns: false,
+            enable_relay: false,
         }
     }
 }
@@ -69,6 +72,9 @@ impl From<Config> for async_process::Command {
         }
         if config.enable_mdns {
             cmd.arg("--enable-mdns");
+        }
+        if config.enable_relay {
+            cmd.arg("--enable-relay");
         }
         cmd
     }
