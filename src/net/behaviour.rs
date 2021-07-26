@@ -124,8 +124,8 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendB
 }
 
 #[derive(Debug, Error)]
-#[error("Protocol was disabled in `NetworkConfig`.")]
-pub struct DisabledProtocol;
+#[error("Protocol `{0}` was disabled in `NetworkConfig`.")]
+pub struct DisabledProtocol(&'static str);
 
 #[derive(Debug, Error)]
 #[error("Trying to use kad before bootstrap completed successfully.")]
@@ -624,7 +624,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
 
     pub fn subscribe(&mut self, topic: &str) -> Result<impl Stream<Item = GossipEvent>> {
         if self.gossipsub.as_ref().is_none() && self.broadcast.as_ref().is_none() {
-            return Err(DisabledProtocol.into());
+            return Err(DisabledProtocol("gossipsub and broadcast").into());
         }
         let (tx, rx) = mpsc::unbounded();
         if let Some(subscribers) = self.subscriptions.get_mut(topic) {
@@ -682,7 +682,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
                 Err(err) => Err(GossipsubPublishError(err).into()),
             }
         } else {
-            Err(DisabledProtocol.into())
+            Err(DisabledProtocol("gossipsub").into())
         }
     }
 
@@ -693,7 +693,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             broadcast.broadcast(&broadcast_topic, msg.into());
             Ok(())
         } else {
-            Err(DisabledProtocol.into())
+            Err(DisabledProtocol("broadcast").into())
         }
     }
 
