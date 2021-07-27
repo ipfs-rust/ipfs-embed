@@ -313,13 +313,12 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<IdentifyEvent> for NetworkBack
         // When a peer opens a connection we only have it's outgoing address. The identify
         // protocol sends the listening address which needs to be registered with kademlia.
         if let IdentifyEvent::Received { peer_id, info } = event {
-            tracing::debug!("has external address {}", &info.observed_addr);
             let local_peer_id = *self.peers.local_peer_id();
             // source doesn't matter as it won't be added to address book.
             self.add_address(
                 &local_peer_id,
                 info.observed_addr.clone(),
-                AddressSource::User,
+                AddressSource::Peer,
             );
             self.peers.set_info(&peer_id, info);
         }
