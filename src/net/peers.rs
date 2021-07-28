@@ -201,8 +201,11 @@ impl AddressBook {
         let discovered = !self.peers.contains_key(peer);
         let info = self.peers.entry(*peer).or_default();
         normalize_addr(&mut address, peer);
-        tracing::trace!("adding address {} from {:?}", address, source);
-        info.addresses.insert(address, source);
+        #[allow(clippy::map_entry)]
+        if !info.addresses.contains_key(&address) {
+            tracing::trace!("adding address {} from {:?}", address, source);
+            info.addresses.insert(address, source);
+        }
         if discovered {
             self.notify(Event::Discovered(*peer));
         }
