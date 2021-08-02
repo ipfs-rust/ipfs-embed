@@ -139,6 +139,7 @@ impl MultiaddrExt for Multiaddr {
 #[derive(Debug)]
 pub struct AddressBook {
     enable_loopback: bool,
+    prune_addresses: bool,
     local_node_name: String,
     local_peer_id: PeerId,
     local_public_key: PublicKey,
@@ -154,9 +155,11 @@ impl AddressBook {
         local_node_name: String,
         local_public_key: PublicKey,
         enable_loopback: bool,
+        prune_addresses: bool,
     ) -> Self {
         Self {
             enable_loopback,
+            prune_addresses,
             local_node_name,
             local_peer_id,
             local_public_key,
@@ -358,7 +361,7 @@ impl NetworkBehaviour for AddressBook {
         _: &ConnectionId,
         _conn: &ConnectedPoint,
     ) {
-        self.connections.remove(&peer_id);
+        self.connections.remove(peer_id);
     }
 
     fn inject_addr_reach_failure(
@@ -373,7 +376,9 @@ impl NetworkBehaviour for AddressBook {
             }
             tracing::trace!("address reach failure {}", error);
             ADDRESS_REACH_FAILURE.inc();
-            self.remove_address(peer_id, addr);
+            if self.prune_addresses {
+                self.remove_address(peer_id, addr);
+            }
         }
     }
 
@@ -389,9 +394,12 @@ impl NetworkBehaviour for AddressBook {
         }
         tracing::trace!("dial failure {}", peer_id);
         DIAL_FAILURE.inc();
-        if self.peers.remove(peer_id).is_some() {
+        if self.peers.contains_key(peer_id) {
             DISCOVERED.dec();
             self.notify(Event::Unreachable(*peer_id));
+            if self.prune_addresses {
+                self.peers.remove(peer_id);
+            }
         }
     }
 
@@ -450,6 +458,7 @@ mod tests {
             "".into(),
             generate_keypair().public,
             false,
+            true,
         );
         let mut stream = book.swarm_events();
         let peer_a = PeerId::random();
@@ -479,6 +488,7 @@ mod tests {
             "".into(),
             generate_keypair().public,
             false,
+            true,
         );
         let mut stream = book.swarm_events();
         let peer_a = PeerId::random();

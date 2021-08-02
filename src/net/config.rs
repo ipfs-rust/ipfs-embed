@@ -19,6 +19,10 @@ pub struct NetworkConfig {
     /// Enable adding loopback addresses to the address book. Should be
     /// enabled during testing and disabled in production.
     pub enable_loopback: bool,
+    /// Manage addresses in the address book automatically. This removes
+    /// them when an address is unreachable and removes the peer when there
+    /// is a dial failure.
+    pub prune_addresses: bool,
     /// Node name.
     pub node_name: String,
     /// Node key.
@@ -78,6 +82,7 @@ impl NetworkConfig {
         let node_key2 = Keypair::from_bytes(&node_key.to_bytes()).unwrap();
         Self {
             enable_loopback: true,
+            prune_addresses: true,
             node_name,
             node_key,
             psk: None,
