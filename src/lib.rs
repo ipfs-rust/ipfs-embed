@@ -794,7 +794,7 @@ mod tests {
 
         stores[0]
             .0
-            .publish(&topic, b"hello gossip".to_vec())
+            .publish(topic, b"hello gossip".to_vec())
             .unwrap();
 
         for (idx, subscription) in subscriptions.iter_mut().enumerate() {
@@ -838,7 +838,7 @@ mod tests {
         // Check broadcast subscription
         stores[0]
             .0
-            .broadcast(&topic, b"hello broadcast".to_vec())
+            .broadcast(topic, b"hello broadcast".to_vec())
             .unwrap();
 
         for subscription in &mut subscriptions[1..] {
@@ -853,7 +853,7 @@ mod tests {
         // trigger cleanup
         stores[0]
             .0
-            .broadcast(&topic, b"r u still listening?".to_vec())
+            .broadcast(topic, b"r u still listening?".to_vec())
             .unwrap();
 
         let mut last_sub = subscriptions.drain(..1).next().unwrap();

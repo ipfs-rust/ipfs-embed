@@ -377,7 +377,7 @@ where
         iter: impl IntoIterator<Item = Cid> + Send + 'static,
     ) -> Result<()> {
         for link in iter {
-            self.0.extend_temp_pin(&temp, &link)?;
+            self.0.extend_temp_pin(temp, &link)?;
         }
         Ok(())
     }
