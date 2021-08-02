@@ -479,7 +479,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
 
     pub fn add_address(&mut self, peer_id: &PeerId, addr: Multiaddr, source: AddressSource) {
         if let Some(kad) = self.kad.as_mut() {
-            kad.add_address(&peer_id, addr.clone());
+            kad.add_address(peer_id, addr.clone());
         }
         self.peers.add_address(peer_id, addr, source);
     }

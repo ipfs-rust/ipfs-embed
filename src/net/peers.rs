@@ -361,7 +361,7 @@ impl NetworkBehaviour for AddressBook {
         _: &ConnectionId,
         _conn: &ConnectedPoint,
     ) {
-        self.connections.remove(&peer_id);
+        self.connections.remove(peer_id);
     }
 
     fn inject_addr_reach_failure(
