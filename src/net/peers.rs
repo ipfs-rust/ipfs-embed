@@ -383,13 +383,15 @@ impl NetworkBehaviour for AddressBook {
     }
 
     fn inject_dial_failure(&mut self, peer_id: &PeerId) {
-        // If an address was added after the peer was dialed retry dialing the
-        // peer.
-        if let Some(peer) = self.peers.get(peer_id) {
-            if !peer.addresses.is_empty() {
-                tracing::trace!("redialing with new addresses");
-                self.dial(peer_id);
-                return;
+        if self.prune_addresses {
+            // If an address was added after the peer was dialed retry dialing the
+            // peer.
+            if let Some(peer) = self.peers.get(peer_id) {
+                if !peer.addresses.is_empty() {
+                    tracing::trace!("redialing with new addresses");
+                    self.dial(peer_id);
+                    return;
+                }
             }
         }
         tracing::trace!("dial failure {}", peer_id);
