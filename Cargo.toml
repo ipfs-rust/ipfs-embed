@@ -3,7 +3,7 @@ members = [".", "cli", "harness"]
 
 [package]
 name = "ipfs-embed"
-version = "0.22.3"
+version = "0.22.4"
 authors = ["David Craven <david@craven.ch>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
@@ -29,7 +29,7 @@ libipld = { version = "0.12.0", default-features = false }
 libp2p-bitswap = "0.19.0"
 libp2p-blake-streams = "0.1.0"
 libp2p-broadcast = "0.5.0"
-libp2p-quic = "0.5.0"
+libp2p-quic = { version = "0.6.1", features = ["noise"] }
 names = "0.11.0"
 parking_lot = "0.11.1"
 pin-project = "1.0.7"
