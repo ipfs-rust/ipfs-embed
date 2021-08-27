@@ -304,6 +304,12 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<PingEvent> for NetworkBackendB
                 tracing::trace!("ping: failure with {}: {}", peer, error);
                 self.peers.set_rtt(&peer, None);
             }
+            PingEvent {
+                peer,
+                result: Result::Err(PingFailure::Unsupported),
+            } => {
+                tracing::warn!("ping: {} does not support the ping protocol", peer);
+            }
         }
     }
 }
@@ -410,7 +416,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         let public = config.node_key.public;
         let node_key = config.node_key.to_keypair();
         let node_name = config.node_name.clone();
-        let peer_id = node_key.public().into_peer_id();
+        let peer_id = node_key.public().to_peer_id();
         let mdns = if let Some(config) = config.mdns.take() {
             Some(Mdns::new(config).await?)
         } else {
