@@ -23,6 +23,13 @@ pub struct StorageConfig {
     /// The path to use for the block store. If it is `None` an in-memory block store
     /// will be used.
     pub path: Option<PathBuf>,
+    /// The path to use for the database that persists block accesses times for the LRU
+    /// cache. If this is set to 'None', access times will not be persisted but just
+    /// tracked in memory.
+    ///
+    /// You can point this to the same file as the main block store, but this is not
+    /// recommended.
+    pub access_db_path: Option<PathBuf>,
     /// The target number of blocks.
     ///
     /// Up to this number, the store will retain everything even if
@@ -59,9 +66,15 @@ pub struct StorageConfig {
 
 impl StorageConfig {
     /// Creates a new `StorageConfig`.
-    pub fn new(path: Option<PathBuf>, cache_size: u64, gc_interval: Duration) -> Self {
+    pub fn new(
+        path: Option<PathBuf>,
+        access_db_path: Option<PathBuf>,
+        cache_size: u64,
+        gc_interval: Duration,
+    ) -> Self {
         Self {
             path,
+            access_db_path,
             cache_size_blocks: cache_size,
             cache_size_bytes: u64::MAX,
             gc_interval,
@@ -97,6 +110,18 @@ where
         let store_config = Config::default()
             .with_size_targets(size)
             .with_pragma_synchronous(Synchronous::Normal);
+        let mk_cache_entry = |access, _| Some(access);
+        let tracker = if let Some(path) = config.access_db_path {
+            let path = if path.is_file() {
+                path
+            } else {
+                std::fs::create_dir_all(&path)?;
+                path.join("access")
+            };
+            SqliteCacheTracker::open(&path, mk_cache_entry)?
+        } else {
+            SqliteCacheTracker::memory(mk_cache_entry)?
+        };
         let store = if let Some(path) = config.path {
             let path = if path.is_file() {
                 path
@@ -104,10 +129,8 @@ where
                 std::fs::create_dir_all(&path)?;
                 path.join("db")
             };
-            let tracker = SqliteCacheTracker::open(&path, |access, _| Some(access))?;
             BlockStore::open(path, store_config.with_cache_tracker(tracker))?
         } else {
-            let tracker = SqliteCacheTracker::memory(|access, _| Some(access))?;
             BlockStore::memory(store_config.with_cache_tracker(tracker))?
         };
         let store = Arc::new(Mutex::new(store));
@@ -468,7 +491,7 @@ mod tests {
     }
 
     fn create_store() -> StorageService<DefaultParams> {
-        let config = StorageConfig::new(None, 2, Duration::from_secs(100));
+        let config = StorageConfig::new(None, None, 2, Duration::from_secs(100));
         StorageService::open(config, Executor::new()).unwrap()
     }
 

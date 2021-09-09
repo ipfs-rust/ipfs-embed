@@ -60,7 +60,7 @@ impl Config {
     /// ipfs will use an in-memory block store.
     pub fn new(path: &Path, keypair: Keypair) -> Self {
         let sweep_interval = std::time::Duration::from_millis(10000);
-        let storage = StorageConfig::new(Some(path.join("blocks")), 0, sweep_interval);
+        let storage = StorageConfig::new(Some(path.join("blocks")), None, 0, sweep_interval);
         let network = NetworkConfig::new(path.join("streams"), keypair);
         Self { storage, network }
     }
@@ -528,7 +528,7 @@ mod tests {
     async fn create_store(enable_mdns: bool) -> Result<(Ipfs<DefaultParams>, TempDir)> {
         let tmp = TempDir::new("ipfs-embed")?;
         let sweep_interval = Duration::from_millis(10000);
-        let storage = StorageConfig::new(None, 10, sweep_interval);
+        let storage = StorageConfig::new(None, None, 10, sweep_interval);
 
         let mut network = NetworkConfig::new(tmp.path().into(), generate_keypair());
         if !enable_mdns {
@@ -885,7 +885,7 @@ mod tests {
         tracing_try_init();
         let tmp = TempDir::new("ipfs-embed")?;
         let network = NetworkConfig::new(tmp.path().into(), generate_keypair());
-        let storage = StorageConfig::new(None, 1000000, Duration::from_secs(3600));
+        let storage = StorageConfig::new(None, None, 1000000, Duration::from_secs(3600));
         let ipfs = Ipfs::<DefaultParams>::new(Config { storage, network }).await?;
         let a = create_block(b"a")?;
         let b = create_block(b"b")?;
@@ -902,7 +902,7 @@ mod tests {
         tracing_try_init();
         let tmp = TempDir::new("ipfs-embed")?;
         let network = NetworkConfig::new(tmp.path().into(), generate_keypair());
-        let storage = StorageConfig::new(None, 1000000, Duration::from_secs(3600));
+        let storage = StorageConfig::new(None, None, 1000000, Duration::from_secs(3600));
         let ipfs = Ipfs::<DefaultParams>::new(Config { storage, network }).await?;
         let a = create_block(b"a")?;
         let b = create_block(b"b")?;
