@@ -55,7 +55,7 @@ impl DagBuilder {
     async fn new() -> Result<Self> {
         let tmp = TempDir::new("gc-test")?;
         let config = Config {
-            storage: StorageConfig::new(None, 0, Duration::from_secs(1000)),
+            storage: StorageConfig::new(None, None, 0, Duration::from_secs(1000)),
             network: NetworkConfig::new(tmp.path().into(), generate_keypair()),
         };
         let ipfs = Ipfs::new(config).await?;
