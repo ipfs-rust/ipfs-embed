@@ -1,3 +1,4 @@
+use ipfs_sqlite_block_store::cache::{CacheTracker, InMemCacheTracker};
 pub use ipfs_sqlite_block_store::TempPin;
 use ipfs_sqlite_block_store::{
     cache::SqliteCacheTracker, BlockStore, Config, SizeTargets, Synchronous,
@@ -110,17 +111,16 @@ where
         let store_config = Config::default()
             .with_size_targets(size)
             .with_pragma_synchronous(Synchronous::Normal);
-        let mk_cache_entry = |access, _| Some(access);
-        let tracker = if let Some(path) = config.access_db_path {
+        let tracker: Arc<dyn CacheTracker> = if let Some(path) = config.access_db_path {
             let path = if path.is_file() {
                 path
             } else {
                 std::fs::create_dir_all(&path)?;
                 path.join("access")
             };
-            SqliteCacheTracker::open(&path, mk_cache_entry)?
+            Arc::new(SqliteCacheTracker::open(&path, |access, _| Some(access))?)
         } else {
-            SqliteCacheTracker::memory(mk_cache_entry)?
+            Arc::new(InMemCacheTracker::new(|access, _| Some(access)))
         };
         let store = if let Some(path) = config.path {
             let path = if path.is_file() {
