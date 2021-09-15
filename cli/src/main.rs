@@ -23,7 +23,7 @@ async fn run() -> Result<()> {
 
     let config = Config::from_args();
     let sweep_interval = Duration::from_millis(10000);
-    let storage = StorageConfig::new(config.path, 10, sweep_interval);
+    let storage = StorageConfig::new(config.path, None, 10, sweep_interval);
 
     let mut network = NetworkConfig {
         node_key: keypair(config.keypair),

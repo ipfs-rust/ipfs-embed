@@ -1,3 +1,4 @@
+use ipfs_sqlite_block_store::cache::{CacheTracker, InMemCacheTracker};
 pub use ipfs_sqlite_block_store::TempPin;
 use ipfs_sqlite_block_store::{
     cache::SqliteCacheTracker, BlockStore, Config, SizeTargets, Synchronous,
@@ -23,6 +24,13 @@ pub struct StorageConfig {
     /// The path to use for the block store. If it is `None` an in-memory block store
     /// will be used.
     pub path: Option<PathBuf>,
+    /// The path to use for the database that persists block accesses times for the LRU
+    /// cache. If this is set to 'None', access times will not be persisted but just
+    /// tracked in memory.
+    ///
+    /// You can point this to the same file as the main block store, but this is not
+    /// recommended.
+    pub access_db_path: Option<PathBuf>,
     /// The target number of blocks.
     ///
     /// Up to this number, the store will retain everything even if
@@ -59,9 +67,15 @@ pub struct StorageConfig {
 
 impl StorageConfig {
     /// Creates a new `StorageConfig`.
-    pub fn new(path: Option<PathBuf>, cache_size: u64, gc_interval: Duration) -> Self {
+    pub fn new(
+        path: Option<PathBuf>,
+        access_db_path: Option<PathBuf>,
+        cache_size: u64,
+        gc_interval: Duration,
+    ) -> Self {
         Self {
             path,
+            access_db_path,
             cache_size_blocks: cache_size,
             cache_size_bytes: u64::MAX,
             gc_interval,
@@ -71,24 +85,40 @@ impl StorageConfig {
     }
 }
 
-#[derive(Clone)]
-pub struct StorageService<S: StoreParams> {
+struct StorageServiceInner<S: StoreParams> {
     executor: Executor,
     store: Arc<Mutex<BlockStore<S>>>,
     gc_target_duration: Duration,
     gc_min_blocks: usize,
-    _gc_task: Arc<JoinHandle<()>>,
+    _gc_task: JoinHandle<()>,
     exit: Arc<(Mutex<bool>, Condvar)>,
 }
 
-impl<S: StoreParams> Drop for StorageService<S> {
+impl<S: StoreParams> Drop for StorageServiceInner<S> {
     fn drop(&mut self) {
         *self.exit.0.lock() = true;
         self.exit.1.notify_all();
     }
 }
 
+#[derive(Clone)]
+pub struct StorageService<S: StoreParams> {
+    inner: Arc<StorageServiceInner<S>>,
+}
+
 impl<S: StoreParams> StorageService<S>
+where
+    Ipld: References<S::Codecs>,
+{
+    pub fn open(config: StorageConfig, executor: Executor) -> Result<Self> {
+        let inner = StorageServiceInner::open(config, executor)?;
+        Ok(Self {
+            inner: Arc::new(inner),
+        })
+    }
+}
+
+impl<S: StoreParams> StorageServiceInner<S>
 where
     Ipld: References<S::Codecs>,
 {
@@ -97,6 +127,17 @@ where
         let store_config = Config::default()
             .with_size_targets(size)
             .with_pragma_synchronous(Synchronous::Normal);
+        let tracker: Arc<dyn CacheTracker> = if let Some(path) = config.access_db_path {
+            let path = if path.is_file() {
+                path
+            } else {
+                std::fs::create_dir_all(&path)?;
+                path.join("access")
+            };
+            Arc::new(SqliteCacheTracker::open(&path, |access, _| Some(access))?)
+        } else {
+            Arc::new(InMemCacheTracker::new(|access, _| Some(access)))
+        };
         let store = if let Some(path) = config.path {
             let path = if path.is_file() {
                 path
@@ -104,10 +145,8 @@ where
                 std::fs::create_dir_all(&path)?;
                 path.join("db")
             };
-            let tracker = SqliteCacheTracker::open(&path, |access, _| Some(access))?;
             BlockStore::open(path, store_config.with_cache_tracker(tracker))?
         } else {
-            let tracker = SqliteCacheTracker::memory(|access, _| Some(access))?;
             BlockStore::memory(store_config.with_cache_tracker(tracker))?
         };
         let store = Arc::new(Mutex::new(store));
@@ -154,18 +193,23 @@ where
             gc_target_duration: config.gc_target_duration,
             gc_min_blocks: config.gc_min_blocks,
             store,
-            _gc_task: Arc::new(gc_task),
+            _gc_task: gc_task,
             exit: exit2,
         })
     }
+}
 
+impl<S: StoreParams> StorageService<S>
+where
+    Ipld: References<S::Codecs>,
+{
     pub fn ro<F: FnOnce(&mut Batch<'_, S>) -> Result<R>, R>(
         &self,
         op: &'static str,
         f: F,
     ) -> Result<R> {
         observe_query(op, || {
-            let mut lock = self.store.lock();
+            let mut lock = self.inner.store.lock();
             let mut txn = Batch(lock.transaction()?);
             f(&mut txn)
         })
@@ -177,7 +221,7 @@ where
         f: F,
     ) -> Result<R> {
         observe_query(op, || {
-            let mut lock = self.store.lock();
+            let mut lock = self.inner.store.lock();
             let mut txn = Batch(lock.transaction()?);
             let res = f(&mut txn);
             if res.is_ok() {
@@ -232,10 +276,11 @@ where
     }
 
     pub async fn evict(&self) -> Result<()> {
-        let store = self.store.clone();
-        let gc_min_blocks = self.gc_min_blocks;
-        let gc_target_duration = self.gc_target_duration;
-        self.executor
+        let store = self.inner.store.clone();
+        let gc_min_blocks = self.inner.gc_min_blocks;
+        let gc_target_duration = self.inner.gc_target_duration;
+        self.inner
+            .executor
             .spawn_blocking(move || {
                 while !store
                     .lock()
@@ -252,15 +297,20 @@ where
     }
 
     pub async fn flush(&self) -> Result<()> {
-        let store = self.store.clone();
-        let flush = self.executor.spawn_blocking(move || store.lock().flush());
+        let store = self.inner.store.clone();
+        let flush = self
+            .inner
+            .executor
+            .spawn_blocking(move || store.lock().flush());
         Ok(observe_future("flush", flush).await??)
     }
 
     pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
         registry.register(Box::new(QUERIES_TOTAL.clone()))?;
         registry.register(Box::new(QUERY_DURATION.clone()))?;
-        registry.register(Box::new(SqliteStoreCollector::new(self.store.clone())))?;
+        registry.register(Box::new(SqliteStoreCollector::new(
+            self.inner.store.clone(),
+        )))?;
         Ok(())
     }
 }
@@ -468,7 +518,7 @@ mod tests {
     }
 
     fn create_store() -> StorageService<DefaultParams> {
-        let config = StorageConfig::new(None, 2, Duration::from_secs(100));
+        let config = StorageConfig::new(None, None, 2, Duration::from_secs(100));
         StorageService::open(config, Executor::new()).unwrap()
     }
 

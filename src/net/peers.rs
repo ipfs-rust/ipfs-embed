@@ -479,6 +479,7 @@ mod tests {
         book.inject_addr_reach_failure(Some(&peer_a), &addr_2, &error);
         book.inject_dial_failure(&peer_a);
         assert_eq!(stream.next().await, Some(Event::Unreachable(peer_a)));
+        #[allow(clippy::needless_collect)]
         let peers = book.peers().collect::<Vec<_>>();
         assert!(peers.is_empty());
     }
@@ -508,6 +509,7 @@ mod tests {
         book.inject_addr_reach_failure(Some(&peer_a), &addr_2, &error);
         book.inject_dial_failure(&peer_a);
         assert_eq!(stream.next().await, Some(Event::Unreachable(peer_a)));
+        #[allow(clippy::needless_collect)]
         let peers = book.peers().collect::<Vec<_>>();
         assert!(peers.is_empty());
     }

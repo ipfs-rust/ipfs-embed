@@ -23,7 +23,7 @@ async-io = "1.6.0"
 async-trait = "0.1.50"
 fnv = "1.0.7"
 futures = "0.3.15"
-ipfs-sqlite-block-store = "0.6.1"
+ipfs-sqlite-block-store = "0.7.0"
 lazy_static = "1.4.0"
 libipld = { version = "0.12.0", default-features = false }
 libp2p-bitswap = "0.19.0"
