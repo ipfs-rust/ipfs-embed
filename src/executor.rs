@@ -78,6 +78,15 @@ impl<T> JoinHandle<T> {
         if let Self::AsyncGlobal(Some(t)) = self {
             t.detach()
         }
+        // tokio task detaches when dropped
+    }
+    #[allow(unused_mut)]
+    pub fn abort(mut self) {
+        #[cfg(feature = "tokio")]
+        if let Self::Tokio(t) = self {
+            t.abort()
+        }
+        // async-global-executor task cancels when drop
     }
 }
 

@@ -91,7 +91,15 @@ struct StorageServiceInner<S: StoreParams> {
     store: Arc<Mutex<BlockStore<S>>>,
     gc_target_duration: Duration,
     gc_min_blocks: usize,
-    _gc_task: JoinHandle<()>,
+    gc_task: Option<JoinHandle<()>>,
+}
+
+impl<S: StoreParams> Drop for StorageServiceInner<S> {
+    fn drop(&mut self) {
+        if let Some(t) = self.gc_task.take() {
+            t.abort()
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -179,7 +187,7 @@ where
             gc_target_duration: config.gc_target_duration,
             gc_min_blocks: config.gc_min_blocks,
             store,
-            _gc_task: gc_task,
+            gc_task: Some(gc_task),
         })
     }
 }
