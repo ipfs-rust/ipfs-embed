@@ -7,7 +7,7 @@ use lazy_static::lazy_static;
 use libipld::codec::References;
 use libipld::store::StoreParams;
 use libipld::{Block, Cid, Ipld, Result};
-use parking_lot::{Condvar, Mutex};
+use parking_lot::Mutex;
 use prometheus::core::{Collector, Desc};
 use prometheus::proto::MetricFamily;
 use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry};
@@ -15,6 +15,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::info;
 
 use crate::executor::{Executor, JoinHandle};
 
@@ -90,14 +91,14 @@ struct StorageServiceInner<S: StoreParams> {
     store: Arc<Mutex<BlockStore<S>>>,
     gc_target_duration: Duration,
     gc_min_blocks: usize,
-    _gc_task: JoinHandle<()>,
-    exit: Arc<(Mutex<bool>, Condvar)>,
+    gc_task: Option<JoinHandle<()>>,
 }
 
 impl<S: StoreParams> Drop for StorageServiceInner<S> {
     fn drop(&mut self) {
-        *self.exit.0.lock() = true;
-        self.exit.1.notify_all();
+        if let Some(t) = self.gc_task.take() {
+            t.abort()
+        }
     }
 }
 
@@ -154,36 +155,29 @@ where
         let gc_interval = config.gc_interval;
         let gc_min_blocks = config.gc_min_blocks;
         let gc_target_duration = config.gc_target_duration;
-        let exit = Arc::new((Mutex::new(false), Condvar::new()));
-        let exit2 = exit.clone();
-        let gc_task = executor.spawn_blocking(move || {
+        let gc_task = executor.spawn(async move {
             enum Phase {
                 Gc,
                 Delete,
             }
             let mut phase = Phase::Gc;
             loop {
-                let mut should_exit = exit.0.lock();
-                let timeout = exit.1.wait_for(&mut should_exit, gc_interval / 2);
-                if *should_exit {
-                    break;
-                }
-                if timeout.timed_out() {
-                    match phase {
-                        Phase::Gc => {
-                            tracing::trace!("gc_loop running incremental gc");
-                            gc.lock()
-                                .incremental_gc(gc_min_blocks, gc_target_duration)
-                                .ok();
-                            phase = Phase::Delete;
-                        }
-                        Phase::Delete => {
-                            tracing::trace!("gc_loop running incremental delete orphaned");
-                            gc.lock()
-                                .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)
-                                .ok();
-                            phase = Phase::Gc;
-                        }
+                futures_timer::Delay::new(gc_interval / 2).await;
+                info!("going for gc!");
+                match phase {
+                    Phase::Gc => {
+                        tracing::trace!("gc_loop running incremental gc");
+                        gc.lock()
+                            .incremental_gc(gc_min_blocks, gc_target_duration)
+                            .ok();
+                        phase = Phase::Delete;
+                    }
+                    Phase::Delete => {
+                        tracing::trace!("gc_loop running incremental delete orphaned");
+                        gc.lock()
+                            .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)
+                            .ok();
+                        phase = Phase::Gc;
                     }
                 }
             }
@@ -193,8 +187,7 @@ where
             gc_target_duration: config.gc_target_duration,
             gc_min_blocks: config.gc_min_blocks,
             store,
-            _gc_task: gc_task,
-            exit: exit2,
+            gc_task: Some(gc_task),
         })
     }
 }
