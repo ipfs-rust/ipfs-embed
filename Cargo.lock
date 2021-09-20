@@ -1531,6 +1531,7 @@ dependencies = [
  "async-trait",
  "fnv",
  "futures",
+ "futures-timer",
  "ipfs-sqlite-block-store",
  "lazy_static",
  "libipld",
