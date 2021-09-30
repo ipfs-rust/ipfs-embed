@@ -263,9 +263,7 @@ where
 
 ## Efficient block storage implementation - ipfs-embed internals
 
-Ipfs embed uses sled to implement the block store. Sled is a rust embedded key value store,
-exposing an api that implements persistent lock free `BTreeMap` with support for transactions
-involving multiple trees.
+Ipfs embed uses SQLite to implement the block store, which is a performant embeddable SQL persistence layer / database.
 
 ```rust
 type Id = u64;
