@@ -10,7 +10,6 @@ applications.
 * temporary recursive pins for building dags, preventing races with the garbage collector
 * efficiently syncing large dags of blocks
 
-It does *not* aim at being compatible in any way with `go-ipfs`.
 Some compatibility with go-ipfs can be enabled with the `compat` feature flag.
 
 ## Getting started
