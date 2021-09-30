@@ -11,6 +11,7 @@ applications.
 * efficiently syncing large dags of blocks
 
 It does *not* aim at being compatible in any way with `go-ipfs`.
+Some compatibility with go-ipfs can be enabled with the `compat` feature flag.
 
 ## Getting started
 ```rust
