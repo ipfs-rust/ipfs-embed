@@ -169,6 +169,10 @@ where
                         tracing::trace!("gc_loop running incremental gc");
                         gc.lock()
                             .incremental_gc(gc_min_blocks, gc_target_duration)
+                            .map_err(|e| {
+                                tracing::warn!("failure during incremental gc: {}", e);
+                                e
+                            })
                             .ok();
                         phase = Phase::Delete;
                     }
@@ -176,6 +180,10 @@ where
                         tracing::trace!("gc_loop running incremental delete orphaned");
                         gc.lock()
                             .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)
+                            .map_err(|e| {
+                                tracing::warn!("failure during delete_orphaned: {}", e);
+                                e
+                            })
                             .ok();
                         phase = Phase::Gc;
                     }

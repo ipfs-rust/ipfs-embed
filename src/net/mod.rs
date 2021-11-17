@@ -153,11 +153,13 @@ impl<P: StoreParams> NetworkService<P> {
         let swarm_task = executor.spawn(future::poll_fn(move |cx| {
             waker.register(cx.waker());
             let mut guard = swarm.lock();
-            while {
+            loop {
                 let swarm = &mut *guard;
                 pin_mut!(swarm);
-                swarm.poll_next(cx).is_ready()
-            } {}
+                if !swarm.poll_next(cx).is_ready() {
+                    break;
+                }
+            }
             Poll::Pending
         }));
 
