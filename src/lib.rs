@@ -355,6 +355,11 @@ where
         self.storage.alias(alias.as_ref(), cid)
     }
 
+    /// List all known aliases.
+    pub fn aliases(&self) -> Result<Vec<(Vec<u8>, Cid)>> {
+        self.storage.aliases()
+    }
+
     /// Returns the root of an alias.
     pub fn resolve<T: AsRef<[u8]> + Send + Sync>(&self, alias: T) -> Result<Option<Cid>> {
         self.storage.resolve(alias.as_ref())

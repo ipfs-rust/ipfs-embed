@@ -264,6 +264,10 @@ where
         self.rw("alias", |x| x.alias(alias, cid))
     }
 
+    pub fn aliases(&self) -> Result<Vec<(Vec<u8>, Cid)>> {
+        self.ro("aliases", |x| x.aliases())
+    }
+
     pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>> {
         self.ro("resolve", |x| x.resolve(alias))
     }
@@ -456,6 +460,10 @@ where
 
     pub fn alias(&mut self, alias: &[u8], cid: Option<&Cid>) -> Result<()> {
         Ok(self.0.alias(alias, cid)?)
+    }
+
+    pub fn aliases(&self) -> Result<Vec<(Vec<u8>, Cid)>> {
+        Ok(self.0.aliases()?)
     }
 
     pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
