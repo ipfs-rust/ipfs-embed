@@ -9,7 +9,7 @@
 //! ipfs.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 //! # Ok(()) }
 //! ```
-use crate::db::StorageService;
+pub use crate::db::StorageService;
 pub use crate::db::{StorageConfig, TempPin};
 pub use crate::net::{
     generate_keypair, AddressRecord, AddressSource, BitswapConfig, BroadcastConfig, DnsConfig,
@@ -23,7 +23,7 @@ use crate::net::{BitswapStore, NetworkService};
 pub use crate::telemetry::telemetry;
 use async_trait::async_trait;
 pub use db::Batch;
-use executor::Executor;
+pub use executor::Executor;
 use futures::stream::Stream;
 use libipld::codec::References;
 use libipld::error::BlockNotFound;
