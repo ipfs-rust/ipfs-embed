@@ -457,7 +457,6 @@ impl NetworkBehaviour for AddressBook {
             let mut naddr = addr.clone();
             normalize_addr(&mut naddr, peer_id);
             tracing::debug!(
-                peer = display(peer_id),
                 addr = display(&naddr),
                 error = display(error),
                 still_connected = still_connected,
@@ -505,15 +504,19 @@ impl NetworkBehaviour for AddressBook {
     }
 
     fn inject_new_listen_addr(&mut self, id: ListenerId, addr: &Multiaddr) {
+        let mut addr = addr.clone();
+        normalize_addr(&mut addr, self.local_peer_id());
         tracing::trace!("listener {:?}: new listen addr {}", id, addr);
         LISTEN_ADDRS.inc();
-        self.notify(Event::NewListenAddr(id, addr.clone()));
+        self.notify(Event::NewListenAddr(id, addr));
     }
 
     fn inject_expired_listen_addr(&mut self, id: ListenerId, addr: &Multiaddr) {
+        let mut addr = addr.clone();
+        normalize_addr(&mut addr, self.local_peer_id());
         tracing::trace!("listener {:?}: expired listen addr {}", id, addr);
         LISTEN_ADDRS.dec();
-        self.notify(Event::ExpiredListenAddr(id, addr.clone()));
+        self.notify(Event::ExpiredListenAddr(id, addr));
     }
 
     fn inject_listener_error(&mut self, id: ListenerId, err: &(dyn std::error::Error + 'static)) {
@@ -528,15 +531,19 @@ impl NetworkBehaviour for AddressBook {
     }
 
     fn inject_new_external_addr(&mut self, addr: &Multiaddr) {
+        let mut addr = addr.clone();
+        normalize_addr(&mut addr, self.local_peer_id());
         tracing::trace!("new external addr {}", addr);
         EXTERNAL_ADDRS.inc();
-        self.notify(Event::NewExternalAddr(addr.clone()));
+        self.notify(Event::NewExternalAddr(addr));
     }
 
     fn inject_expired_external_addr(&mut self, addr: &Multiaddr) {
+        let mut addr = addr.clone();
+        normalize_addr(&mut addr, self.local_peer_id());
         tracing::trace!("expired external addr {}", addr);
         EXTERNAL_ADDRS.dec();
-        self.notify(Event::ExpiredExternalAddr(addr.clone()));
+        self.notify(Event::ExpiredExternalAddr(addr));
     }
 }
 
