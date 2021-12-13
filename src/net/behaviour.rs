@@ -294,14 +294,14 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<PingEvent> for NetworkBackendB
                 peer,
                 result: Result::Err(PingFailure::Timeout),
             } => {
-                tracing::trace!("ping: timeout to {}", peer);
+                tracing::debug!("ping: timeout to {}", peer);
                 self.peers.set_rtt(&peer, None);
             }
             PingEvent {
                 peer,
                 result: Result::Err(PingFailure::Other { error }),
             } => {
-                tracing::trace!("ping: failure with {}: {}", peer, error);
+                tracing::info!("ping: failure with {}: {}", peer, error);
                 self.peers.set_rtt(&peer, None);
             }
             PingEvent {

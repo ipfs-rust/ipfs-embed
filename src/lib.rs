@@ -11,6 +11,7 @@
 //! ```
 pub use crate::db::StorageService;
 pub use crate::db::{StorageConfig, TempPin};
+pub use crate::net::Rtt;
 pub use crate::net::{
     generate_keypair, AddressRecord, AddressSource, BitswapConfig, BroadcastConfig, DnsConfig,
     DocId, Event, GossipEvent, GossipsubConfig, Head, IdentifyConfig, KadConfig, Key, Keypair,

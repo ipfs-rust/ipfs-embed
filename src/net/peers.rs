@@ -34,6 +34,7 @@ pub enum Event {
     Unsubscribed(PeerId, String),
     NewHead(Head),
     Bootstrapped,
+    NewInfo(PeerId),
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -42,7 +43,7 @@ pub struct PeerInfo {
     agent_version: Option<String>,
     protocols: Vec<String>,
     addresses: FnvHashMap<Multiaddr, AddressSource>,
-    rtt: Option<Duration>,
+    rtt: Option<Rtt>,
 }
 
 impl PeerInfo {
@@ -63,7 +64,61 @@ impl PeerInfo {
     }
 
     pub fn rtt(&self) -> Option<Duration> {
+        self.rtt.map(|x| x.current)
+    }
+
+    pub fn full_rtt(&self) -> Option<Rtt> {
         self.rtt
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Rtt {
+    current: Duration,
+    decay_3: Duration,
+    decay_10: Duration,
+    failures: u32,
+}
+
+impl Rtt {
+    pub fn new(current: Duration) -> Self {
+        Self {
+            current,
+            decay_3: current,
+            decay_10: current,
+            failures: 0,
+        }
+    }
+
+    pub fn register(&mut self, current: Duration) {
+        self.current = current;
+        self.decay_3 = self.decay_3 * 7 / 10 + current * 3 / 10;
+        self.decay_10 = self.decay_10 * 9 / 10 + current / 10;
+        self.failures = 0;
+    }
+
+    pub fn register_failure(&mut self) {
+        self.failures += 1;
+    }
+
+    /// Get a reference to the rtt's current.
+    pub fn current(&self) -> Duration {
+        self.current
+    }
+
+    /// Get a reference to the rtt's decay 3.
+    pub fn decay_3(&self) -> Duration {
+        self.decay_3
+    }
+
+    /// Get a reference to the rtt's decay 10.
+    pub fn decay_10(&self) -> Duration {
+        self.decay_10
+    }
+
+    /// Get a reference to the rtt's failures.
+    pub fn failures(&self) -> u32 {
+        self.failures
     }
 }
 
@@ -240,7 +295,16 @@ impl AddressBook {
 
     pub fn set_rtt(&mut self, peer_id: &PeerId, rtt: Option<Duration>) {
         if let Some(info) = self.peers.get_mut(peer_id) {
-            info.rtt = rtt;
+            if let Some(duration) = rtt {
+                if let Some(ref mut rtt) = info.rtt {
+                    rtt.register(duration);
+                } else {
+                    info.rtt = Some(Rtt::new(duration));
+                }
+            } else if let Some(ref mut rtt) = info.rtt {
+                rtt.register_failure();
+            }
+            self.notify(Event::NewInfo(*peer_id))
         }
     }
 
@@ -338,6 +402,11 @@ impl NetworkBehaviour for AddressBook {
     ) {
         let mut address = conn.get_remote_address().clone();
         normalize_addr(&mut address, peer_id);
+        tracing::debug!(
+            addr = display(&address),
+            out = conn.is_dialer(),
+            "connection established"
+        );
         self.add_address(peer_id, address.clone(), AddressSource::Peer);
         self.connections.insert(*peer_id, address);
     }
@@ -346,21 +415,34 @@ impl NetworkBehaviour for AddressBook {
         &mut self,
         peer_id: &PeerId,
         _: &ConnectionId,
-        _old: &ConnectedPoint,
+        old: &ConnectedPoint,
         new: &ConnectedPoint,
     ) {
-        let mut new = new.get_remote_address().clone();
-        normalize_addr(&mut new, peer_id);
-        self.add_address(peer_id, new.clone(), AddressSource::Peer);
-        self.connections.insert(*peer_id, new);
+        let mut new_addr = new.get_remote_address().clone();
+        normalize_addr(&mut new_addr, peer_id);
+        tracing::debug!(
+            old = display(old.get_remote_address()),
+            new = display(&new_addr),
+            out = new.is_dialer(),
+            "address changed"
+        );
+        self.add_address(peer_id, new_addr.clone(), AddressSource::Peer);
+        self.connections.insert(*peer_id, new_addr);
     }
 
     fn inject_connection_closed(
         &mut self,
         peer_id: &PeerId,
         _: &ConnectionId,
-        _conn: &ConnectedPoint,
+        conn: &ConnectedPoint,
     ) {
+        let mut addr = conn.get_remote_address().clone();
+        normalize_addr(&mut addr, peer_id);
+        tracing::debug!(
+            addr = display(&addr),
+            out = conn.is_dialer(),
+            "connection closed"
+        );
         self.connections.remove(peer_id);
     }
 
@@ -371,14 +453,25 @@ impl NetworkBehaviour for AddressBook {
         error: &dyn std::error::Error,
     ) {
         if let Some(peer_id) = peer_id {
+            let still_connected = self.is_connected(peer_id);
+            let mut naddr = addr.clone();
+            normalize_addr(&mut naddr, peer_id);
+            tracing::debug!(
+                peer = display(peer_id),
+                addr = display(&naddr),
+                error = display(error),
+                still_connected = still_connected,
+                "dial failure"
+            );
             if self.is_connected(peer_id) {
                 return;
             }
-            tracing::trace!("address reach failure {}", error);
             ADDRESS_REACH_FAILURE.inc();
             if self.prune_addresses {
                 self.remove_address(peer_id, addr);
             }
+        } else {
+            tracing::debug!(addr = display(addr), error = display(error), "dial failure");
         }
     }
 
@@ -388,7 +481,7 @@ impl NetworkBehaviour for AddressBook {
             // peer.
             if let Some(peer) = self.peers.get(peer_id) {
                 if !peer.addresses.is_empty() {
-                    tracing::trace!("redialing with new addresses");
+                    tracing::debug!(peer = display(peer_id), "redialing with new addresses");
                     self.dial(peer_id);
                     return;
                 }

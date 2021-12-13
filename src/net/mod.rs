@@ -41,7 +41,7 @@ mod peers;
 
 pub use crate::net::behaviour::{GossipEvent, QueryId, SyncEvent};
 pub use crate::net::config::*;
-pub use crate::net::peers::{AddressSource, Event, PeerInfo, SwarmEvents};
+pub use crate::net::peers::{AddressSource, Event, PeerInfo, Rtt, SwarmEvents};
 pub use libp2p::core::connection::ListenerId;
 pub use libp2p::kad::record::{Key, Record};
 pub use libp2p::kad::{PeerRecord, Quorum};
@@ -77,7 +77,7 @@ impl<P: StoreParams> NetworkService<P> {
         let behaviour = NetworkBackendBehaviour::<P>::new(&mut config, store).await?;
 
         let tcp = {
-            let transport = TcpConfig::new().nodelay(true).port_reuse(true);
+            let transport = TcpConfig::new().nodelay(true).port_reuse(false);
             let transport = if let Some(psk) = config.psk {
                 let psk = PreSharedKey::new(psk);
                 EitherTransport::Left(
