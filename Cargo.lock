@@ -1012,6 +1012,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "escargot"
+version = "0.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5584ba17d7ab26a8a7284f13e5bd196294dd2f2d79773cff29b9e9edef601a6"
+dependencies = [
+ "log",
+ "once_cell",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "event-listener"
 version = "2.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1578,6 +1590,7 @@ dependencies = [
  "anyhow",
  "async-global-executor",
  "async-process",
+ "escargot",
  "futures",
  "ipfs-embed-cli",
  "libipld",

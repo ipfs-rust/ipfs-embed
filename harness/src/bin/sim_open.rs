@@ -8,7 +8,10 @@ fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+
+    ipfs_embed_harness::build_bin()?;
     netsim_embed::unshare_user()?;
+
     async_global_executor::block_on(async move {
         let mut sim = Netsim::new();
         let net = sim.spawn_network(Ipv4Range::random_local_subnet());

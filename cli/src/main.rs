@@ -85,7 +85,7 @@ async fn run() -> Result<()> {
                 ipfs_embed::Event::NewHead(head) => Some(Event::NewHead(*head.id(), head.len())),
                 ipfs_embed::Event::NewInfo(_) => None,
                 ipfs_embed::Event::ListenerError(_, _) => None,
-                ipfs_embed::Event::DialFailure(_, _) => None,
+                ipfs_embed::Event::DialFailure(_, _, _) => None,
                 ipfs_embed::Event::ConnectionEstablished(_, _) => None,
                 ipfs_embed::Event::ConnectionClosed(_, _) => None,
                 ipfs_embed::Event::AddressChanged(_, _, _) => None,

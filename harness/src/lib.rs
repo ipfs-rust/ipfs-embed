@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use futures::prelude::*;
 use ipfs_embed_cli::{Command, Config, Event};
 use libipld::cbor::DagCborCodec;
@@ -78,7 +78,7 @@ where
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    netsim_embed::unshare_user()?;
+    netsim_embed::unshare_user().context("unshare_user")?;
     let opts = HarnessOpts::from_args();
     let temp_dir = TempDir::new("ipfs-embed-harness")?;
     async_global_executor::block_on(async move {
@@ -165,6 +165,35 @@ fn build_tree_0(width: u64, depth: u64, blocks: &mut Vec<Block<DefaultParams>>) 
 
 pub fn build_tree(width: u64, depth: u64) -> Result<(Cid, Vec<Block<DefaultParams>>)> {
     let mut blocks = vec![];
-    let cid = build_tree_0(width, depth, &mut blocks)?;
+    let cid = build_tree_0(width, depth, &mut blocks).context("build_tree")?;
     Ok((cid, blocks))
+}
+
+pub fn build_bin() -> Result<()> {
+    use escargot::CargoBuild;
+
+    for msg in CargoBuild::new()
+        .manifest_path("../cli/Cargo.toml")
+        .bin("ipfs-embed-cli")
+        .exec()?
+    {
+        match msg?.decode()? {
+            escargot::format::Message::BuildFinished(x) => eprintln!("{:?}", x),
+            escargot::format::Message::CompilerArtifact(x) => {
+                if !x.fresh {
+                    eprintln!("{:?}", x.package_id);
+                }
+            }
+            escargot::format::Message::CompilerMessage(x) => {
+                if let Some(msg) = x.message.rendered {
+                    eprintln!("{}", msg);
+                }
+            }
+            escargot::format::Message::BuildScriptExecuted(x) => {
+                eprintln!("{:?} (build)", x.package_id);
+            }
+            escargot::format::Message::Unknown => {}
+        }
+    }
+    Ok(())
 }
