@@ -42,7 +42,7 @@ pub enum Event {
     /// an address was added for the given peer, following a successful dailling attempt
     Discovered(PeerId),
     /// a dialling attempt for the given peer has failed
-    DialFailure(PeerId, String),
+    DialFailure(PeerId, Multiaddr, String),
     /// a peer could not be reached by any known address
     ///
     /// if `prune_addresses == true` then it has been removed from the address book
@@ -496,7 +496,7 @@ impl NetworkBehaviour for AddressBook {
                 still_connected = still_connected,
                 "dial failure"
             );
-            self.notify(Event::DialFailure(*peer_id, error));
+            self.notify(Event::DialFailure(*peer_id, addr.clone(), error));
             if self.is_connected(peer_id) {
                 return;
             }
@@ -601,7 +601,7 @@ mod tests {
         let mut addr_1_2 = addr_1.clone();
         addr_1_2.push(Protocol::P2p(peer_a.into()));
         let addr_2: Multiaddr = "/ip4/2.2.2.2/tcp/3333".parse().unwrap();
-        let error = std::io::Error::new(std::io::ErrorKind::Other, "");
+        let error = std::io::Error::new(std::io::ErrorKind::Other, "my error");
         book.add_address(&peer_a, addr_1.clone(), AddressSource::Mdns);
         book.add_address(&peer_a, addr_1_2, AddressSource::User);
         book.add_address(&peer_a, addr_2.clone(), AddressSource::Peer);
@@ -611,6 +611,22 @@ mod tests {
         book.inject_addr_reach_failure(Some(&peer_a), &addr_1, &error);
         book.inject_addr_reach_failure(Some(&peer_a), &addr_2, &error);
         book.inject_dial_failure(&peer_a);
+        assert_eq!(
+            stream.next().await,
+            Some(Event::DialFailure(
+                peer_a,
+                addr_1.clone(),
+                "my error".to_owned()
+            ))
+        );
+        assert_eq!(
+            stream.next().await,
+            Some(Event::DialFailure(
+                peer_a,
+                addr_2.clone(),
+                "my error".to_owned()
+            ))
+        );
         assert_eq!(stream.next().await, Some(Event::Unreachable(peer_a)));
         #[allow(clippy::needless_collect)]
         let peers = book.peers().collect::<Vec<_>>();
@@ -630,7 +646,7 @@ mod tests {
         let peer_a = PeerId::random();
         let addr_1: Multiaddr = "/ip4/1.1.1.1/tcp/3333".parse().unwrap();
         let addr_2: Multiaddr = "/ip4/2.2.2.2/tcp/3333".parse().unwrap();
-        let error = std::io::Error::new(std::io::ErrorKind::Other, "");
+        let error = std::io::Error::new(std::io::ErrorKind::Other, "my error");
         book.add_address(&peer_a, addr_1.clone(), AddressSource::Mdns);
         assert_eq!(stream.next().await, Some(Event::Discovered(peer_a)));
         book.add_address(&peer_a, addr_2.clone(), AddressSource::Peer);
@@ -641,6 +657,22 @@ mod tests {
         assert_eq!(peers, vec![&peer_a]);
         book.inject_addr_reach_failure(Some(&peer_a), &addr_2, &error);
         book.inject_dial_failure(&peer_a);
+        assert_eq!(
+            stream.next().await,
+            Some(Event::DialFailure(
+                peer_a,
+                addr_1.clone(),
+                "my error".to_owned()
+            ))
+        );
+        assert_eq!(
+            stream.next().await,
+            Some(Event::DialFailure(
+                peer_a,
+                addr_2.clone(),
+                "my error".to_owned()
+            ))
+        );
         assert_eq!(stream.next().await, Some(Event::Unreachable(peer_a)));
         #[allow(clippy::needless_collect)]
         let peers = book.peers().collect::<Vec<_>>();
