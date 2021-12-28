@@ -1,39 +1,69 @@
 use anyhow::Result;
 use fnv::FnvHashMap;
-use futures::channel::mpsc;
-use futures::stream::Stream;
+use futures::{channel::mpsc, stream::Stream};
 use lazy_static::lazy_static;
-use libp2p::core::connection::{ConnectedPoint, ConnectionId, ListenerId};
-use libp2p::identify::IdentifyInfo;
-use libp2p::multiaddr::Protocol;
-use libp2p::swarm::protocols_handler::DummyProtocolsHandler;
-use libp2p::swarm::{DialPeerCondition, NetworkBehaviour, NetworkBehaviourAction, PollParameters};
-use libp2p::{Multiaddr, PeerId};
+use libp2p::{
+    core::connection::{ConnectedPoint, ConnectionId, ListenerId},
+    identify::IdentifyInfo,
+    multiaddr::Protocol,
+    swarm::{
+        protocols_handler::DummyProtocolsHandler, DialPeerCondition, NetworkBehaviour,
+        NetworkBehaviourAction, PollParameters,
+    },
+    Multiaddr, PeerId,
+};
 use libp2p_blake_streams::Head;
 use libp2p_quic::PublicKey;
 use prometheus::{IntCounter, IntGauge, Registry};
-use std::borrow::Cow;
-use std::collections::VecDeque;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::time::Duration;
+use std::{
+    borrow::Cow,
+    collections::VecDeque,
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Event {
+    /// a new listener has been created
     NewListener(ListenerId),
+    /// the given listener started listening on this address
     NewListenAddr(ListenerId, Multiaddr),
+    /// the given listener stopped listening on this address
     ExpiredListenAddr(ListenerId, Multiaddr),
+    /// the given listener experienced an error
+    ListenerError(ListenerId, String),
+    /// the given listener was closed
     ListenerClosed(ListenerId),
+    /// we received an observed address for ourselves from a peer
     NewExternalAddr(Multiaddr),
+    /// an address observed earlier for ourselves has been retired since it was not refreshed
     ExpiredExternalAddr(Multiaddr),
+    /// an address was added for the given peer, following a successful dailling attempt
     Discovered(PeerId),
+    /// a dialling attempt for the given peer has failed
+    DialFailure(PeerId, String),
+    /// a peer could not be reached by any known address
+    ///
+    /// if `prune_addresses == true` then it has been removed from the address book
     Unreachable(PeerId),
+    /// a new connection has been opened to the given peer
+    ConnectionEstablished(PeerId, ConnectedPoint),
+    /// a connection to the given peer has been closed
+    ConnectionClosed(PeerId, ConnectedPoint),
+    /// the given peer signaled that its address has changed
+    AddressChanged(PeerId, ConnectedPoint, ConnectedPoint),
+    /// we are now connected to the given peer
     Connected(PeerId),
+    /// the last connection to the given peer has been closed
     Disconnected(PeerId),
+    /// the given peer subscribed to the given gossipsub or broadcast topic
     Subscribed(PeerId, String),
+    /// the given peer unsubscribed from the given gossipsub or broadcast topic
     Unsubscribed(PeerId, String),
     NewHead(Head),
     Bootstrapped,
+    /// the peer-info for the given peer has been updated with new information
     NewInfo(PeerId),
 }
 
@@ -409,6 +439,7 @@ impl NetworkBehaviour for AddressBook {
         );
         self.add_address(peer_id, address.clone(), AddressSource::Peer);
         self.connections.insert(*peer_id, address);
+        self.notify(Event::ConnectionEstablished(*peer_id, conn.clone()));
     }
 
     fn inject_address_change(
@@ -428,6 +459,7 @@ impl NetworkBehaviour for AddressBook {
         );
         self.add_address(peer_id, new_addr.clone(), AddressSource::Peer);
         self.connections.insert(*peer_id, new_addr);
+        self.notify(Event::AddressChanged(*peer_id, old.clone(), new.clone()));
     }
 
     fn inject_connection_closed(
@@ -444,6 +476,7 @@ impl NetworkBehaviour for AddressBook {
             "connection closed"
         );
         self.connections.remove(peer_id);
+        self.notify(Event::ConnectionClosed(*peer_id, conn.clone()));
     }
 
     fn inject_addr_reach_failure(
@@ -456,12 +489,14 @@ impl NetworkBehaviour for AddressBook {
             let still_connected = self.is_connected(peer_id);
             let mut naddr = addr.clone();
             normalize_addr(&mut naddr, peer_id);
+            let error = format!("{:#}", error);
             tracing::debug!(
                 addr = display(&naddr),
-                error = display(error),
+                error = display(&error),
                 still_connected = still_connected,
                 "dial failure"
             );
+            self.notify(Event::DialFailure(*peer_id, error));
             if self.is_connected(peer_id) {
                 return;
             }
@@ -516,8 +551,10 @@ impl NetworkBehaviour for AddressBook {
     }
 
     fn inject_listener_error(&mut self, id: ListenerId, err: &(dyn std::error::Error + 'static)) {
+        let err = format!("{:#}", err);
         tracing::trace!("listener {:?}: listener error {}", id, err);
         LISTENER_ERROR.inc();
+        self.notify(Event::ListenerError(id, err));
     }
 
     fn inject_listener_closed(&mut self, id: ListenerId, reason: Result<(), &std::io::Error>) {

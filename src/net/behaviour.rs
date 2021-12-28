@@ -276,38 +276,24 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<BitswapEvent> for NetworkBacke
 impl<P: StoreParams> NetworkBehaviourEventProcess<PingEvent> for NetworkBackendBehaviour<P> {
     fn inject_event(&mut self, event: PingEvent) {
         // Don't really need to do anything here as ping handles disconnecting automatically.
-        match event {
-            PingEvent {
-                peer,
-                result: Result::Ok(PingSuccess::Ping { rtt }),
-            } => {
+        let peer = event.peer;
+        match event.result {
+            Ok(PingSuccess::Ping { rtt }) => {
                 //tracing::trace!("ping: rtt to {} is {} ms", peer, rtt.as_millis());
                 self.peers.set_rtt(&peer, Some(rtt));
             }
-            PingEvent {
-                peer: _,
-                result: Result::Ok(PingSuccess::Pong),
-            } => {
+            Ok(PingSuccess::Pong) => {
                 //tracing::trace!("ping: pong from {}", peer);
             }
-            PingEvent {
-                peer,
-                result: Result::Err(PingFailure::Timeout),
-            } => {
+            Err(PingFailure::Timeout) => {
                 tracing::debug!("ping: timeout to {}", peer);
                 self.peers.set_rtt(&peer, None);
             }
-            PingEvent {
-                peer,
-                result: Result::Err(PingFailure::Other { error }),
-            } => {
+            Err(PingFailure::Other { error }) => {
                 tracing::info!("ping: failure with {}: {}", peer, error);
                 self.peers.set_rtt(&peer, None);
             }
-            PingEvent {
-                peer,
-                result: Result::Err(PingFailure::Unsupported),
-            } => {
+            Err(PingFailure::Unsupported) => {
                 tracing::warn!("ping: {} does not support the ping protocol", peer);
             }
         }

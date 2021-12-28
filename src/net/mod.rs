@@ -61,7 +61,6 @@ pub enum ListenerEvent {
 
 #[derive(Clone)]
 pub struct NetworkService<P: StoreParams> {
-    executor: Executor,
     swarm: Arc<Mutex<Swarm<NetworkBackendBehaviour<P>>>>,
     waker: Arc<AtomicWaker>,
     _swarm_task: Arc<JoinHandle<()>>,
@@ -164,7 +163,6 @@ impl<P: StoreParams> NetworkService<P> {
         }));
 
         Ok(Self {
-            executor,
             swarm: swarm2,
             waker: waker2,
             _swarm_task: Arc::new(swarm_task),

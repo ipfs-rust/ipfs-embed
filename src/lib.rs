@@ -9,6 +9,18 @@
 //! ipfs.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 //! # Ok(()) }
 //! ```
+use async_trait::async_trait;
+use futures::stream::Stream;
+use libipld::{
+    codec::References,
+    error::BlockNotFound,
+    store::{Store, StoreParams},
+    Ipld, Result,
+};
+use libp2p::kad::kbucket::Key as BucketKey;
+use prometheus::Registry;
+use std::{collections::HashSet, path::Path, sync::Arc};
+
 pub use crate::db::StorageService;
 pub use crate::db::{StorageConfig, TempPin};
 pub use crate::net::Rtt;
@@ -22,22 +34,10 @@ pub use crate::net::{
 use crate::net::{BitswapStore, NetworkService};
 #[cfg(feature = "telemetry")]
 pub use crate::telemetry::telemetry;
-use async_trait::async_trait;
 pub use db::Batch;
 pub use executor::Executor;
-use futures::stream::Stream;
-use libipld::codec::References;
-use libipld::error::BlockNotFound;
-pub use libipld::store::DefaultParams;
-use libipld::store::{Store, StoreParams};
-pub use libipld::{Block, Cid};
-use libipld::{Ipld, Result};
-use libp2p::kad::kbucket::Key as BucketKey;
-pub use libp2p::multiaddr;
-use prometheus::Registry;
-use std::collections::HashSet;
-use std::path::Path;
-use std::sync::Arc;
+pub use libipld::{store::DefaultParams, Block, Cid};
+pub use libp2p::{core::ConnectedPoint, multiaddr};
 
 mod db;
 mod executor;

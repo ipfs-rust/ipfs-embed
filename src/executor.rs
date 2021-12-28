@@ -63,6 +63,12 @@ impl Executor {
     }
 }
 
+impl Default for Executor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[pin_project(project = EnumProj)]
 pub enum JoinHandle<T> {
     #[cfg(feature = "tokio")]
