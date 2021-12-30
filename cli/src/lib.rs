@@ -343,7 +343,7 @@ impl std::str::FromStr for Event {
             Some("<dial-failure") => {
                 let id = parts.next().unwrap().parse()?;
                 let addr = parts.next().unwrap().parse()?;
-                let error = parts.next().unwrap().to_owned();
+                let error = parts.collect::<Vec<_>>().join(" ");
                 Self::DialFailure(id, addr, error)
             }
             Some("<connection-established") => {

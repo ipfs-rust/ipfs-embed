@@ -526,6 +526,7 @@ impl AddressBook {
                 if let Some((ip, p)) = ip_port(addr) {
                     if let Some(lp) = listen_port.get(&ip) {
                         if *lp == p && info.addresses[addr].0 == AddressSource::Incoming {
+                            // FIXME this is only correct without port_reuse, must try “common port” in addtion and verify by dial, then throw away ephemeral port
                             confirmed.insert(addr.clone());
                         } else {
                             translated
@@ -736,6 +737,7 @@ impl NetworkBehaviour for AddressBook {
             "unknown".to_owned(),
         ));
         self.notify(Event::ConnectionClosed(*peer_id, conn.clone()));
+        self.notify(Event::NewInfo(*peer_id));
     }
 
     fn inject_addr_reach_failure(
@@ -765,13 +767,15 @@ impl NetworkBehaviour for AddressBook {
                     error.clone(),
                 ));
             self.notify(Event::DialFailure(*peer_id, addr.clone(), error));
-            if self.is_connected(peer_id) {
+            if still_connected {
+                self.notify(Event::NewInfo(*peer_id));
                 return;
             }
             ADDRESS_REACH_FAILURE.inc();
             if self.prune_addresses {
                 self.remove_address(peer_id, addr);
             }
+            self.notify(Event::NewInfo(*peer_id));
         } else {
             tracing::debug!(addr = display(addr), error = display(error), "dial failure");
         }
@@ -791,12 +795,12 @@ impl NetworkBehaviour for AddressBook {
         }
         tracing::trace!("dial failure {}", peer_id);
         DIAL_FAILURE.inc();
-        if self.peers.contains_key(peer_id) {
+        if let Some(peer) = self.peers.get(peer_id) {
             DISCOVERED.dec();
-            self.notify(Event::Unreachable(*peer_id));
-            if self.prune_addresses {
+            if self.prune_addresses && peer.connections.is_empty() {
                 self.peers.remove(peer_id);
             }
+            self.notify(Event::Unreachable(*peer_id));
         }
     }
 

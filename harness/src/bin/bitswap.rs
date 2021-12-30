@@ -8,7 +8,7 @@ fn main() -> anyhow::Result<()> {
 
     harness::build_bin()?;
 
-    harness::run_netsim(|mut network, opts| async move {
+    harness::run_netsim(|mut network, opts, _net, _tmp| async move {
         let providers = 0..opts.n_providers;
         let consumers = opts.n_providers..(opts.n_providers + opts.n_consumers);
 

@@ -7,7 +7,7 @@ fn main() -> anyhow::Result<()> {
 
     harness::build_bin()?;
 
-    harness::run_netsim(|mut sim, opts| async move {
+    harness::run_netsim(|mut sim, opts, _net, _tmp| async move {
         let providers = sim.role(&opts, Role::Provider);
         let consumers = sim.role(&opts, Role::Consumer);
 

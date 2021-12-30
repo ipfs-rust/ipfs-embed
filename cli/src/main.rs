@@ -89,10 +89,13 @@ async fn run() -> Result<()> {
                 }
                 ipfs_embed::Event::Bootstrapped => Some(Event::Bootstrapped),
                 ipfs_embed::Event::NewHead(head) => Some(Event::NewHead(*head.id(), head.len())),
-                ipfs_embed::Event::NewInfo(peer) => {
-                    let info = ipfs2.lock().peer_info(&peer).unwrap();
-                    Some(Event::PeerInfo(peer, info.into()))
-                }
+                ipfs_embed::Event::NewInfo(peer) => match ipfs2.lock().peer_info(&peer) {
+                    Some(info) => Some(Event::PeerInfo(peer, info.into())),
+                    None => {
+                        tracing::error!("got NewInfo for non-existing peer {}", peer);
+                        None
+                    }
+                },
                 ipfs_embed::Event::ListenerError(_, _) => None,
                 ipfs_embed::Event::DialFailure(p, a, e) => Some(Event::DialFailure(p, a, e)),
                 ipfs_embed::Event::ConnectionEstablished(p, a) => Some(

@@ -8,10 +8,11 @@ use libipld::multihash::Code;
 use libipld::{Block, Cid, DagCbor, DefaultParams};
 use libp2p::multiaddr::Protocol;
 use libp2p::{multiaddr, Multiaddr, PeerId};
-use netsim_embed::{DelayBuffer, Ipv4Range, MachineId, Netsim};
+use netsim_embed::{DelayBuffer, Ipv4Range, MachineId, Netsim, NetworkId};
 use rand::RngCore;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
+use std::ops::Range;
 use std::str::FromStr;
 use std::time::Duration;
 use structopt::StructOpt;
@@ -85,11 +86,12 @@ pub enum Role {
 }
 pub trait NetsimExt {
     fn role(&self, opts: &HarnessOpts, r: Role) -> HashMap<MachineId, (PeerId, Multiaddr)>;
+    fn nodes(&self, range: Range<usize>) -> HashMap<MachineId, (PeerId, Multiaddr)>;
 }
 impl<C, E> NetsimExt for Netsim<C, E>
 where
     C: Display + Send + 'static,
-    E: FromStr + Send + 'static,
+    E: FromStr + Display + Send + 'static,
     E::Err: Display + Debug + Send + Sync,
 {
     fn role(&self, opts: &HarnessOpts, r: Role) -> HashMap<MachineId, (PeerId, Multiaddr)> {
@@ -98,6 +100,9 @@ where
             Role::Consumer => opts.n_providers..(opts.n_providers + opts.n_consumers),
             Role::Idle => (opts.n_providers + opts.n_consumers)..opts.n_nodes,
         };
+        self.nodes(range)
+    }
+    fn nodes(&self, range: Range<usize>) -> HashMap<MachineId, (PeerId, Multiaddr)> {
         self.machines()[range]
             .iter()
             .map(|m| {
@@ -112,7 +117,7 @@ where
 
 pub fn run_netsim<F, F2>(mut f: F) -> Result<()>
 where
-    F: FnMut(Netsim<Command, Event>, HarnessOpts) -> F2,
+    F: FnMut(Netsim<Command, Event>, HarnessOpts, NetworkId, TempDir) -> F2,
     F2: Future<Output = Result<()>>,
 {
     tracing_subscriber::fmt()
@@ -156,7 +161,7 @@ where
                 m.peer_id(),
             );
         }
-        f(sim, opts).await
+        f(sim, opts, net, temp_dir).await
     })
 }
 
