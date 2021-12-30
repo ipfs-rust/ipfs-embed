@@ -18,9 +18,11 @@ telemetry = ["tide", "async_global"]
 
 [dependencies]
 anyhow = "1.0.41"
+async-executor = "1.4.1"
 async-global-executor = { version = "2.0.2", optional = true }
 async-io = "1.6.0"
 async-trait = "0.1.50"
+chrono = "0.4.19"
 fnv = "1.0.7"
 futures = "0.3.15"
 futures-timer = "3.0.2"
@@ -60,6 +62,7 @@ libipld = { version = "0.12.0", default-features = false, features = ["dag-cbor"
 libp2p-bitswap = { version = "0.19.0", default-features = false, features = ["compat"] }
 multihash = { version = "0.14.0", default-features = false, features = ["blake3"] }
 rand = "0.8.4"
+regex = "1.5.4"
 tempdir = "0.3.7"
 tracing-subscriber = "0.2.19"
 
@@ -72,3 +75,4 @@ libp2p-bitswap = { git = "https://github.com/Actyx/libp2p-bitswap", branch = "si
 libp2p-broadcast = { git = "https://github.com/Actyx/libp2p-broadcast", branch = "sim-open-2" }
 libp2p-quic = { git = "https://github.com/Actyx/libp2p-quic", branch = "sim-open-2" }
 libp2p-blake-streams = { git = "https://github.com/Actyx/blake-streams", branch = "sim-open" }
+netsim-embed = { path = "../netsim-embed" }

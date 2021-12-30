@@ -1,7 +1,7 @@
 #[cfg(target_os = "linux")]
 fn main() -> anyhow::Result<()> {
+    use harness::{MachineExt, MultiaddrExt};
     use ipfs_embed_cli::{Command, Config, Event};
-    use ipfs_embed_harness::{MachineExt, MultiaddrExt};
     use netsim_embed::{DelayBuffer, Ipv4Range, Netsim};
     use std::time::Duration;
 
@@ -9,7 +9,7 @@ fn main() -> anyhow::Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    ipfs_embed_harness::build_bin()?;
+    harness::build_bin()?;
     netsim_embed::unshare_user()?;
 
     async_global_executor::block_on(async move {

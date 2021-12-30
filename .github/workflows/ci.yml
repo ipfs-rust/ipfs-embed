@@ -3,123 +3,123 @@ on: [push, pull_request]
 name: ipfs-embed
 
 jobs:
-  ci:
-    strategy:
-      fail-fast: false
-      matrix:
-        toolchain:
-        - rust: stable
-        #- rust: nightly
-        platform:
-        - target: x86_64-unknown-linux-gnu
-          host: ubuntu-latest
-          cross: false
+    ci:
+        strategy:
+            fail-fast: false
+            matrix:
+                toolchain:
+                    - rust: stable
+                #- rust: nightly
+                platform:
+                    - target: x86_64-unknown-linux-gnu
+                      host: ubuntu-latest
+                      cross: false
 
-        - target: x86_64-apple-darwin
-          host: macos-latest
-          cross: false
+                    - target: x86_64-apple-darwin
+                      host: macos-latest
+                      cross: false
 
-        - target: x86_64-pc-windows-msvc
-          host: windows-latest
-          cross: false
+                    - target: x86_64-pc-windows-msvc
+                      host: windows-latest
+                      cross: false
 
-        - target: armv7-linux-androideabi
-          host: ubuntu-latest
-          cross: true
-        - target: aarch64-linux-android
-          host: ubuntu-latest
-          cross: true
+                    - target: armv7-linux-androideabi
+                      host: ubuntu-latest
+                      cross: true
+                    - target: aarch64-linux-android
+                      host: ubuntu-latest
+                      cross: true
 
-        - target: aarch64-apple-ios
-          host: macos-latest
-          cross: true
+                    - target: aarch64-apple-ios
+                      host: macos-latest
+                      cross: true
 
-       # - target: wasm32-unknown-unknown
-       #   host: ubuntu-latest
-       #   cross: true
-    env:
-      RUST_BACKTRACE: 1
-      CARGO_INCREMENTAL: 0
-      LLVM_CONFIG_PATH: /usr/local/opt/llvm/bin/llvm-config
-      NDK_HOME: /usr/local/lib/android/sdk/ndk-bundle
+                # - target: wasm32-unknown-unknown
+                #   host: ubuntu-latest
+                #   cross: true
+        env:
+            RUST_BACKTRACE: 1
+            CARGO_INCREMENTAL: 0
+            LLVM_CONFIG_PATH: /usr/local/opt/llvm/bin/llvm-config
+            NDK_HOME: /usr/local/lib/android/sdk/ndk-bundle
 
-    runs-on: ${{ matrix.platform.host }}
-    steps:
-    - name: Checkout sources
-      uses: actions/checkout@v2
+        runs-on: ${{ matrix.platform.host }}
+        steps:
+            - name: Checkout sources
+              uses: actions/checkout@v2
 
-    - name: Cache cargo folder
-      uses: actions/cache@v1
-      with:
-        path: ~/.cargo
-        key: ${{ matrix.platform.target }}-cargo-${{ matrix.toolchain.rust }}
+            - name: Cache cargo folder
+              uses: actions/cache@v1
+              with:
+                  path: ~/.cargo
+                  key: ${{ matrix.platform.target }}-cargo-${{ matrix.toolchain.rust }}
 
-    - name: Install dependencies ubuntu
-      if: matrix.platform.host == 'ubuntu-latest'
-      run: sudo apt-get install llvm-dev
+            - name: Install dependencies ubuntu
+              if: matrix.platform.host == 'ubuntu-latest'
+              run: sudo apt-get install llvm-dev
 
-    - name: Install dependencies macos
-      if: matrix.platform.host == 'macos-latest'
-      run: brew install llvm
+            - name: Install dependencies macos
+              if: matrix.platform.host == 'macos-latest'
+              run: brew install llvm
 
-    - name: Install dependencies windows
-      if: matrix.platform.host == 'windows-latest'
-      run: choco install llvm
+            - name: Install dependencies windows
+              if: matrix.platform.host == 'windows-latest'
+              run: choco install llvm
 
-    - name: Install rust toolchain
-      uses: hecrj/setup-rust-action@v1
-      with:
-        rust-version: ${{ matrix.toolchain.rust }}
-        targets: ${{ matrix.platform.target }}
+            - name: Install rust toolchain
+              uses: hecrj/setup-rust-action@v1
+              with:
+                  rust-version: ${{ matrix.toolchain.rust }}
+                  targets: ${{ matrix.platform.target }}
 
-    - name: Install cargo-apk
-      if: contains(matrix.platform.target, 'android')
-      run: cargo install cargo-apk
+            - name: Install cargo-apk
+              if: contains(matrix.platform.target, 'android')
+              run: cargo install cargo-apk
 
-    - name: Build
-      if: contains(matrix.platform.target, 'android') == false
-      run: cargo build --all-features --target ${{ matrix.platform.target }}
+            - name: Build
+              if: contains(matrix.platform.target, 'android') == false
+              run: cargo build --all-features --target ${{ matrix.platform.target }}
 
-    - name: Build android
-      if: contains(matrix.platform.target, 'android')
-      run: cargo apk check --all-features --target ${{ matrix.platform.target }}
+            - name: Build android
+              if: contains(matrix.platform.target, 'android')
+              run: cargo apk check --all-features --target ${{ matrix.platform.target }}
 
-    - name: Rust tests
-      if: matrix.platform.cross == false
-      run: cargo test --all-features
+            - name: Rust tests
+              if: matrix.platform.cross == false
+              run: cargo test --all-features
 
-    - name: Build netsim integration tests
-      if: contains(matrix.platform.target, 'linux-gnu')
-      run: cargo build -p ipfs-embed-cli -p ipfs-embed-harness --release
+            - name: Build netsim integration tests
+              if: contains(matrix.platform.target, 'linux-gnu')
+              run: cargo build -p ipfs-embed-cli -p harness --release
 
-    - name: Run bitswap integration test
-      if: contains(matrix.platform.target, 'linux-gnu')
-      run: ./target/release/bitswap
+            - name: Run bitswap integration test
+              if: contains(matrix.platform.target, 'linux-gnu')
+              run: ./target/release/bitswap
 
-    - name: Run sim-open integration test
-      if: contains(matrix.platform.target, 'linux-gnu')
-      run: ./target/release/sim_open
+            - name: Run sim-open integration test
+              if: contains(matrix.platform.target, 'linux-gnu')
+              run: ./target/release/sim_open
 
-  lint-rust:
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout sources
-      uses: actions/checkout@v2
+    lint-rust:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout sources
+              uses: actions/checkout@v2
 
-    - name: Cache cargo folder
-      uses: actions/cache@v1
-      with:
-        path: ~/.cargo
-        key: lint-cargo
+            - name: Cache cargo folder
+              uses: actions/cache@v1
+              with:
+                  path: ~/.cargo
+                  key: lint-cargo
 
-    - name: Install rust toolchain
-      uses: hecrj/setup-rust-action@v1
-      with:
-        rust-version: stable
-        components: clippy, rustfmt
+            - name: Install rust toolchain
+              uses: hecrj/setup-rust-action@v1
+              with:
+                  rust-version: stable
+                  components: clippy, rustfmt
 
-    - name: cargo fmt
-      run: cargo fmt --all -- --check
+            - name: cargo fmt
+              run: cargo fmt --all -- --check
 
-    - name: cargo clippy
-      run: cargo clippy --workspace --examples --tests --all-features -- -D warnings
+            - name: cargo clippy
+              run: cargo clippy --workspace --examples --tests --all-features -- -D warnings

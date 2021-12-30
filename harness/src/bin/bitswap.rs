@@ -1,14 +1,14 @@
 #[cfg(target_os = "linux")]
 fn main() -> anyhow::Result<()> {
     use anyhow::Context;
+    use harness::{MachineExt, MultiaddrExt};
     use ipfs_embed_cli::{Command, Event};
-    use ipfs_embed_harness::{MachineExt, MultiaddrExt};
     use libipld::alias;
     use std::time::Instant;
 
-    ipfs_embed_harness::build_bin()?;
+    harness::build_bin()?;
 
-    ipfs_embed_harness::run_netsim(|mut network, opts| async move {
+    harness::run_netsim(|mut network, opts| async move {
         let providers = 0..opts.n_providers;
         let consumers = opts.n_providers..(opts.n_providers + opts.n_consumers);
 
@@ -37,7 +37,7 @@ fn main() -> anyhow::Result<()> {
         }
         for i in 0..opts.n_spam {
             let alias = format!("passive-{}", i);
-            let (cid, blocks) = ipfs_embed_harness::build_tree(opts.tree_width, opts.tree_depth)?;
+            let (cid, blocks) = harness::build_tree(opts.tree_width, opts.tree_depth)?;
             for machine in network.machines_mut() {
                 machine.send(Command::Alias(alias.clone(), Some(cid)));
                 for block in blocks.iter().rev() {
@@ -49,7 +49,7 @@ fn main() -> anyhow::Result<()> {
         // create the blocks to be synced in n_providers nodes
         println!("creating test data");
         let root = alias!(root);
-        let (cid, blocks) = ipfs_embed_harness::build_tree(opts.tree_width, opts.tree_depth)?;
+        let (cid, blocks) = harness::build_tree(opts.tree_width, opts.tree_depth)?;
         for machine in &mut network.machines_mut()[providers] {
             machine.send(Command::Alias(root.to_string(), Some(cid)));
             for block in blocks.iter().rev() {

@@ -1,5 +1,6 @@
 use crate::net::config::NetworkConfig;
 use crate::net::peers::{AddressBook, AddressSource, Event, PeerInfo, SwarmEvents};
+use chrono::{DateTime, Utc};
 use fnv::FnvHashMap;
 use futures::channel::{mpsc, oneshot};
 use futures::stream::Stream;
@@ -305,13 +306,6 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<IdentifyEvent> for NetworkBack
         // When a peer opens a connection we only have it's outgoing address. The identify
         // protocol sends the listening address which needs to be registered with kademlia.
         if let IdentifyEvent::Received { peer_id, info } = event {
-            let local_peer_id = *self.peers.local_peer_id();
-            // source doesn't matter as it won't be added to address book.
-            self.add_address(
-                &local_peer_id,
-                info.observed_addr.clone(),
-                AddressSource::Peer,
-            );
             self.peers.set_info(&peer_id, info);
         }
     }
@@ -495,7 +489,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         self.peers.info(peer_id)
     }
 
-    pub fn connections(&self) -> impl Iterator<Item = (&PeerId, &Multiaddr)> + '_ {
+    pub fn connections(&self) -> impl Iterator<Item = (&PeerId, &Multiaddr, &DateTime<Utc>)> + '_ {
         self.peers.connections()
     }
 

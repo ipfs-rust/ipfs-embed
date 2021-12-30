@@ -41,7 +41,8 @@ mod peers;
 
 pub use crate::net::behaviour::{GossipEvent, QueryId, SyncEvent};
 pub use crate::net::config::*;
-pub use crate::net::peers::{AddressSource, Event, PeerInfo, Rtt, SwarmEvents};
+pub use crate::net::peers::{AddressSource, ConnectionFailure, Event, PeerInfo, Rtt, SwarmEvents};
+use chrono::{DateTime, Utc};
 pub use libp2p::core::connection::ListenerId;
 pub use libp2p::kad::record::{Key, Record};
 pub use libp2p::kad::{PeerRecord, Quorum};
@@ -76,7 +77,7 @@ impl<P: StoreParams> NetworkService<P> {
         let behaviour = NetworkBackendBehaviour::<P>::new(&mut config, store).await?;
 
         let tcp = {
-            let transport = TcpConfig::new().nodelay(true).port_reuse(true);
+            let transport = TcpConfig::new().nodelay(true).port_reuse(config.port_reuse);
             let transport = if let Some(psk) = config.psk {
                 let psk = PreSharedKey::new(psk);
                 EitherTransport::Left(
@@ -259,12 +260,12 @@ impl<P: StoreParams> NetworkService<P> {
         swarm.behaviour().peers().copied().collect()
     }
 
-    pub fn connections(&self) -> Vec<(PeerId, Multiaddr)> {
+    pub fn connections(&self) -> Vec<(PeerId, Multiaddr, DateTime<Utc>)> {
         let swarm = self.swarm.lock();
         swarm
             .behaviour()
             .connections()
-            .map(|(peer_id, addr)| (*peer_id, addr.clone()))
+            .map(|(peer_id, addr, dt)| (*peer_id, addr.clone(), *dt))
             .collect()
     }
 

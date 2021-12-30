@@ -1295,6 +1295,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-global-executor",
+ "async-process",
+ "escargot",
+ "futures",
+ "ipfs-embed-cli",
+ "libipld",
+ "libp2p",
+ "maplit",
+ "multihash",
+ "netsim-embed",
+ "rand 0.8.4",
+ "structopt",
+ "tempdir",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1537,10 +1559,12 @@ name = "ipfs-embed"
 version = "0.22.4"
 dependencies = [
  "anyhow",
+ "async-executor",
  "async-global-executor",
  "async-io",
  "async-std",
  "async-trait",
+ "chrono",
  "fnv",
  "futures",
  "futures-timer",
@@ -1558,6 +1582,7 @@ dependencies = [
  "pin-project 1.0.8",
  "prometheus",
  "rand 0.8.4",
+ "regex",
  "tempdir",
  "thiserror",
  "tide",
@@ -1574,32 +1599,15 @@ dependencies = [
  "anyhow",
  "async-process",
  "async-std",
+ "chrono",
  "ed25519-dalek",
  "ipfs-embed",
  "libipld",
  "multihash",
+ "parking_lot",
+ "serde",
+ "serde_json",
  "structopt",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "ipfs-embed-harness"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-global-executor",
- "async-process",
- "escargot",
- "futures",
- "ipfs-embed-cli",
- "libipld",
- "libp2p",
- "multihash",
- "netsim-embed",
- "rand 0.8.4",
- "structopt",
- "tempdir",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1649,6 +1657,12 @@ name = "itoa"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b71991ff56294aa922b450139ee08b3bfc70982c6b2c7562771375cf73542dd4"
+
+[[package]]
+name = "itoa"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aab8fc367588b89dcee83ab0fd66b72b50b72fa1904d7095045ace2b0c81c35"
 
 [[package]]
 name = "js-sys"
@@ -2276,6 +2290,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "maplit"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
+
+[[package]]
 name = "match_cfg"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2441,9 +2461,7 @@ dependencies = [
 
 [[package]]
 name = "netsim-embed"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "258b4524327a04ce1bb6a0667b7b93c7a5ed8b42415ea77255b1bb05c8a8965c"
+version = "0.6.0"
 dependencies = [
  "async-global-executor",
  "async-process",
@@ -2459,8 +2477,6 @@ dependencies = [
 [[package]]
 name = "netsim-embed-core"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2b92241116c80c5aa3905e98f2e3932b5e66be85b8290dbe4b209aac82b527d"
 dependencies = [
  "async-global-executor",
  "async-io",
@@ -2473,8 +2489,6 @@ dependencies = [
 [[package]]
 name = "netsim-embed-machine"
 version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8b12cb54c976fe69a4209735c65d70553cad88d60feed99d14c0fc362fe8e3c"
 dependencies = [
  "async-global-executor",
  "async-io",
@@ -2489,8 +2503,6 @@ dependencies = [
 [[package]]
 name = "netsim-embed-nat"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7513d04a25b4e34578cbf9f68ebde5b9d3177045c1f0eac85aa73b200643cef6"
 dependencies = [
  "futures",
  "log",
@@ -2501,8 +2513,6 @@ dependencies = [
 [[package]]
 name = "netsim-embed-router"
 version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43b108c88d477023d72a217ee21b6fbedac622d4a84499f3408fa9e8691fef0b"
 dependencies = [
  "async-global-executor",
  "futures",
@@ -2574,7 +2584,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7337d80c23c2d8b1349563981bc4fb531220733743ba8115454a67b181173f0d"
 dependencies = [
  "dtoa",
- "itoa",
+ "itoa 0.4.8",
  "open-metrics-client-derive-text-encode",
  "owning_ref",
 ]
@@ -3370,18 +3380,18 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.130"
+version = "1.0.132"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f12d06de37cf59146fbdecab66aa99f9fe4f78722e3607577a5375d66bd0c913"
+checksum = "8b9875c23cf305cd1fd7eb77234cbb705f21ea6a72c637a5c6db5fe4b8e7f008"
 dependencies = [
  "serde_derive",
 ]
 
 [[package]]
 name = "serde_derive"
-version = "1.0.130"
+version = "1.0.132"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7bc1a1ab1961464eae040d96713baa5a724a8152c1222492465b54322ec508b"
+checksum = "ecc0db5cb2556c0e558887d9bbdcf6ac4471e83ff66cf696e5419024d1606276"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3390,11 +3400,11 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.67"
+version = "1.0.73"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7f9e390c27c3c0ce8bc5d725f6e4d30a29d26659494aa4b17535f7522c5c950"
+checksum = "bcbd0344bc6533bc7ec56df11d42fb70f1b912351c0825ccb7211b59d8af7cf5"
 dependencies = [
- "itoa",
+ "itoa 1.0.1",
  "ryu",
  "serde",
 ]
@@ -3417,7 +3427,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edfa57a7f8d9c1d260a549e7224100f6c43d43f9103e06dd8b4095a9b2b43ce9"
 dependencies = [
  "form_urlencoded",
- "itoa",
+ "itoa 0.4.8",
  "ryu",
  "serde",
 ]

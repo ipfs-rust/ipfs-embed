@@ -19,6 +19,12 @@ pub struct NetworkConfig {
     /// Enable adding loopback addresses to the address book. Should be
     /// enabled during testing and disabled in production.
     pub enable_loopback: bool,
+    /// Enable binding to the listen port number when dialling peers
+    /// instead of using a random outgoing port. While this may allow
+    /// stricter firewall confiuration or shorter peer lists when interacting
+    /// with other IPFS implementations, it also opens up the possibility of
+    /// TCP simultaneous open, which leads to spurious dial errors.
+    pub port_reuse: bool,
     /// Manage addresses in the address book automatically. This removes
     /// them when an address is unreachable and removes the peer when there
     /// is a dial failure.
@@ -82,6 +88,7 @@ impl NetworkConfig {
         let node_key2 = Keypair::from_bytes(&node_key.to_bytes()).unwrap();
         Self {
             enable_loopback: true,
+            port_reuse: true,
             prune_addresses: true,
             node_name,
             node_key,

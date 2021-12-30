@@ -1,5 +1,6 @@
 use anyhow::Result;
-use fnv::FnvHashMap;
+use chrono::{DateTime, SecondsFormat::Millis, Utc};
+use fnv::{FnvHashMap, FnvHashSet};
 use futures::{channel::mpsc, stream::Stream};
 use lazy_static::lazy_static;
 use libp2p::{
@@ -18,6 +19,8 @@ use prometheus::{IntCounter, IntGauge, Registry};
 use std::{
     borrow::Cow,
     collections::VecDeque,
+    convert::TryInto,
+    net::IpAddr,
     pin::Pin,
     task::{Context, Poll},
     time::Duration,
@@ -50,6 +53,7 @@ pub enum Event {
     /// a new connection has been opened to the given peer
     ConnectionEstablished(PeerId, ConnectedPoint),
     /// a connection to the given peer has been closed
+    // FIXME add termination reason
     ConnectionClosed(PeerId, ConnectedPoint),
     /// the given peer signaled that its address has changed
     AddressChanged(PeerId, ConnectedPoint, ConnectedPoint),
@@ -72,7 +76,10 @@ pub struct PeerInfo {
     protocol_version: Option<String>,
     agent_version: Option<String>,
     protocols: Vec<String>,
-    addresses: FnvHashMap<Multiaddr, AddressSource>,
+    listeners: Vec<Multiaddr>,
+    addresses: FnvHashMap<Multiaddr, (AddressSource, DateTime<Utc>)>,
+    connections: FnvHashMap<Multiaddr, DateTime<Utc>>,
+    failures: VecDeque<ConnectionFailure>,
     rtt: Option<Rtt>,
 }
 
@@ -89,8 +96,20 @@ impl PeerInfo {
         self.protocols.iter().map(|s| &**s)
     }
 
-    pub fn addresses(&self) -> impl Iterator<Item = (&Multiaddr, AddressSource)> + '_ {
-        self.addresses.iter().map(|(addr, source)| (addr, *source))
+    pub fn listen_addresses(&self) -> impl Iterator<Item = &Multiaddr> {
+        self.listeners.iter()
+    }
+
+    pub fn addresses(
+        &self,
+    ) -> impl Iterator<Item = (&Multiaddr, AddressSource, DateTime<Utc>)> + '_ {
+        self.addresses
+            .iter()
+            .map(|(addr, (source, dt))| (addr, *source, *dt))
+    }
+
+    pub fn connections(&self) -> impl Iterator<Item = (&Multiaddr, DateTime<Utc>)> {
+        self.connections.iter().map(|(a, dt)| (a, *dt))
     }
 
     pub fn rtt(&self) -> Option<Duration> {
@@ -99,6 +118,65 @@ impl PeerInfo {
 
     pub fn full_rtt(&self) -> Option<Rtt> {
         self.rtt
+    }
+
+    pub fn recent_failures(&self) -> impl Iterator<Item = &ConnectionFailure> {
+        self.failures.iter()
+    }
+
+    fn push_failure(&mut self, f: ConnectionFailure) {
+        if self.failures.len() > 9 {
+            self.failures.pop_back();
+        }
+        if self
+            .addresses
+            .get(f.addr())
+            .iter()
+            .any(|(s, _dt)| s.is_to_probe())
+        {
+            self.addresses.remove(f.addr());
+        }
+        self.failures.push_front(f);
+    }
+
+    pub fn confirmed_addresses(&self) -> impl Iterator<Item = &Multiaddr> {
+        self.addresses
+            .iter()
+            .filter(|x| x.1 .0.is_confirmed())
+            .map(|x| x.0)
+    }
+
+    pub fn addresses_to_probe(&self) -> impl Iterator<Item = &Multiaddr> {
+        self.addresses
+            .iter()
+            .filter(|x| x.1 .0.is_to_probe())
+            .map(|x| x.0)
+    }
+
+    pub fn addresses_to_translate(&self) -> impl Iterator<Item = &Multiaddr> {
+        self.addresses
+            .iter()
+            .filter(|x| x.1 .0.is_to_translate())
+            .map(|x| x.0)
+    }
+
+    fn ingest_address(&mut self, addr: Multiaddr, source: AddressSource) -> Option<Multiaddr> {
+        let inserted = if let Some((src, dt)) = self.addresses.get_mut(&addr) {
+            if source >= *src {
+                *dt = Utc::now();
+                *src = source;
+                true
+            } else {
+                false
+            }
+        } else {
+            self.addresses.insert(addr.clone(), (source, Utc::now()));
+            true
+        };
+        (inserted && source.is_to_probe()).then(|| {
+            tracing::debug!("triggering dial to {} ({:?})", addr, source);
+            addr
+        })
     }
 }
 
@@ -152,12 +230,82 @@ impl Rtt {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum AddressSource {
-    Mdns,
+    Incoming,
+    Listen,
     Kad,
-    Peer,
+    Mdns,
     User,
+    Dial,
+}
+
+impl AddressSource {
+    pub fn is_confirmed(&self) -> bool {
+        matches!(self, AddressSource::Dial | AddressSource::User)
+    }
+    pub fn is_to_probe(&self) -> bool {
+        matches!(
+            self,
+            AddressSource::Listen | AddressSource::Kad | AddressSource::Mdns
+        )
+    }
+    pub fn is_to_translate(&self) -> bool {
+        matches!(self, AddressSource::Incoming)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionFailure {
+    DialError(Multiaddr, DateTime<Utc>, String),
+    #[allow(unused)]
+    PeerDisconnected(Multiaddr, DateTime<Utc>),
+    WeDisconnected(Multiaddr, DateTime<Utc>, String),
+}
+
+impl ConnectionFailure {
+    pub fn addr(&self) -> &Multiaddr {
+        match self {
+            ConnectionFailure::DialError(a, _, _) => a,
+            ConnectionFailure::PeerDisconnected(a, _) => a,
+            ConnectionFailure::WeDisconnected(a, _, _) => a,
+        }
+    }
+
+    pub fn time(&self) -> DateTime<Utc> {
+        match self {
+            ConnectionFailure::DialError(_, t, _) => *t,
+            ConnectionFailure::PeerDisconnected(_, t) => *t,
+            ConnectionFailure::WeDisconnected(_, t, _) => *t,
+        }
+    }
+}
+
+impl std::fmt::Display for ConnectionFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConnectionFailure::DialError(a, t, e) => write!(
+                f,
+                "outbound dial error for {} at {}: {}",
+                a,
+                t.to_rfc3339_opts(Millis, true),
+                e
+            ),
+            ConnectionFailure::PeerDisconnected(a, t) => write!(
+                f,
+                "{} disconnected at {}",
+                a,
+                t.to_rfc3339_opts(Millis, true)
+            ),
+            ConnectionFailure::WeDisconnected(a, t, e) => write!(
+                f,
+                "we disconnected from {} at {}: {}",
+                a,
+                t.to_rfc3339_opts(Millis, true),
+                e
+            ),
+        }
+    }
 }
 
 lazy_static! {
@@ -208,6 +356,7 @@ fn normalize_addr_ref<'a>(addr: &'a Multiaddr, peer: &PeerId) -> Cow<'a, Multiad
 
 trait MultiaddrExt {
     fn is_loopback(&self) -> bool;
+    fn peer_id(&self) -> Option<PeerId>;
 }
 
 impl MultiaddrExt for Multiaddr {
@@ -219,6 +368,12 @@ impl MultiaddrExt for Multiaddr {
         }
         true
     }
+    fn peer_id(&self) -> Option<PeerId> {
+        match self.iter().last() {
+            Some(Protocol::P2p(p)) => p.try_into().ok(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -228,8 +383,8 @@ pub struct AddressBook {
     local_node_name: String,
     local_peer_id: PeerId,
     local_public_key: PublicKey,
+    listeners: FnvHashSet<Multiaddr>,
     peers: FnvHashMap<PeerId, PeerInfo>,
-    connections: FnvHashMap<PeerId, Multiaddr>,
     event_stream: Vec<mpsc::UnboundedSender<Event>>,
     actions: VecDeque<NetworkBehaviourAction<void::Void, void::Void>>,
 }
@@ -248,8 +403,8 @@ impl AddressBook {
             local_node_name,
             local_peer_id,
             local_public_key,
+            listeners: Default::default(),
             peers: Default::default(),
-            connections: Default::default(),
             event_stream: Default::default(),
             actions: Default::default(),
         }
@@ -272,7 +427,7 @@ impl AddressBook {
             tracing::error!("attempting to dial self");
             return;
         }
-        tracing::trace!("dialing {}", peer);
+        tracing::debug!("request dialing {}", peer);
         self.actions.push_back(NetworkBehaviourAction::DialPeer {
             peer_id: *peer,
             condition: DialPeerCondition::Disconnected,
@@ -289,14 +444,15 @@ impl AddressBook {
         let discovered = !self.peers.contains_key(peer);
         let info = self.peers.entry(*peer).or_default();
         normalize_addr(&mut address, peer);
-        #[allow(clippy::map_entry)]
-        if !info.addresses.contains_key(&address) {
-            tracing::trace!("adding address {} from {:?}", address, source);
-            info.addresses.insert(address, source);
+        tracing::trace!(peer = %peer, "adding address {} from {:?}", address, source);
+        if let Some(address) = info.ingest_address(address, source) {
+            self.actions
+                .push_back(NetworkBehaviourAction::DialAddress { address })
         }
         if discovered {
             self.notify(Event::Discovered(*peer));
         }
+        self.notify(Event::NewInfo(*peer));
     }
 
     pub fn remove_address(&mut self, peer: &PeerId, address: &Multiaddr) {
@@ -311,12 +467,18 @@ impl AddressBook {
         self.peers.keys()
     }
 
-    pub fn connections(&self) -> impl Iterator<Item = (&PeerId, &Multiaddr)> + '_ {
-        self.connections.iter().map(|(peer, addr)| (peer, addr))
+    pub fn connections(&self) -> impl Iterator<Item = (&PeerId, &Multiaddr, &DateTime<Utc>)> + '_ {
+        self.peers
+            .iter()
+            .flat_map(|(peer, info)| info.connections.iter().map(move |(a, t)| (peer, a, t)))
     }
 
     pub fn is_connected(&self, peer: &PeerId) -> bool {
-        self.connections.contains_key(peer) || peer == self.local_peer_id()
+        self.peers
+            .get(peer)
+            .map(|info| !info.connections.is_empty())
+            .unwrap_or(false)
+            || peer == self.local_peer_id()
     }
 
     pub fn info(&self, peer_id: &PeerId) -> Option<&PeerInfo> {
@@ -343,6 +505,65 @@ impl AddressBook {
             info.protocol_version = Some(identify.protocol_version);
             info.agent_version = Some(identify.agent_version);
             info.protocols = identify.protocols;
+            info.listeners = identify.listen_addrs;
+
+            let listen_port = info
+                .listeners
+                .iter()
+                .filter_map(ip_port)
+                .collect::<FnvHashMap<_, _>>();
+
+            let common_port = listen_port.values().copied().collect::<FnvHashSet<_>>();
+            let common_port = if common_port.len() == 1 {
+                common_port.into_iter().next()
+            } else {
+                None
+            };
+
+            let mut translated = FnvHashSet::default();
+            let mut confirmed = FnvHashSet::default();
+            for addr in info.addresses_to_translate() {
+                if let Some((ip, p)) = ip_port(addr) {
+                    if let Some(lp) = listen_port.get(&ip) {
+                        if *lp == p && info.addresses[addr].0 == AddressSource::Incoming {
+                            confirmed.insert(addr.clone());
+                        } else {
+                            translated
+                                .insert(addr.replace(1, |_p| Some(Protocol::Tcp(*lp))).unwrap());
+                        }
+                    } else if let Some(cp) = common_port {
+                        translated.insert(addr.replace(1, |_p| Some(Protocol::Tcp(cp))).unwrap());
+                    }
+                }
+            }
+
+            info.addresses.retain(|_a, (s, _dt)| !s.is_to_translate());
+            info.addresses.extend(
+                confirmed
+                    .into_iter()
+                    .map(|addr| (addr, (AddressSource::Dial, Utc::now()))),
+            );
+
+            let loopback = self.enable_loopback;
+            translated.extend(
+                info.listeners
+                    .iter()
+                    .filter(|a| loopback || !a.is_loopback())
+                    .map(|a| normalize_addr_ref(a, peer_id).into_owned()),
+            );
+
+            for addr in translated {
+                let mut tcp = addr.clone();
+                tcp.pop();
+                if self.listeners.contains(&tcp) {
+                    continue;
+                }
+                if let Some(address) = info.ingest_address(addr, AddressSource::Listen) {
+                    self.actions
+                        .push_back(NetworkBehaviourAction::DialAddress { address })
+                }
+            }
+            self.notify(Event::NewInfo(*peer_id));
         }
     }
 
@@ -372,6 +593,20 @@ impl AddressBook {
     }
 }
 
+fn ip_port(m: &Multiaddr) -> Option<(IpAddr, u16)> {
+    let mut iter = m.iter();
+    let addr = match iter.next()? {
+        Protocol::Ip4(ip) => IpAddr::V4(ip),
+        Protocol::Ip6(ip) => IpAddr::V6(ip),
+        _ => return None,
+    };
+    let port = match iter.next()? {
+        Protocol::Tcp(p) => p,
+        _ => return None,
+    };
+    Some((addr, port))
+}
+
 pub struct SwarmEvents(mpsc::UnboundedReceiver<Event>);
 
 impl Stream for SwarmEvents {
@@ -392,7 +627,7 @@ impl NetworkBehaviour for AddressBook {
 
     fn addresses_of_peer(&mut self, peer_id: &PeerId) -> Vec<Multiaddr> {
         if let Some(info) = self.peers.get(peer_id) {
-            info.addresses().map(|(addr, _)| addr.clone()).collect()
+            info.confirmed_addresses().cloned().collect()
         } else {
             vec![]
         }
@@ -437,8 +672,17 @@ impl NetworkBehaviour for AddressBook {
             out = conn.is_dialer(),
             "connection established"
         );
-        self.add_address(peer_id, address.clone(), AddressSource::Peer);
-        self.connections.insert(*peer_id, address);
+        let src = if conn.is_dialer() {
+            AddressSource::Dial
+        } else {
+            AddressSource::Incoming
+        };
+        self.add_address(peer_id, address.clone(), src);
+        self.peers
+            .entry(*peer_id)
+            .or_default()
+            .connections
+            .insert(address, Utc::now());
         self.notify(Event::ConnectionEstablished(*peer_id, conn.clone()));
     }
 
@@ -449,6 +693,8 @@ impl NetworkBehaviour for AddressBook {
         old: &ConnectedPoint,
         new: &ConnectedPoint,
     ) {
+        let mut old_addr = old.get_remote_address().clone();
+        normalize_addr(&mut old_addr, peer_id);
         let mut new_addr = new.get_remote_address().clone();
         normalize_addr(&mut new_addr, peer_id);
         tracing::debug!(
@@ -457,8 +703,15 @@ impl NetworkBehaviour for AddressBook {
             out = new.is_dialer(),
             "address changed"
         );
-        self.add_address(peer_id, new_addr.clone(), AddressSource::Peer);
-        self.connections.insert(*peer_id, new_addr);
+        let src = if new.is_dialer() {
+            AddressSource::Dial
+        } else {
+            AddressSource::Incoming
+        };
+        self.add_address(peer_id, new_addr.clone(), src);
+        let entry = self.peers.entry(*peer_id).or_default();
+        entry.connections.remove(&old_addr);
+        entry.connections.insert(new_addr, Utc::now());
         self.notify(Event::AddressChanged(*peer_id, old.clone(), new.clone()));
     }
 
@@ -475,7 +728,13 @@ impl NetworkBehaviour for AddressBook {
             out = conn.is_dialer(),
             "connection closed"
         );
-        self.connections.remove(peer_id);
+        let entry = self.peers.entry(*peer_id).or_default();
+        entry.connections.remove(&addr);
+        entry.push_failure(ConnectionFailure::WeDisconnected(
+            addr,
+            Utc::now(),
+            "unknown".to_owned(),
+        ));
         self.notify(Event::ConnectionClosed(*peer_id, conn.clone()));
     }
 
@@ -485,7 +744,8 @@ impl NetworkBehaviour for AddressBook {
         addr: &Multiaddr,
         error: &dyn std::error::Error,
     ) {
-        if let Some(peer_id) = peer_id {
+        let peer_id = peer_id.copied().or_else(|| addr.peer_id());
+        if let Some(ref peer_id) = peer_id {
             let still_connected = self.is_connected(peer_id);
             let mut naddr = addr.clone();
             normalize_addr(&mut naddr, peer_id);
@@ -496,6 +756,14 @@ impl NetworkBehaviour for AddressBook {
                 still_connected = still_connected,
                 "dial failure"
             );
+            self.peers
+                .entry(*peer_id)
+                .or_default()
+                .push_failure(ConnectionFailure::DialError(
+                    addr.clone(),
+                    Utc::now(),
+                    error.clone(),
+                ));
             self.notify(Event::DialFailure(*peer_id, addr.clone(), error));
             if self.is_connected(peer_id) {
                 return;
@@ -541,12 +809,14 @@ impl NetworkBehaviour for AddressBook {
     fn inject_new_listen_addr(&mut self, id: ListenerId, addr: &Multiaddr) {
         tracing::trace!("listener {:?}: new listen addr {}", id, addr);
         LISTEN_ADDRS.inc();
+        self.listeners.insert(addr.clone());
         self.notify(Event::NewListenAddr(id, addr.clone()));
     }
 
     fn inject_expired_listen_addr(&mut self, id: ListenerId, addr: &Multiaddr) {
         tracing::trace!("listener {:?}: expired listen addr {}", id, addr);
         LISTEN_ADDRS.dec();
+        self.listeners.remove(addr);
         self.notify(Event::ExpiredListenAddr(id, addr.clone()));
     }
 
@@ -584,7 +854,22 @@ impl NetworkBehaviour for AddressBook {
 mod tests {
     use super::*;
     use crate::generate_keypair;
-    use futures::stream::StreamExt;
+    use async_executor::LocalExecutor;
+    use futures::{future::ready, stream::StreamExt};
+    use libp2p_quic::ToLibp2p;
+    use regex::Regex;
+    use std::cell::RefCell;
+    use Event::*;
+
+    #[test]
+    fn address_source_order() {
+        use AddressSource::*;
+        assert!(Dial > User);
+        assert!(User > Mdns);
+        assert!(Mdns > Kad);
+        assert!(Kad > Listen);
+        assert!(Listen > Incoming);
+    }
 
     #[async_std::test]
     async fn test_dial_basic() {
@@ -604,7 +889,7 @@ mod tests {
         let error = std::io::Error::new(std::io::ErrorKind::Other, "my error");
         book.add_address(&peer_a, addr_1.clone(), AddressSource::Mdns);
         book.add_address(&peer_a, addr_1_2, AddressSource::User);
-        book.add_address(&peer_a, addr_2.clone(), AddressSource::Peer);
+        book.add_address(&peer_a, addr_2.clone(), AddressSource::Incoming);
         assert_eq!(stream.next().await, Some(Event::Discovered(peer_a)));
         let peers = book.peers().collect::<Vec<_>>();
         assert_eq!(peers, vec![&peer_a]);
@@ -649,7 +934,7 @@ mod tests {
         let error = std::io::Error::new(std::io::ErrorKind::Other, "my error");
         book.add_address(&peer_a, addr_1.clone(), AddressSource::Mdns);
         assert_eq!(stream.next().await, Some(Event::Discovered(peer_a)));
-        book.add_address(&peer_a, addr_2.clone(), AddressSource::Peer);
+        book.add_address(&peer_a, addr_2.clone(), AddressSource::Incoming);
         book.inject_addr_reach_failure(Some(&peer_a), &addr_1, &error);
         book.inject_dial_failure(&peer_a);
         // book.poll
@@ -677,5 +962,298 @@ mod tests {
         #[allow(clippy::needless_collect)]
         let peers = book.peers().collect::<Vec<_>>();
         assert!(peers.is_empty());
+    }
+
+    #[test]
+    fn from_docker_host() {
+        let peer_a = PeerId::random();
+        let addr_a_1: Multiaddr = "/ip4/10.0.0.2/tcp/4001".parse().unwrap();
+
+        let mut book = AddressBook::new(
+            peer_a,
+            "name".to_owned(),
+            generate_keypair().public,
+            false,
+            false,
+        );
+        let events = RefCell::new(Vec::new());
+        let next = {
+            let swarm = LocalExecutor::new();
+            swarm
+                .spawn(book.swarm_events().for_each(|e| {
+                    events.borrow_mut().push(e);
+                    ready(())
+                }))
+                .detach();
+            let events = &events;
+            move || {
+                while swarm.try_tick() {}
+                std::mem::take(&mut *events.borrow_mut())
+            }
+        };
+
+        let key_b = generate_keypair().to_public();
+        let peer_b = PeerId::from(&key_b);
+        let addr_b_1: Multiaddr = "/ip4/10.0.0.10/tcp/57634".parse().unwrap();
+        let addr_b_1p = addr_b_1.clone().with(Protocol::P2p(peer_b.into()));
+        let addr_b_2: Multiaddr = "/ip4/10.0.0.10/tcp/4001".parse().unwrap();
+        let addr_b_2p = addr_b_2.clone().with(Protocol::P2p(peer_b.into()));
+        let addr_b_3: Multiaddr = "/ip4/172.17.0.3/tcp/4001".parse().unwrap();
+        let addr_b_3p = addr_b_3.clone().with(Protocol::P2p(peer_b.into()));
+        let addr_b_4: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
+
+        let id = ConnectionId::new(1);
+        let cp = ConnectedPoint::Listener {
+            local_addr: addr_a_1.clone(),
+            send_back_addr: addr_b_1,
+        };
+        book.inject_connection_established(&peer_b, &id, &cp);
+        assert_eq!(
+            next(),
+            vec![
+                Discovered(peer_b),
+                NewInfo(peer_b),
+                ConnectionEstablished(peer_b, cp.clone())
+            ]
+        );
+        assert_eq!(dials(&mut book), vec![]);
+        assert_eq!(
+            addrs(&book, peer_b),
+            vec![(addr_b_1p, AddressSource::Incoming)]
+        );
+
+        let info = IdentifyInfo {
+            public_key: key_b,
+            protocol_version: "my protocol".to_owned(),
+            agent_version: "my agent".to_owned(),
+            listen_addrs: vec![addr_b_2, addr_b_3, addr_b_4],
+            protocols: vec!["my proto".to_owned()],
+            observed_addr: addr_a_1,
+        };
+        book.set_info(&peer_b, info);
+        assert_eq!(next(), vec![NewInfo(peer_b)]);
+        assert_eq!(dials(&mut book), vec![addr_b_2p.clone(), addr_b_3p.clone()]);
+        assert_eq!(
+            addrs(&book, peer_b),
+            vec![
+                (addr_b_2p.clone(), AddressSource::Listen),
+                (addr_b_3p.clone(), AddressSource::Listen)
+            ]
+        );
+
+        let id2 = ConnectionId::new(2);
+        let cp2 = ConnectedPoint::Dialer {
+            address: addr_b_2p.clone(),
+        };
+        book.inject_connection_established(&peer_b, &id2, &cp2);
+        assert_eq!(
+            next(),
+            vec![NewInfo(peer_b), ConnectionEstablished(peer_b, cp2)]
+        );
+        assert_eq!(dials(&mut book), vec![]);
+        assert_eq!(
+            addrs(&book, peer_b),
+            vec![
+                (addr_b_2p.clone(), AddressSource::Dial),
+                (addr_b_3p.clone(), AddressSource::Listen)
+            ]
+        );
+
+        let error = anyhow::anyhow!("didn’t work, mate!");
+        book.inject_addr_reach_failure(Some(&peer_b), &addr_b_3p, error.as_ref());
+        assert_eq!(
+            next(),
+            vec![DialFailure(
+                peer_b,
+                addr_b_3p,
+                "didn’t work, mate!".to_owned()
+            )]
+        );
+        assert_eq!(dials(&mut book), vec![]);
+        assert_eq!(addrs(&book, peer_b), vec![(addr_b_2p, AddressSource::Dial)]);
+    }
+
+    #[test]
+    fn from_docker_container() {
+        let peer_a = PeerId::random();
+        let addr_a_1: Multiaddr = "/ip4/10.0.0.2/tcp/4001".parse().unwrap();
+
+        let mut book = AddressBook::new(
+            peer_a,
+            "name".to_owned(),
+            generate_keypair().public,
+            false,
+            false,
+        );
+        let events = RefCell::new(Vec::new());
+        let next = {
+            let swarm = LocalExecutor::new();
+            swarm
+                .spawn(book.swarm_events().for_each(|e| {
+                    events.borrow_mut().push(e);
+                    ready(())
+                }))
+                .detach();
+            let events = &events;
+            move || {
+                while swarm.try_tick() {}
+                std::mem::take(&mut *events.borrow_mut())
+            }
+        };
+
+        let key_b = generate_keypair().to_public();
+        let peer_b = PeerId::from(&key_b);
+        let addr_b_1: Multiaddr = "/ip4/10.0.0.10/tcp/57634".parse().unwrap();
+        let addr_b_1p = addr_b_1.clone().with(Protocol::P2p(peer_b.into()));
+        let addr_b_2: Multiaddr = "/ip4/10.0.0.10/tcp/4001".parse().unwrap();
+        let addr_b_2p = addr_b_2.clone().with(Protocol::P2p(peer_b.into()));
+        let addr_b_3: Multiaddr = "/ip4/172.17.0.3/tcp/4001".parse().unwrap();
+        let addr_b_3p = addr_b_3.clone().with(Protocol::P2p(peer_b.into()));
+        let addr_b_4: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
+
+        let id = ConnectionId::new(1);
+        let cp = ConnectedPoint::Listener {
+            local_addr: addr_a_1.clone(),
+            send_back_addr: addr_b_1,
+        };
+        book.inject_connection_established(&peer_b, &id, &cp);
+        assert_eq!(
+            next(),
+            vec![
+                Discovered(peer_b),
+                NewInfo(peer_b),
+                ConnectionEstablished(peer_b, cp.clone())
+            ]
+        );
+        assert_eq!(dials(&mut book), vec![]);
+        assert_eq!(
+            addrs(&book, peer_b),
+            vec![(addr_b_1p, AddressSource::Incoming)]
+        );
+
+        let info = IdentifyInfo {
+            public_key: key_b.clone(),
+            protocol_version: "my protocol".to_owned(),
+            agent_version: "my agent".to_owned(),
+            listen_addrs: vec![addr_b_3.clone(), addr_b_4.clone()],
+            protocols: vec!["my proto".to_owned()],
+            observed_addr: addr_a_1.clone(),
+        };
+        book.set_info(&peer_b, info);
+        assert_eq!(next(), vec![NewInfo(peer_b)]);
+        assert_eq!(dials(&mut book), vec![addr_b_2p.clone(), addr_b_3p.clone()]);
+        assert_eq!(
+            addrs(&book, peer_b),
+            vec![
+                (addr_b_2p.clone(), AddressSource::Listen),
+                (addr_b_3p.clone(), AddressSource::Listen)
+            ]
+        );
+
+        // here we assume that our observeration of that peer’s address will eventually be
+        // included by that peer in its Identify info
+
+        let info = IdentifyInfo {
+            public_key: key_b,
+            protocol_version: "my protocol".to_owned(),
+            agent_version: "my agent".to_owned(),
+            listen_addrs: vec![addr_b_2, addr_b_3, addr_b_4],
+            protocols: vec!["my proto".to_owned()],
+            observed_addr: addr_a_1,
+        };
+        book.set_info(&peer_b, info);
+        assert_eq!(next(), vec![NewInfo(peer_b)]);
+        assert_eq!(dials(&mut book), vec![addr_b_2p.clone(), addr_b_3p.clone()]);
+        assert_eq!(
+            addrs(&book, peer_b),
+            vec![
+                (addr_b_2p.clone(), AddressSource::Listen),
+                (addr_b_3p.clone(), AddressSource::Listen)
+            ]
+        );
+
+        let error = anyhow::anyhow!("play it again, Sam");
+        book.inject_addr_reach_failure(Some(&peer_b), &addr_b_3p, error.as_ref());
+        assert_eq!(
+            next(),
+            vec![DialFailure(
+                peer_b,
+                addr_b_3p,
+                "play it again, Sam".to_owned()
+            )]
+        );
+        assert_eq!(dials(&mut book), vec![]);
+        assert_eq!(
+            addrs(&book, peer_b),
+            vec![(addr_b_2p.clone(), AddressSource::Listen)]
+        );
+
+        let id2 = ConnectionId::new(2);
+        let cp2 = ConnectedPoint::Dialer {
+            address: addr_b_2p.clone(),
+        };
+        book.inject_connection_established(&peer_b, &id2, &cp2);
+        assert_eq!(
+            next(),
+            vec![NewInfo(peer_b), ConnectionEstablished(peer_b, cp2)]
+        );
+        assert_eq!(dials(&mut book), vec![]);
+        assert_eq!(
+            addrs(&book, peer_b),
+            vec![(addr_b_2p.clone(), AddressSource::Dial)]
+        );
+
+        book.inject_addr_reach_failure(None, &addr_b_2p, error.as_ref());
+        assert_eq!(
+            next(),
+            vec![DialFailure(
+                peer_b,
+                addr_b_2p.clone(),
+                "play it again, Sam".to_owned()
+            )]
+        );
+        assert_eq!(dials(&mut book), vec![]);
+        assert_eq!(addrs(&book, peer_b), vec![(addr_b_2p, AddressSource::Dial)]);
+
+        let dates = Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z").unwrap();
+        let addrs =
+            Regex::new(r"/ip./(?P<a>[0-9a-fA-F.:]+)/tcp/(?P<p>\d+)/p2p/[0-9a-zA-Z]+").unwrap();
+        assert_eq!(
+            book.info(&peer_b)
+                .unwrap()
+                .recent_failures()
+                .map(|f| addrs
+                    .replace_all(dates.replace_all(&*f.to_string(), "XXX").as_ref(), "$a:$p")
+                    .into_owned())
+                .collect::<Vec<_>>(),
+            vec![
+                "outbound dial error for 10.0.0.10:4001 at XXX: play it again, Sam",
+                "outbound dial error for 172.17.0.3:4001 at XXX: play it again, Sam"
+            ]
+        );
+    }
+
+    fn addrs(book: &AddressBook, peer_id: PeerId) -> Vec<(Multiaddr, AddressSource)> {
+        let mut v = book
+            .info(&peer_id)
+            .unwrap()
+            .addresses()
+            .map(|(a, s, _dt)| (a.clone(), s))
+            .collect::<Vec<_>>();
+        v.sort();
+        v
+    }
+
+    fn dials(book: &mut AddressBook) -> Vec<Multiaddr> {
+        let mut v = book
+            .actions
+            .drain(..)
+            .filter_map(|a| match a {
+                NetworkBehaviourAction::DialAddress { address } => Some(address),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        v.sort();
+        v
     }
 }

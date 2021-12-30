@@ -25,15 +25,17 @@ pub use crate::db::StorageService;
 pub use crate::db::{StorageConfig, TempPin};
 pub use crate::net::Rtt;
 pub use crate::net::{
-    generate_keypair, AddressRecord, AddressSource, BitswapConfig, BroadcastConfig, DnsConfig,
-    DocId, Event, GossipEvent, GossipsubConfig, Head, IdentifyConfig, KadConfig, Key, Keypair,
-    ListenerEvent, ListenerId, LocalStreamWriter, MdnsConfig, Multiaddr, NetworkConfig, PeerId,
-    PeerInfo, PeerRecord, PingConfig, PublicKey, Quorum, Record, SecretKey, SignedHead, StreamId,
-    StreamReader, SwarmEvents, SyncEvent, SyncQuery, ToLibp2p, TransportConfig,
+    generate_keypair, AddressRecord, AddressSource, BitswapConfig, BroadcastConfig,
+    ConnectionFailure, DnsConfig, DocId, Event, GossipEvent, GossipsubConfig, Head, IdentifyConfig,
+    KadConfig, Key, Keypair, ListenerEvent, ListenerId, LocalStreamWriter, MdnsConfig, Multiaddr,
+    NetworkConfig, PeerId, PeerInfo, PeerRecord, PingConfig, PublicKey, Quorum, Record, SecretKey,
+    SignedHead, StreamId, StreamReader, SwarmEvents, SyncEvent, SyncQuery, ToLibp2p,
+    TransportConfig,
 };
 use crate::net::{BitswapStore, NetworkService};
 #[cfg(feature = "telemetry")]
 pub use crate::telemetry::telemetry;
+use chrono::{DateTime, Utc};
 pub use db::Batch;
 pub use executor::Executor;
 pub use libipld::{store::DefaultParams, Block, Cid};
@@ -203,7 +205,7 @@ where
     }
 
     /// Returns a list of connected peers.
-    pub fn connections(&self) -> Vec<(PeerId, Multiaddr)> {
+    pub fn connections(&self) -> Vec<(PeerId, Multiaddr, DateTime<Utc>)> {
         self.network.connections()
     }
 

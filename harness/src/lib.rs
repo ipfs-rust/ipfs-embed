@@ -6,9 +6,13 @@ use ipfs_embed_cli::{Command, Config, Event};
 use libipld::cbor::DagCborCodec;
 use libipld::multihash::Code;
 use libipld::{Block, Cid, DagCbor, DefaultParams};
+use libp2p::multiaddr::Protocol;
 use libp2p::{multiaddr, Multiaddr, PeerId};
-use netsim_embed::{DelayBuffer, Ipv4Range, Netsim};
+use netsim_embed::{DelayBuffer, Ipv4Range, MachineId, Netsim};
 use rand::RngCore;
+use std::collections::HashMap;
+use std::fmt::{Debug, Display};
+use std::str::FromStr;
 use std::time::Duration;
 use structopt::StructOpt;
 use tempdir::TempDir;
@@ -38,6 +42,9 @@ pub struct HarnessOpts {
 
     #[structopt(long, default_value = "4")]
     pub tree_depth: u64,
+
+    #[structopt(long)]
+    pub disable_port_reuse: bool,
 }
 
 pub trait MachineExt {
@@ -67,6 +74,39 @@ impl MultiaddrExt for Multiaddr {
             }
         }
         true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Provider,
+    Consumer,
+    Idle,
+}
+pub trait NetsimExt {
+    fn role(&self, opts: &HarnessOpts, r: Role) -> HashMap<MachineId, (PeerId, Multiaddr)>;
+}
+impl<C, E> NetsimExt for Netsim<C, E>
+where
+    C: Display + Send + 'static,
+    E: FromStr + Send + 'static,
+    E::Err: Display + Debug + Send + Sync,
+{
+    fn role(&self, opts: &HarnessOpts, r: Role) -> HashMap<MachineId, (PeerId, Multiaddr)> {
+        let range = match r {
+            Role::Provider => 0..opts.n_providers,
+            Role::Consumer => opts.n_providers..(opts.n_providers + opts.n_consumers),
+            Role::Idle => (opts.n_providers + opts.n_consumers)..opts.n_nodes,
+        };
+        self.machines()[range]
+            .iter()
+            .map(|m| {
+                let peer = m.peer_id();
+                let mut addr = m.multiaddr();
+                addr.push(Protocol::P2p(peer.into()));
+                (m.id(), (peer, addr))
+            })
+            .collect()
     }
 }
 
@@ -101,6 +141,7 @@ where
                 bootstrap: vec![],
                 external: vec![],
                 enable_mdns: opts.enable_mdns,
+                disable_port_reuse: opts.disable_port_reuse,
             };
             let mut delay = DelayBuffer::new();
             delay.set_delay(Duration::from_millis(opts.delay_ms));
@@ -173,8 +214,9 @@ pub fn build_bin() -> Result<()> {
     use escargot::CargoBuild;
 
     for msg in CargoBuild::new()
-        .manifest_path("../cli/Cargo.toml")
+        .manifest_path("cli/Cargo.toml")
         .bin("ipfs-embed-cli")
+        .current_release()
         .exec()?
     {
         match msg?.decode()? {
@@ -189,9 +231,7 @@ pub fn build_bin() -> Result<()> {
                     eprintln!("{}", msg);
                 }
             }
-            escargot::format::Message::BuildScriptExecuted(x) => {
-                eprintln!("{:?} (build)", x.package_id);
-            }
+            escargot::format::Message::BuildScriptExecuted(_) => {}
             escargot::format::Message::Unknown => {}
         }
     }
