@@ -76,19 +76,54 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        for id in providers.keys() {
-            let m = sim.machine(*id);
-            for (peer, _addr) in consumers.values() {
-                m.select(|e| {
-                    matches!(e, Event::PeerInfo(p, i) if p == peer && (
-                        // port_reuse unfortunately means that the NATed port is added to listeners
-                        // by GenTcp, sent via Identify, and thus promoted to Dial
-                        i.addresses == hashmap!(i.connections[0].clone() => "Dial".to_owned()) ||
-                        (opts.disable_port_reuse && i.addresses.is_empty())
-                    ))
-                    .then(|| ())
-                })
-                .await;
+        if opts.disable_port_reuse {
+            for id in providers.keys() {
+                let m = sim.machine(*id);
+                for (peer, _addr) in consumers.values() {
+                    m.select(|e| {
+                        matches!(e, Event::PeerInfo(p, i) if p == peer && i.addresses.is_empty())
+                            .then(|| ())
+                    })
+                    .await;
+                }
+            }
+        } else {
+            for id in providers.keys() {
+                let m = sim.machine(*id);
+                for (peer, _addr) in consumers.values() {
+                    m.select(|e| {
+                        matches!(e, Event::PeerInfo(p, i) if p == peer && (
+                            // port_reuse unfortunately means that the NATed port is added to listeners
+                            // by GenTcp, sent via Identify, but not falsifiable because we can’t attempt
+                            // to dial while the connection exists
+                            i.addresses == hashmap!(i.connections[0].clone() => "Candidate".to_owned())
+                        ))
+                        .then(|| ())
+                    })
+                    .await;
+                }
+                m.drain();
+            }
+
+            // now disconnect the consumers so that the providers will try to dial and falsify the addresses
+            for id in consumers.keys() {
+                sim.machine(*id).down();
+            }
+
+            for id in providers.keys() {
+                let m = sim.machine(*id);
+                for (peer, _addr) in consumers.values() {
+                    m.select_draining(|e| {
+                        matches!(e, Event::Disconnected(p) if p == peer).then(|| ())
+                    })
+                    .await;
+                    m.send(Command::Dial(*peer));
+                    m.select(|e| {
+                        // prune_addresses will remove the peer when a failure happens while not connected
+                        matches!(e, Event::PeerRemoved(p) if p == peer).then(|| ())
+                    })
+                    .await;
+                }
             }
         }
 

@@ -37,11 +37,16 @@ use std::time::Duration;
 mod behaviour;
 mod config;
 mod p2p_wrapper;
+mod peer_info;
 mod peers;
+#[cfg(test)]
+mod tests;
 
+pub use self::peer_info::Direction;
 pub use crate::net::behaviour::{GossipEvent, QueryId, SyncEvent};
 pub use crate::net::config::*;
-pub use crate::net::peers::{AddressSource, ConnectionFailure, Event, PeerInfo, Rtt, SwarmEvents};
+pub use crate::net::peer_info::{AddressSource, ConnectionFailure, PeerInfo, Rtt};
+pub use crate::net::peers::{Event, SwarmEvents};
 use chrono::{DateTime, Utc};
 pub use libp2p::core::connection::ListenerId;
 pub use libp2p::kad::record::{Key, Record};
@@ -260,12 +265,12 @@ impl<P: StoreParams> NetworkService<P> {
         swarm.behaviour().peers().copied().collect()
     }
 
-    pub fn connections(&self) -> Vec<(PeerId, Multiaddr, DateTime<Utc>)> {
+    pub fn connections(&self) -> Vec<(PeerId, Multiaddr, DateTime<Utc>, Direction)> {
         let swarm = self.swarm.lock();
         swarm
             .behaviour()
             .connections()
-            .map(|(peer_id, addr, dt)| (*peer_id, addr.clone(), *dt))
+            .map(|(peer_id, addr, dt, dir)| (peer_id, addr.clone(), dt, dir))
             .collect()
     }
 

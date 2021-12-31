@@ -196,6 +196,7 @@ pub enum Event {
     Bootstrapped,
     NewHead(StreamId, u64),
     PeerInfo(PeerId, PeerInfoIo),
+    PeerRemoved(PeerId),
     DialFailure(PeerId, Multiaddr, String),
     ConnectionEstablished(PeerId, Multiaddr),
     ConnectionClosed(PeerId, Multiaddr),
@@ -223,7 +224,7 @@ impl From<PeerInfo> for PeerInfoIo {
                 .addresses()
                 .map(|(a, s, _dt)| (a.clone(), format!("{:?}", s)))
                 .collect(),
-            connections: info.connections().map(|(a, _dt)| a.clone()).collect(),
+            connections: info.connections().map(|(a, ..)| a.clone()).collect(),
             failures: info.recent_failures().map(ToString::to_string).collect(),
         }
     }
@@ -257,6 +258,7 @@ impl std::fmt::Display for Event {
             Self::PeerInfo(p, i) => {
                 write!(f, "<peer-info {} {}", p, serde_json::to_string(i).unwrap())?
             }
+            Self::PeerRemoved(id) => write!(f, "<peer-removed {}", id)?,
             Self::DialFailure(p, a, e) => write!(f, "<dial-failure {} {} {}", p, a, e)?,
             Self::ConnectionEstablished(p, a) => write!(f, "<connection-established {} {}", p, a)?,
             Self::ConnectionClosed(p, a) => write!(f, "<connection-closed {} {}", p, a)?,
@@ -339,6 +341,10 @@ impl std::str::FromStr for Event {
                 let s = parts.collect::<Vec<_>>().join(" ");
                 let info = serde_json::from_str(s.as_str())?;
                 Self::PeerInfo(id, info)
+            }
+            Some("<peer-removed") => {
+                let id = parts.next().unwrap().parse()?;
+                Self::PeerRemoved(id)
             }
             Some("<dial-failure") => {
                 let id = parts.next().unwrap().parse()?;

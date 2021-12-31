@@ -1,5 +1,7 @@
+use super::peer_info::Direction;
 use crate::net::config::NetworkConfig;
-use crate::net::peers::{AddressBook, AddressSource, Event, PeerInfo, SwarmEvents};
+use crate::net::peers::{AddressBook, Event, SwarmEvents};
+use crate::{AddressSource, PeerInfo};
 use chrono::{DateTime, Utc};
 use fnv::FnvHashMap;
 use futures::channel::{mpsc, oneshot};
@@ -439,6 +441,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
                 peer_id,
                 node_name,
                 public,
+                config.port_reuse,
                 config.enable_loopback,
                 config.prune_addresses,
             ),
@@ -489,7 +492,9 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         self.peers.info(peer_id)
     }
 
-    pub fn connections(&self) -> impl Iterator<Item = (&PeerId, &Multiaddr, &DateTime<Utc>)> + '_ {
+    pub fn connections(
+        &self,
+    ) -> impl Iterator<Item = (PeerId, &Multiaddr, DateTime<Utc>, Direction)> {
         self.peers.connections()
     }
 

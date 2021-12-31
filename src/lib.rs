@@ -23,14 +23,13 @@ use std::{collections::HashSet, path::Path, sync::Arc};
 
 pub use crate::db::StorageService;
 pub use crate::db::{StorageConfig, TempPin};
-pub use crate::net::Rtt;
 pub use crate::net::{
     generate_keypair, AddressRecord, AddressSource, BitswapConfig, BroadcastConfig,
-    ConnectionFailure, DnsConfig, DocId, Event, GossipEvent, GossipsubConfig, Head, IdentifyConfig,
-    KadConfig, Key, Keypair, ListenerEvent, ListenerId, LocalStreamWriter, MdnsConfig, Multiaddr,
-    NetworkConfig, PeerId, PeerInfo, PeerRecord, PingConfig, PublicKey, Quorum, Record, SecretKey,
-    SignedHead, StreamId, StreamReader, SwarmEvents, SyncEvent, SyncQuery, ToLibp2p,
-    TransportConfig,
+    ConnectionFailure, Direction, DnsConfig, DocId, Event, GossipEvent, GossipsubConfig, Head,
+    IdentifyConfig, KadConfig, Key, Keypair, ListenerEvent, ListenerId, LocalStreamWriter,
+    MdnsConfig, Multiaddr, NetworkConfig, PeerId, PeerInfo, PeerRecord, PingConfig, PublicKey,
+    Quorum, Record, Rtt, SecretKey, SignedHead, StreamId, StreamReader, SwarmEvents, SyncEvent,
+    SyncQuery, ToLibp2p, TransportConfig,
 };
 use crate::net::{BitswapStore, NetworkService};
 #[cfg(feature = "telemetry")]
@@ -205,7 +204,7 @@ where
     }
 
     /// Returns a list of connected peers.
-    pub fn connections(&self) -> Vec<(PeerId, Multiaddr, DateTime<Utc>)> {
+    pub fn connections(&self) -> Vec<(PeerId, Multiaddr, DateTime<Utc>, Direction)> {
         self.network.connections()
     }
 
