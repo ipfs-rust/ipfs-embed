@@ -1,10 +1,11 @@
 #[cfg(target_os = "linux")]
 fn main() -> anyhow::Result<()> {
     use anyhow::Context;
-    use harness::{MachineExt, MultiaddrExt, NetsimExt};
+    use harness::{MachineExt, MultiaddrExt, NetsimExt, MyFutureExt};
     use ipfs_embed_cli::{Command, Config, Event};
     use maplit::hashmap;
     use netsim_embed::{Ipv4Range, NatConfig};
+    use std::time::Instant;
 
     harness::build_bin()?;
 
@@ -49,10 +50,11 @@ fn main() -> anyhow::Result<()> {
         let providers = sim.nodes(0..opts.n_nodes);
         let consumers = sim.nodes(consumers);
 
+        let started = Instant::now();
         for id in providers.keys().chain(consumers.keys()) {
             let m = sim.machine(*id);
             m.select(|e| matches!(e, Event::NewListenAddr(a) if !a.is_loopback()).then(|| ()))
-                .await;
+                .deadline(started, 5).await.unwrap();
         }
 
         for id in consumers.keys() {
@@ -63,6 +65,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
+        let started = Instant::now();
         for id in consumers.keys() {
             let m = sim.machine(*id);
             for (peer, addr) in providers.values() {
@@ -72,57 +75,68 @@ fn main() -> anyhow::Result<()> {
                     )
                     .then(|| ())
                 })
-                .await;
+                .deadline(started, 5).await.unwrap();
             }
+            tracing::info!("consumer {} done", id);
         }
 
+        let started = Instant::now();
         if opts.disable_port_reuse {
             for id in providers.keys() {
                 let m = sim.machine(*id);
-                for (peer, _addr) in consumers.values() {
+                for (m_id, (peer, _addr)) in consumers.iter() {
                     m.select(|e| {
                         matches!(e, Event::PeerInfo(p, i) if p == peer && i.addresses.is_empty())
                             .then(|| ())
                     })
-                    .await;
+                    .deadline(started, 10).await.unwrap();
+                    tracing::info!("provider {} done with {}", id, m_id);
                 }
             }
         } else {
             for id in providers.keys() {
                 let m = sim.machine(*id);
-                for (peer, _addr) in consumers.values() {
+                for (m_id, (peer, _addr)) in consumers.iter() {
                     m.select(|e| {
                         matches!(e, Event::PeerInfo(p, i) if p == peer && (
-                            // port_reuse unfortunately means that the NATed port is added to listeners
-                            // by GenTcp, sent via Identify, but not falsifiable because we can’t attempt
-                            // to dial while the connection exists
-                            i.addresses == hashmap!(i.connections[0].clone() => "Candidate".to_owned())
+                            // port_reuse unfortunately means that the NATed port is added to
+                            // listeners by GenTcp, sent via Identify, but not falsifiable because
+                            // we can’t attempt to dial while the connection exists
+                            i.addresses == hashmap! {
+                                i.connections[0].clone() => "Candidate".to_owned()
+                            }
                         ))
                         .then(|| ())
                     })
-                    .await;
+                    .deadline(started, 10).await.unwrap();
+                    tracing::info!("provider {} identified {}", id, m_id);
                 }
                 m.drain();
             }
 
-            // now disconnect the consumers so that the providers will try to dial and falsify the addresses
+            // now disconnect the consumers so that the providers will try to dial and
+            // falsify the addresses
             for id in consumers.keys() {
                 sim.machine(*id).down();
             }
 
+            let started = Instant::now();
             for id in providers.keys() {
                 let m = sim.machine(*id);
-                for (peer, _addr) in consumers.values() {
+                for (m_id, (peer, _addr)) in consumers.iter() {
                     m.select_draining(|e| {
                         matches!(e, Event::Disconnected(p) if p == peer).then(|| ())
                     })
-                    .await;
+                    .deadline(started, 30).await.unwrap();
+                    tracing::info!("provider {} saw close from {}", id, m_id);
                     m.send(Command::Dial(*peer));
                     m.select(|e| {
-                        // prune_addresses will remove the peer when a failure happens while not connected
+                        // prune_addresses will remove the peer when a failure happens while not
+                        // connected
                         matches!(e, Event::PeerRemoved(p) if p == peer).then(|| ())
                     })
-                    .await;
+                    .timeout(10).await.unwrap();
+                    tracing::info!("provider {} done with {}", id, m_id);
                 }
             }
         }

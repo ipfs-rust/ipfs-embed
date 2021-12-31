@@ -9,6 +9,7 @@ publish = false
 anyhow = "1.0.41"
 async-global-executor = "2.0.2"
 async-process = "1.1.0"
+async-std = "1.10.0"
 escargot = "0.5.7"
 futures = "0.3.15"
 ipfs-embed-cli = { path = "../cli" }

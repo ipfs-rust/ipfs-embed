@@ -296,8 +296,8 @@ fn from_docker_container() {
         ]
     );
 
-    // here we assume that our observeration of that peer’s address will eventually be
-    // included by that peer in its Identify info
+    // here we assume that our observeration of that peer’s address will eventually
+    // be included by that peer in its Identify info
 
     let info = IdentifyInfo {
         public_key: key_b,

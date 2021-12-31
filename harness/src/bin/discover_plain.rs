@@ -1,9 +1,10 @@
 #[cfg(target_os = "linux")]
 fn main() -> anyhow::Result<()> {
     use anyhow::Context;
-    use harness::{MultiaddrExt, NetsimExt, Role};
+    use harness::{MultiaddrExt, NetsimExt, Role, MyFutureExt};
     use ipfs_embed_cli::{Command, Event};
     use maplit::hashmap;
+    use std::time::Instant;
 
     harness::build_bin()?;
 
@@ -11,10 +12,11 @@ fn main() -> anyhow::Result<()> {
         let providers = sim.role(&opts, Role::Provider);
         let consumers = sim.role(&opts, Role::Consumer);
 
+        let started = Instant::now();
         for id in providers.keys().chain(consumers.keys()) {
             let m = sim.machine(*id);
             m.select(|e| matches!(e, Event::NewListenAddr(a) if !a.is_loopback()).then(|| ()))
-                .await;
+                .deadline(started, 5).await.unwrap();
         }
 
         for id in consumers.keys() {
@@ -25,6 +27,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
+        let started = Instant::now();
         for id in consumers.keys() {
             let m = sim.machine(*id);
             for (peer, addr) in providers.values() {
@@ -34,7 +37,7 @@ fn main() -> anyhow::Result<()> {
                     )
                     .then(|| ())
                 })
-                .await;
+                .deadline(started, 5).await.unwrap();
             }
         }
 
@@ -52,7 +55,7 @@ fn main() -> anyhow::Result<()> {
                     )
                     .then(|| ())
                 })
-                .await;
+                .deadline(started, 5).await.unwrap();
             }
         }
 

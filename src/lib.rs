@@ -1,5 +1,5 @@
-//! Ipfs embed is a small, fast and reliable ipfs implementation designed for embedding in to
-//! complex p2p applications.
+//! Ipfs embed is a small, fast and reliable ipfs implementation designed for
+//! embedding in to complex p2p applications.
 //!
 //! ```no_run
 //! # #[async_std::main]
@@ -58,8 +58,8 @@ pub struct Config {
 }
 
 impl Config {
-    /// Creates a default configuration from a `path` and a `cache_size`. If the `path` is `None`,
-    /// ipfs will use an in-memory block store.
+    /// Creates a default configuration from a `path` and a `cache_size`. If the
+    /// `path` is `None`, ipfs will use an in-memory block store.
     pub fn new(path: &Path, keypair: Keypair) -> Self {
         let sweep_interval = std::time::Duration::from_millis(10000);
         let storage = StorageConfig::new(Some(path.join("blocks")), None, 0, sweep_interval);
@@ -118,8 +118,8 @@ where
 {
     /// Creates a new `Ipfs` from a `Config`.
     ///
-    /// This starts three background tasks. The swarm, garbage collector and the dht cleanup
-    /// tasks run in the background.
+    /// This starts three background tasks. The swarm, garbage collector and the
+    /// dht cleanup tasks run in the background.
     pub async fn new(config: Config) -> Result<Self> {
         let executor = Executor::new();
         Self::new0(config, executor).await
@@ -218,8 +218,8 @@ where
         self.network.peer_info(peer)
     }
 
-    /// Bootstraps the dht using a set of bootstrap nodes. After bootstrap completes it
-    /// provides all blocks in the block store.
+    /// Bootstraps the dht using a set of bootstrap nodes. After bootstrap
+    /// completes it provides all blocks in the block store.
     pub async fn bootstrap(&self, nodes: &[(PeerId, Multiaddr)]) -> Result<()> {
         self.network.bootstrap(nodes).await?;
         Ok(())
@@ -230,7 +230,8 @@ where
         self.network.is_bootstrapped()
     }
 
-    /// Gets the closest peer to a key. Useful for finding the `Multiaddr` of a `PeerId`.
+    /// Gets the closest peer to a key. Useful for finding the `Multiaddr` of a
+    /// `PeerId`.
     pub async fn get_closest_peers<K>(&self, key: K) -> Result<()>
     where
         K: Into<BucketKey<K>> + Into<Vec<u8>> + Clone,
@@ -269,24 +270,26 @@ where
         self.network.remove_record(key)
     }
 
-    /// Subscribes to a `topic` returning a `Stream` of messages. If all `Stream`s for
-    /// a topic are dropped it unsubscribes from the `topic`.
+    /// Subscribes to a `topic` returning a `Stream` of messages. If all
+    /// `Stream`s for a topic are dropped it unsubscribes from the `topic`.
     pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = GossipEvent>> {
         self.network.subscribe(topic)
     }
 
-    /// Publishes a new message in a `topic`, sending the message to all subscribed peers.
+    /// Publishes a new message in a `topic`, sending the message to all
+    /// subscribed peers.
     pub fn publish(&self, topic: &str, msg: Vec<u8>) -> Result<()> {
         self.network.publish(topic, msg)
     }
 
-    /// Publishes a new message in a `topic`, sending the message to all subscribed connected peers.
+    /// Publishes a new message in a `topic`, sending the message to all
+    /// subscribed connected peers.
     pub fn broadcast(&self, topic: &str, msg: Vec<u8>) -> Result<()> {
         self.network.broadcast(topic, msg)
     }
 
-    /// Creates a temporary pin in the block store. A temporary pin is not persisted to disk
-    /// and is released once it is dropped.
+    /// Creates a temporary pin in the block store. A temporary pin is not
+    /// persisted to disk and is released once it is dropped.
     pub fn create_temp_pin(&self) -> Result<TempPin> {
         self.storage.create_temp_pin()
     }
@@ -316,8 +319,8 @@ where
         }
     }
 
-    /// Either returns a block if it's in the block store or tries to retrieve it from
-    /// a peer.
+    /// Either returns a block if it's in the block store or tries to retrieve
+    /// it from a peer.
     pub async fn fetch(&self, cid: &Cid, providers: Vec<PeerId>) -> Result<Block<P>> {
         if let Some(data) = self.storage.get(cid)? {
             let block = Block::new_unchecked(*cid, data);
@@ -340,9 +343,9 @@ where
         Ok(())
     }
 
-    /// Manually runs garbage collection to completion. This is mainly useful for testing and
-    /// administrative interfaces. During normal operation, the garbage collector automatically
-    /// runs in the background.
+    /// Manually runs garbage collection to completion. This is mainly useful
+    /// for testing and administrative interfaces. During normal operation,
+    /// the garbage collector automatically runs in the background.
     pub async fn evict(&self) -> Result<()> {
         self.storage.evict().await
     }
@@ -367,13 +370,14 @@ where
         self.storage.resolve(alias.as_ref())
     }
 
-    /// Returns a list of aliases preventing a `Cid` from being garbage collected.
+    /// Returns a list of aliases preventing a `Cid` from being garbage
+    /// collected.
     pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
         self.storage.reverse_alias(cid)
     }
 
-    /// Flushes the block store. After `flush` completes successfully it is guaranteed that
-    /// all writes have been persisted to disk.
+    /// Flushes the block store. After `flush` completes successfully it is
+    /// guaranteed that all writes have been persisted to disk.
     pub async fn flush(&self) -> Result<()> {
         self.storage.flush().await
     }

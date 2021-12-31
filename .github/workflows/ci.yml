@@ -8,7 +8,7 @@ jobs:
             fail-fast: false
             matrix:
                 toolchain:
-                    - rust: stable
+                    - rust: "1.56.1"
                 #- rust: nightly
                 platform:
                     - target: x86_64-unknown-linux-gnu
@@ -140,7 +140,7 @@ jobs:
             - name: Install rust toolchain
               uses: hecrj/setup-rust-action@v1
               with:
-                  rust-version: stable
+                  rust-version: "1.56.1"
                   components: clippy, rustfmt
 
             - name: cargo fmt

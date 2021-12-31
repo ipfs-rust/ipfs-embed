@@ -22,47 +22,51 @@ use crate::executor::{Executor, JoinHandle};
 /// Storage configuration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StorageConfig {
-    /// The path to use for the block store. If it is `None` an in-memory block store
-    /// will be used.
+    /// The path to use for the block store. If it is `None` an in-memory block
+    /// store will be used.
     pub path: Option<PathBuf>,
-    /// The path to use for the database that persists block accesses times for the LRU
-    /// cache. If this is set to 'None', access times will not be persisted but just
-    /// tracked in memory.
+    /// The path to use for the database that persists block accesses times for
+    /// the LRU cache. If this is set to 'None', access times will not be
+    /// persisted but just tracked in memory.
     ///
-    /// You can point this to the same file as the main block store, but this is not
-    /// recommended.
+    /// You can point this to the same file as the main block store, but this is
+    /// not recommended.
     pub access_db_path: Option<PathBuf>,
     /// The target number of blocks.
     ///
     /// Up to this number, the store will retain everything even if
-    /// not pinned. Once this number is exceeded, the store will run garbage collection
-    /// of all unpinned blocks until the block criterion is met again.
+    /// not pinned. Once this number is exceeded, the store will run garbage
+    /// collection of all unpinned blocks until the block criterion is met
+    /// again.
     ///
-    /// To completely disable storing of non-pinned blocks, set this to 0. Even then,
-    /// the store will never delete pinned blocks.
+    /// To completely disable storing of non-pinned blocks, set this to 0. Even
+    /// then, the store will never delete pinned blocks.
     pub cache_size_blocks: u64,
     /// The target store size.
     ///
-    /// Up to this size, the store will retain everything even if not pinned. Once this
-    /// size is exceeded, the store will run garbage collection of all unpinned blocks
-    /// until the size criterion is met again.
+    /// Up to this size, the store will retain everything even if not pinned.
+    /// Once this size is exceeded, the store will run garbage collection of
+    /// all unpinned blocks until the size criterion is met again.
     ///
     /// The store will never delete pinned blocks.
     pub cache_size_bytes: u64,
     /// The interval at which the garbage collector is run.
     ///
-    /// Note that this is implemented as delays between gcs, so it will not run exactly at this
-    /// interval, but there will be some drift if gc takes long.
+    /// Note that this is implemented as delays between gcs, so it will not run
+    /// exactly at this interval, but there will be some drift if gc takes
+    /// long.
     pub gc_interval: Duration,
     /// The minimum number of blocks to collect in any case.
     ///
-    /// Using this parameter, it is possible to guarantee a minimum rate with which the gc will
-    /// be able to keep up. It is `gc_min_blocks` / `gc_interval`.
+    /// Using this parameter, it is possible to guarantee a minimum rate with
+    /// which the gc will be able to keep up. It is `gc_min_blocks` /
+    /// `gc_interval`.
     pub gc_min_blocks: usize,
     /// The target maximum gc duration of a single garbage collector run.
     ///
-    /// This can not be guaranteed, since we guarantee to collect at least `gc_min_blocks`. But
-    /// as soon as this duration is exceeded, the incremental gc will stop doing additional work.
+    /// This can not be guaranteed, since we guarantee to collect at least
+    /// `gc_min_blocks`. But as soon as this duration is exceeded, the
+    /// incremental gc will stop doing additional work.
     pub gc_target_duration: Duration,
 }
 

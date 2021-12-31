@@ -1,6 +1,8 @@
 #![cfg(target_os = "linux")]
 
 use anyhow::{Context, Result};
+use async_std::future::TimeoutError;
+use futures::future::BoxFuture;
 use futures::prelude::*;
 use ipfs_embed_cli::{Command, Config, Event};
 use libipld::cbor::DagCborCodec;
@@ -14,7 +16,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::ops::Range;
 use std::str::FromStr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use structopt::StructOpt;
 use tempdir::TempDir;
 
@@ -163,6 +165,28 @@ where
         }
         f(sim, opts, net, temp_dir).await
     })
+}
+
+pub trait MyFutureExt<'a>: 'a {
+    type Output;
+    fn timeout(self, d: u64) -> BoxFuture<'a, Result<Self::Output, TimeoutError>>;
+    fn deadline(self, i: Instant, d: u64) -> BoxFuture<'a, Result<Self::Output, TimeoutError>>;
+}
+impl<'a, F: Future + Send + 'a> MyFutureExt<'a> for F {
+    type Output = F::Output;
+    fn timeout(self, dur: u64) -> BoxFuture<'a, Result<Self::Output, TimeoutError>> {
+        async_std::future::timeout(Duration::from_secs(dur), self).boxed()
+    }
+    fn deadline(self, i: Instant, d: u64) -> BoxFuture<'a, Result<Self::Output, TimeoutError>> {
+        let elapsed = i.elapsed();
+        let d = Duration::from_secs(d);
+        let dur = if elapsed + Duration::from_millis(100) >= d {
+            Duration::from_millis(100)
+        } else {
+            d - elapsed
+        };
+        async_std::future::timeout(dur, self).boxed()
+    }
 }
 
 #[derive(Debug, DagCbor)]

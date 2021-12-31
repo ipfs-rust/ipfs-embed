@@ -1,7 +1,7 @@
 #[cfg(target_os = "linux")]
 fn main() -> anyhow::Result<()> {
     use anyhow::Context;
-    use harness::{MachineExt, MultiaddrExt};
+    use harness::{MachineExt, MultiaddrExt, MyFutureExt};
     use ipfs_embed_cli::{Command, Event};
     use libipld::alias;
     use std::time::Instant;
@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
         for machine in network.machines_mut() {
             let peer = machine.peer_id();
             loop {
-                if let Some(Event::NewListenAddr(addr)) = machine.recv().await {
+                if let Some(Event::NewListenAddr(addr)) = machine.recv().timeout(3).await.unwrap() {
                     if !addr.is_loopback() {
                         peers.push((peer, addr));
                         break;
@@ -61,9 +61,10 @@ fn main() -> anyhow::Result<()> {
         for machine in network.machines_mut() {
             machine.send(Command::Flush);
         }
+        let started = Instant::now();
         for machine in network.machines_mut() {
             loop {
-                if let Some(Event::Flushed) = machine.recv().await {
+                if let Some(Event::Flushed) = machine.recv().deadline(started, 60).await.unwrap() {
                     break;
                 }
             }
@@ -80,15 +81,16 @@ fn main() -> anyhow::Result<()> {
             machine.send(Command::Sync(cid));
         }
 
+        let started = Instant::now();
         for machine in &mut network.machines_mut()[consumers.clone()] {
             loop {
-                if let Some(Event::Synced) = machine.recv().await {
+                if let Some(Event::Synced) = machine.recv().deadline(started, 300).await.unwrap() {
                     break;
                 }
             }
             machine.send(Command::Flush);
             loop {
-                if let Some(Event::Flushed) = machine.recv().await {
+                if let Some(Event::Flushed) = machine.recv().deadline(started, 300).await.unwrap() {
                     break;
                 }
             }
@@ -103,12 +105,15 @@ fn main() -> anyhow::Result<()> {
             opts.n_consumers,
         );
 
+        let started = Instant::now();
         for machine in &mut network.machines_mut()[consumers] {
             // check that data is indeed synced
             for block in &blocks {
                 machine.send(Command::Get(*block.cid()));
                 loop {
-                    if let Some(Event::Block(data)) = machine.recv().await {
+                    if let Some(Event::Block(data)) =
+                        machine.recv().deadline(started, 60).await.unwrap()
+                    {
                         assert_eq!(&data, block);
                         break;
                     }

@@ -42,15 +42,18 @@ pub enum Event {
     ListenerClosed(ListenerId),
     /// we received an observed address for ourselves from a peer
     NewExternalAddr(Multiaddr),
-    /// an address observed earlier for ourselves has been retired since it was not refreshed
+    /// an address observed earlier for ourselves has been retired since it was
+    /// not refreshed
     ExpiredExternalAddr(Multiaddr),
-    /// an address was added for the given peer, following a successful dailling attempt
+    /// an address was added for the given peer, following a successful dailling
+    /// attempt
     Discovered(PeerId),
     /// a dialling attempt for the given peer has failed
     DialFailure(PeerId, Multiaddr, String),
     /// a peer could not be reached by any known address
     ///
-    /// if `prune_addresses == true` then it has been removed from the address book
+    /// if `prune_addresses == true` then it has been removed from the address
+    /// book
     Unreachable(PeerId),
     /// a new connection has been opened to the given peer
     ConnectionEstablished(PeerId, ConnectedPoint),
@@ -277,8 +280,8 @@ impl AddressBook {
                 .filter(|a| {
                     // discount the addresses to which we are currently connected:
                     // if they are directly reachable then the address will be found in any case,
-                    // and if they are NATed addresses then they likely got there by our own observation
-                    // sent via Identify
+                    // and if they are NATed addresses then they likely got there by our own
+                    // observation sent via Identify
                     !info
                         .connections
                         .contains_key(normalize_addr_ref(a, peer_id).as_ref())
@@ -286,17 +289,19 @@ impl AddressBook {
                 .filter_map(ip_port)
                 .collect::<Vec<_>>();
 
-            // collect all advertised listen ports (which includes actual listeners as well as
-            // observed addresses, which may be NATed) so that we can at least try to guess a
-            // reasonable port where the NAT may have a hole configured
+            // collect all advertised listen ports (which includes actual listeners as well
+            // as observed addresses, which may be NATed) so that we can at
+            // least try to guess a reasonable port where the NAT may have a
+            // hole configured
             let common_port = listen_port
                 .iter()
                 .map(|(_a, p)| *p)
                 .collect::<FnvHashSet<_>>();
 
-            // in the absence of port_reuse or the presence of NAT the remote port on an incoming
-            // connection won’t be reachable for us, so attempt a translation that is then validated
-            // by dailling the resulting address
+            // in the absence of port_reuse or the presence of NAT the remote port on an
+            // incoming connection won’t be reachable for us, so attempt a
+            // translation that is then validated by dailling the resulting
+            // address
             let mut translated = FnvHashSet::default();
             for addr in info.addresses_to_translate() {
                 if let Some((ip, _p)) = ip_port(addr) {
@@ -337,11 +342,13 @@ impl AddressBook {
                     continue;
                 }
                 if let Some(address) = info.ingest_address(addr, AddressSource::Listen) {
-                    // no point trying to dial if we’re already connected and port_reuse==true since a
-                    // second connection is fundamentally impossible in this case
+                    // no point trying to dial if we’re already connected and port_reuse==true since
+                    // a second connection is fundamentally impossible in this
+                    // case
                     if self.port_reuse && info.connections.contains_key(&address) {
-                        // this will offer the address as soon as the Swarm asks for one for this peer,
-                        // leading to a dial attempt that will answer the question
+                        // this will offer the address as soon as the Swarm asks for one for this
+                        // peer, leading to a dial attempt that will answer
+                        // the question
                         info.ingest_address(address, AddressSource::Candidate);
                     } else {
                         self.actions

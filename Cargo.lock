@@ -1301,6 +1301,7 @@ dependencies = [
  "anyhow",
  "async-global-executor",
  "async-process",
+ "async-std",
  "escargot",
  "futures",
  "ipfs-embed-cli",

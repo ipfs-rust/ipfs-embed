@@ -58,10 +58,12 @@ impl From<libp2p::kad::QueryId> for QueryId {
 /// An event of a sync query.
 #[derive(Debug)]
 pub enum SyncEvent {
-    /// Signals that the sync query made progress and counts the amount of subtrees to
-    /// sync. If it is syncing a linked list, it will always be 1.
+    /// Signals that the sync query made progress and counts the amount of
+    /// subtrees to sync. If it is syncing a linked list, it will always be
+    /// 1.
     Progress { missing: usize },
-    /// Signals completion of the sync query and if it was completed successfully.
+    /// Signals completion of the sync query and if it was completed
+    /// successfully.
     Complete(Result<()>),
 }
 
@@ -278,7 +280,8 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<BitswapEvent> for NetworkBacke
 
 impl<P: StoreParams> NetworkBehaviourEventProcess<PingEvent> for NetworkBackendBehaviour<P> {
     fn inject_event(&mut self, event: PingEvent) {
-        // Don't really need to do anything here as ping handles disconnecting automatically.
+        // Don't really need to do anything here as ping handles disconnecting
+        // automatically.
         let peer = event.peer;
         match event.result {
             Ok(PingSuccess::Ping { rtt }) => {
@@ -305,8 +308,9 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<PingEvent> for NetworkBackendB
 
 impl<P: StoreParams> NetworkBehaviourEventProcess<IdentifyEvent> for NetworkBackendBehaviour<P> {
     fn inject_event(&mut self, event: IdentifyEvent) {
-        // When a peer opens a connection we only have it's outgoing address. The identify
-        // protocol sends the listening address which needs to be registered with kademlia.
+        // When a peer opens a connection we only have it's outgoing address. The
+        // identify protocol sends the listening address which needs to be
+        // registered with kademlia.
         if let IdentifyEvent::Received { peer_id, info } = event {
             self.peers.set_info(&peer_id, info);
         }
