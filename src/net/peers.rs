@@ -274,13 +274,25 @@ impl AddressBook {
             let listen_port = info
                 .listeners
                 .iter()
+                .filter(|a| {
+                    // discount the addresses to which we are currently connected:
+                    // if they are directly reachable then the address will be found in any case,
+                    // and if they are NATed addresses then they likely got there by our own observation
+                    // sent via Identify
+                    !info
+                        .connections
+                        .contains_key(normalize_addr_ref(a, peer_id).as_ref())
+                })
                 .filter_map(ip_port)
-                .collect::<FnvHashMap<_, _>>();
+                .collect::<Vec<_>>();
 
             // collect all advertised listen ports (which includes actual listeners as well as
             // observed addresses, which may be NATed) so that we can at least try to guess a
             // reasonable port where the NAT may have a hole configured
-            let common_port = listen_port.values().copied().collect::<FnvHashSet<_>>();
+            let common_port = listen_port
+                .iter()
+                .map(|(_a, p)| *p)
+                .collect::<FnvHashSet<_>>();
 
             // in the absence of port_reuse or the presence of NAT the remote port on an incoming
             // connection won’t be reachable for us, so attempt a translation that is then validated
@@ -288,13 +300,21 @@ impl AddressBook {
             let mut translated = FnvHashSet::default();
             for addr in info.addresses_to_translate() {
                 if let Some((ip, _p)) = ip_port(addr) {
-                    if let Some(lp) = listen_port.get(&ip) {
-                        translated.insert(addr.replace(1, |_p| Some(Protocol::Tcp(*lp))).unwrap());
-                    } else {
+                    let mut added = false;
+                    for (_a, lp) in listen_port.iter().filter(|(a, _p)| *a == ip) {
+                        translated.insert(addr.replace(1, |_| Some(Protocol::Tcp(*lp))).unwrap());
+                        added = true;
+                    }
+                    if !added {
                         for cp in &common_port {
                             translated
-                                .insert(addr.replace(1, |_p| Some(Protocol::Tcp(*cp))).unwrap());
+                                .insert(addr.replace(1, |_| Some(Protocol::Tcp(*cp))).unwrap());
+                            added = true;
                         }
+                    }
+                    if !added {
+                        // no idea for a translation, so add it for validation
+                        translated.insert(addr.clone());
                     }
                 }
             }
