@@ -1,7 +1,7 @@
 #[cfg(target_os = "linux")]
 fn main() -> anyhow::Result<()> {
     use anyhow::Context;
-    use harness::{MachineExt, MultiaddrExt, NetsimExt, MyFutureExt};
+    use harness::{MachineExt, MultiaddrExt, MyFutureExt, NetsimExt};
     use ipfs_embed_cli::{Command, Config, Event};
     use maplit::hashmap;
     use netsim_embed::{Ipv4Range, NatConfig};
@@ -54,7 +54,9 @@ fn main() -> anyhow::Result<()> {
         for id in providers.keys().chain(consumers.keys()) {
             let m = sim.machine(*id);
             m.select(|e| matches!(e, Event::NewListenAddr(a) if !a.is_loopback()).then(|| ()))
-                .deadline(started, 5).await.unwrap();
+                .deadline(started, 5)
+                .await
+                .unwrap();
         }
 
         for id in consumers.keys() {
@@ -75,7 +77,9 @@ fn main() -> anyhow::Result<()> {
                     )
                     .then(|| ())
                 })
-                .deadline(started, 5).await.unwrap();
+                .deadline(started, 5)
+                .await
+                .unwrap();
             }
             tracing::info!("consumer {} done", id);
         }
@@ -89,7 +93,9 @@ fn main() -> anyhow::Result<()> {
                         matches!(e, Event::PeerInfo(p, i) if p == peer && i.addresses.is_empty())
                             .then(|| ())
                     })
-                    .deadline(started, 10).await.unwrap();
+                    .deadline(started, 10)
+                    .await
+                    .unwrap();
                     tracing::info!("provider {} done with {}", id, m_id);
                 }
             }
@@ -108,7 +114,9 @@ fn main() -> anyhow::Result<()> {
                         ))
                         .then(|| ())
                     })
-                    .deadline(started, 10).await.unwrap();
+                    .deadline(started, 10)
+                    .await
+                    .unwrap();
                     tracing::info!("provider {} identified {}", id, m_id);
                 }
                 m.drain();
@@ -127,7 +135,9 @@ fn main() -> anyhow::Result<()> {
                     m.select_draining(|e| {
                         matches!(e, Event::Disconnected(p) if p == peer).then(|| ())
                     })
-                    .deadline(started, 30).await.unwrap();
+                    .deadline(started, 30)
+                    .await
+                    .unwrap();
                     tracing::info!("provider {} saw close from {}", id, m_id);
                     m.send(Command::Dial(*peer));
                     m.select(|e| {
@@ -135,7 +145,9 @@ fn main() -> anyhow::Result<()> {
                         // connected
                         matches!(e, Event::PeerRemoved(p) if p == peer).then(|| ())
                     })
-                    .timeout(10).await.unwrap();
+                    .timeout(10)
+                    .await
+                    .unwrap();
                     tracing::info!("provider {} done with {}", id, m_id);
                 }
             }

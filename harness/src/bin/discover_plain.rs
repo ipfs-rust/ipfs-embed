@@ -1,7 +1,7 @@
 #[cfg(target_os = "linux")]
 fn main() -> anyhow::Result<()> {
     use anyhow::Context;
-    use harness::{MultiaddrExt, NetsimExt, Role, MyFutureExt};
+    use harness::{MultiaddrExt, MyFutureExt, NetsimExt, Role};
     use ipfs_embed_cli::{Command, Event};
     use maplit::hashmap;
     use std::time::Instant;
@@ -16,7 +16,9 @@ fn main() -> anyhow::Result<()> {
         for id in providers.keys().chain(consumers.keys()) {
             let m = sim.machine(*id);
             m.select(|e| matches!(e, Event::NewListenAddr(a) if !a.is_loopback()).then(|| ()))
-                .deadline(started, 5).await.unwrap();
+                .deadline(started, 5)
+                .await
+                .unwrap();
         }
 
         for id in consumers.keys() {
@@ -37,7 +39,9 @@ fn main() -> anyhow::Result<()> {
                     )
                     .then(|| ())
                 })
-                .deadline(started, 5).await.unwrap();
+                .deadline(started, 5)
+                .await
+                .unwrap();
             }
         }
 
@@ -55,7 +59,9 @@ fn main() -> anyhow::Result<()> {
                     )
                     .then(|| ())
                 })
-                .deadline(started, 5).await.unwrap();
+                .deadline(started, 5)
+                .await
+                .unwrap();
             }
         }
 
