@@ -75,4 +75,3 @@ libp2p-bitswap = { git = "https://github.com/Actyx/libp2p-bitswap", branch = "si
 libp2p-broadcast = { git = "https://github.com/Actyx/libp2p-broadcast", branch = "sim-open-2" }
 libp2p-quic = { git = "https://github.com/Actyx/libp2p-quic", branch = "sim-open-2" }
 libp2p-blake-streams = { git = "https://github.com/Actyx/blake-streams", branch = "sim-open" }
-netsim-embed = { path = "../netsim-embed" }

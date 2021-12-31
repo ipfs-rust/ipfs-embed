@@ -38,12 +38,17 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
+        let expected = if opts.disable_port_reuse {
+            "Dial"
+        } else {
+            "Candidate"
+        };
         for id in providers.keys() {
             let m = sim.machine(*id);
             for (peer, addr) in consumers.values() {
                 m.select(|e| {
                     matches!(e, Event::PeerInfo(p, i)
-                        if p == peer && i.addresses == hashmap!(addr.clone() => "Dial".to_owned())
+                        if p == peer && i.addresses == hashmap!(addr.clone() => expected.to_owned())
                     )
                     .then(|| ())
                 })

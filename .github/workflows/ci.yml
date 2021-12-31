@@ -39,6 +39,7 @@ jobs:
                 #   cross: true
         env:
             RUST_BACKTRACE: 1
+            RUST_LOG: netsim_embed_machine=debug,info
             CARGO_INCREMENTAL: 0
             LLVM_CONFIG_PATH: /usr/local/opt/llvm/bin/llvm-config
             NDK_HOME: /usr/local/lib/android/sdk/ndk-bundle
@@ -99,6 +100,30 @@ jobs:
             - name: Run sim-open integration test
               if: contains(matrix.platform.target, 'linux-gnu')
               run: ./target/release/sim_open
+
+            - name: Run discover_plain integration test
+              if: contains(matrix.platform.target, 'linux-gnu')
+              run: ./target/release/discover_plain --disable-port-reuse
+
+            - name: Run discover_plain integration test (port reuse)
+              if: contains(matrix.platform.target, 'linux-gnu')
+              run: ./target/release/discover_plain
+
+            - name: Run discover_nat integration test
+              if: contains(matrix.platform.target, 'linux-gnu')
+              run: ./target/release/discover_nat --disable-port-reuse
+
+            - name: Run discover_nat integration test (port reuse)
+              if: contains(matrix.platform.target, 'linux-gnu')
+              run: ./target/release/discover_nat
+
+            - name: Run discover_nat_forward integration test
+              if: contains(matrix.platform.target, 'linux-gnu')
+              run: ./target/release/discover_nat_forward --disable-port-reuse
+
+            - name: Run discover_nat_forward integration test (port reuse)
+              if: contains(matrix.platform.target, 'linux-gnu')
+              run: ./target/release/discover_nat_forward
 
     lint-rust:
         runs-on: ubuntu-latest
