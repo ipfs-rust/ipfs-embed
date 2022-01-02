@@ -93,37 +93,9 @@ jobs:
               if: contains(matrix.platform.target, 'linux-gnu')
               run: cargo build -p ipfs-embed-cli -p harness --release
 
-            - name: Run bitswap integration test
+            - name: Run netsim integration tests
               if: contains(matrix.platform.target, 'linux-gnu')
-              run: ./target/release/bitswap
-
-            - name: Run sim-open integration test
-              if: contains(matrix.platform.target, 'linux-gnu')
-              run: ./target/release/sim_open
-
-            - name: Run discover_plain integration test
-              if: contains(matrix.platform.target, 'linux-gnu')
-              run: ./target/release/discover_plain --disable-port-reuse
-
-            - name: Run discover_plain integration test (port reuse)
-              if: contains(matrix.platform.target, 'linux-gnu')
-              run: ./target/release/discover_plain
-
-            - name: Run discover_nat integration test
-              if: contains(matrix.platform.target, 'linux-gnu')
-              run: ./target/release/discover_nat --disable-port-reuse
-
-            - name: Run discover_nat integration test (port reuse)
-              if: contains(matrix.platform.target, 'linux-gnu')
-              run: ./target/release/discover_nat
-
-            - name: Run discover_nat_forward integration test
-              if: contains(matrix.platform.target, 'linux-gnu')
-              run: ./target/release/discover_nat_forward --disable-port-reuse
-
-            - name: Run discover_nat_forward integration test (port reuse)
-              if: contains(matrix.platform.target, 'linux-gnu')
-              run: ./target/release/discover_nat_forward
+              run: cargo test --release -p harness
 
     lint-rust:
         runs-on: ubuntu-latest

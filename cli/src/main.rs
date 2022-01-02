@@ -7,11 +7,13 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 use structopt::StructOpt;
+use tracing_subscriber::fmt::format::FmtSpan;
 
 #[async_std::main]
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_span_events(FmtSpan::ACTIVE | FmtSpan::CLOSE)
         .init();
     if let Err(err) = run().await {
         tracing::error!("{}", err);
@@ -62,8 +64,8 @@ async fn run() -> Result<()> {
     }
 
     let ipfs = Arc::new(Mutex::new(ipfs));
-
     let ipfs2 = ipfs.clone();
+
     async_std::task::spawn(async move {
         while let Some(event) = events.next().await {
             let event = match event {
@@ -134,7 +136,9 @@ async fn run() -> Result<()> {
                 writeln!(stdout, "{}", Event::Flushed)?;
             }
             Command::Sync(cid) => {
-                ipfs.lock().sync(&cid, ipfs.lock().peers()).await?;
+                let providers = ipfs.lock().peers();
+                tracing::debug!("sync {} from {:?}", cid, providers);
+                ipfs.lock().sync(&cid, providers).await?;
                 writeln!(stdout, "{}", Event::Synced)?;
             }
         }

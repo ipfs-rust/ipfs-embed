@@ -25,12 +25,6 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        for machine in network.machines_mut() {
-            for (peer, addr) in &peers {
-                machine.send(Command::AddAddress(*peer, addr.clone()));
-            }
-        }
-
         // create some blocks in each node that will not participate in the sync
         if opts.n_spam > 0 {
             println!("creating spam data");
@@ -63,11 +57,12 @@ fn main() -> anyhow::Result<()> {
         }
         let started = Instant::now();
         for machine in network.machines_mut() {
-            loop {
-                if let Some(Event::Flushed) = machine.recv().deadline(started, 60).await.unwrap() {
-                    break;
-                }
-            }
+            machine
+                .select_draining(|e| matches!(e, Event::Flushed).then(|| ()))
+                .deadline(started, 3)
+                .await
+                .unwrap()
+                .unwrap();
         }
 
         // compute total size of data to be synced
@@ -83,17 +78,19 @@ fn main() -> anyhow::Result<()> {
 
         let started = Instant::now();
         for machine in &mut network.machines_mut()[consumers.clone()] {
-            loop {
-                if let Some(Event::Synced) = machine.recv().deadline(started, 300).await.unwrap() {
-                    break;
-                }
-            }
+            machine
+                .select_draining(|e| matches!(e, Event::Synced).then(|| ()))
+                .deadline(started, 10)
+                .await
+                .unwrap()
+                .unwrap();
             machine.send(Command::Flush);
-            loop {
-                if let Some(Event::Flushed) = machine.recv().deadline(started, 300).await.unwrap() {
-                    break;
-                }
-            }
+            machine
+                .select_draining(|e| matches!(e, Event::Flushed).then(|| ()))
+                .deadline(started, 3)
+                .await
+                .unwrap()
+                .unwrap();
         }
 
         println!(
@@ -110,14 +107,16 @@ fn main() -> anyhow::Result<()> {
             // check that data is indeed synced
             for block in &blocks {
                 machine.send(Command::Get(*block.cid()));
-                loop {
-                    if let Some(Event::Block(data)) =
-                        machine.recv().deadline(started, 60).await.unwrap()
-                    {
-                        assert_eq!(&data, block);
-                        break;
-                    }
-                }
+                let data = machine
+                    .select_draining(|e| match e {
+                        Event::Block(data) => Some(data),
+                        _ => None
+                    })
+                    .deadline(started, 5)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(&data, block);
             }
         }
         Ok(())

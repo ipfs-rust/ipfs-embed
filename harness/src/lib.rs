@@ -243,21 +243,21 @@ pub fn build_bin() -> Result<()> {
     use escargot::CargoBuild;
 
     for msg in CargoBuild::new()
-        .manifest_path("cli/Cargo.toml")
+        .manifest_path(concat!(env!("CARGO_MANIFEST_DIR"), "/../cli/Cargo.toml"))
         .bin("ipfs-embed-cli")
         .current_release()
         .exec()?
     {
         match msg?.decode()? {
-            escargot::format::Message::BuildFinished(x) => eprintln!("{:?}", x),
+            escargot::format::Message::BuildFinished(x) => println!("{:?}", x),
             escargot::format::Message::CompilerArtifact(x) => {
                 if !x.fresh {
-                    eprintln!("{:?}", x.package_id);
+                    println!("{:?}", x.package_id);
                 }
             }
             escargot::format::Message::CompilerMessage(x) => {
                 if let Some(msg) = x.message.rendered {
-                    eprintln!("{}", msg);
+                    println!("{}", msg);
                 }
             }
             escargot::format::Message::BuildScriptExecuted(_) => {}

@@ -217,8 +217,12 @@ impl AddressBook {
         normalize_addr(&mut address, peer);
         tracing::trace!(peer = %peer, "adding address {} from {:?}", address, source);
         if let Some(address) = info.ingest_address(address, source) {
-            self.actions
-                .push_back(NetworkBehaviourAction::DialAddress { address })
+            let mut tcp = address.clone();
+            tcp.pop();
+            if !self.listeners.contains(&tcp) {
+                self.actions
+                    .push_back(NetworkBehaviourAction::DialAddress { address })
+            }
         }
         if discovered {
             self.notify(Event::Discovered(*peer));
@@ -592,6 +596,7 @@ impl NetworkBehaviour for AddressBook {
             DISCOVERED.dec();
             if self.prune_addresses && peer.connections.is_empty() {
                 self.peers.remove(peer_id);
+                self.notify(Event::NewInfo(*peer_id));
             }
             self.notify(Event::Unreachable(*peer_id));
         }

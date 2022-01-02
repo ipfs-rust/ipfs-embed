@@ -108,9 +108,10 @@ fn main() -> anyhow::Result<()> {
                             // port_reuse unfortunately means that the NATed port is added to
                             // listeners by GenTcp, sent via Identify, but not falsifiable because
                             // we can’t attempt to dial while the connection exists
-                            i.addresses == hashmap! {
-                                i.connections[0].clone() => "Candidate".to_owned()
-                            }
+                            i.addresses.get(&i.connections[0]).map(|s| s.as_str()) ==
+                                Some("Candidate")
+                            // can’t check for full hashmap equality since the state where only the
+                            // Candidate is present may be lost to output race conditions
                         ))
                         .then(|| ())
                     })
@@ -132,12 +133,10 @@ fn main() -> anyhow::Result<()> {
             for id in providers.keys() {
                 let m = sim.machine(*id);
                 for (m_id, (peer, _addr)) in consumers.iter() {
-                    m.select_draining(|e| {
-                        matches!(e, Event::Disconnected(p) if p == peer).then(|| ())
-                    })
-                    .deadline(started, 30)
-                    .await
-                    .unwrap();
+                    m.select(|e| matches!(e, Event::Disconnected(p) if p == peer).then(|| ()))
+                        .deadline(started, 30)
+                        .await
+                        .unwrap();
                     tracing::info!("provider {} saw close from {}", id, m_id);
                     m.send(Command::Dial(*peer));
                     m.select(|e| {

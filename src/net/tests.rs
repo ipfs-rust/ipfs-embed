@@ -13,8 +13,31 @@ use regex::Regex;
 use std::cell::RefCell;
 use Event::*;
 
-#[async_std::test]
-async fn test_dial_basic() {
+struct Events<'a> {
+    events: &'a RefCell<Vec<Event>>,
+    swarm: LocalExecutor<'a>,
+}
+
+impl<'a> Events<'a> {
+    fn new(s: SwarmEvents, events: &'a RefCell<Vec<Event>>) -> Self {
+        let swarm = LocalExecutor::new();
+        swarm
+            .spawn(s.for_each(move |e| {
+                events.borrow_mut().push(e);
+                ready(())
+            }))
+            .detach();
+        Self { events, swarm }
+    }
+
+    pub fn next(&self) -> Vec<Event> {
+        while self.swarm.try_tick() {}
+        std::mem::take(&mut *self.events.borrow_mut())
+    }
+}
+
+#[test]
+fn test_dial_basic() {
     let mut book = AddressBook::new(
         PeerId::random(),
         "".into(),
@@ -23,7 +46,10 @@ async fn test_dial_basic() {
         false,
         true,
     );
-    let mut stream = book.swarm_events();
+
+    let events = Default::default();
+    let events = Events::new(book.swarm_events(), &events);
+
     let peer_a = PeerId::random();
     let addr_1: Multiaddr = "/ip4/1.1.1.1/tcp/3333".parse().unwrap();
     let mut addr_1_2 = addr_1.clone();
@@ -31,38 +57,38 @@ async fn test_dial_basic() {
     let addr_2: Multiaddr = "/ip4/2.2.2.2/tcp/3333".parse().unwrap();
     let error = std::io::Error::new(std::io::ErrorKind::Other, "my error");
     book.add_address(&peer_a, addr_1.clone(), AddressSource::Mdns);
+    assert_eq!(events.next(), vec!(Discovered(peer_a), NewInfo(peer_a)));
+    assert_eq!(dials(&mut book), vec!(Dial::A(addr_1_2.clone())));
     book.add_address(&peer_a, addr_1_2, AddressSource::User);
+    assert_eq!(events.next(), vec!(NewInfo(peer_a)));
     book.add_address(&peer_a, addr_2.clone(), AddressSource::Incoming);
-    assert_eq!(stream.next().await, Some(Event::Discovered(peer_a)));
+    assert_eq!(events.next(), vec!(NewInfo(peer_a)));
     let peers = book.peers().collect::<Vec<_>>();
     assert_eq!(peers, vec![&peer_a]);
     book.inject_addr_reach_failure(Some(&peer_a), &addr_1, &error);
+    assert_eq!(
+        events.next(),
+        vec!(
+            DialFailure(peer_a, addr_1.clone(), "my error".to_owned()),
+            NewInfo(peer_a)
+        )
+    );
     book.inject_addr_reach_failure(Some(&peer_a), &addr_2, &error);
+    assert_eq!(
+        events.next(),
+        vec!(
+            DialFailure(peer_a, addr_2.clone(), "my error".to_owned()),
+            NewInfo(peer_a)
+        )
+    );
     book.inject_dial_failure(&peer_a);
-    assert_eq!(
-        stream.next().await,
-        Some(Event::DialFailure(
-            peer_a,
-            addr_1.clone(),
-            "my error".to_owned()
-        ))
-    );
-    assert_eq!(
-        stream.next().await,
-        Some(Event::DialFailure(
-            peer_a,
-            addr_2.clone(),
-            "my error".to_owned()
-        ))
-    );
-    assert_eq!(stream.next().await, Some(Event::Unreachable(peer_a)));
-    #[allow(clippy::needless_collect)]
-    let peers = book.peers().collect::<Vec<_>>();
-    assert!(peers.is_empty());
+    assert_eq!(events.next(), vec!(NewInfo(peer_a), Unreachable(peer_a)));
+    assert!(book.peers().next().is_none());
+    assert_eq!(dials(&mut book), vec![]);
 }
 
-#[async_std::test]
-async fn test_dial_with_added_addrs() {
+#[test]
+fn test_dial_with_added_addrs() {
     let mut book = AddressBook::new(
         PeerId::random(),
         "".into(),
@@ -71,41 +97,50 @@ async fn test_dial_with_added_addrs() {
         false,
         true,
     );
-    let mut stream = book.swarm_events();
+
+    let events = Default::default();
+    let events = Events::new(book.swarm_events(), &events);
+
     let peer_a = PeerId::random();
     let addr_1: Multiaddr = "/ip4/1.1.1.1/tcp/3333".parse().unwrap();
+    let addr_1p = addr_1.clone().with(Protocol::P2p(peer_a.into()));
     let addr_2: Multiaddr = "/ip4/2.2.2.2/tcp/3333".parse().unwrap();
     let error = std::io::Error::new(std::io::ErrorKind::Other, "my error");
+
     book.add_address(&peer_a, addr_1.clone(), AddressSource::Mdns);
-    assert_eq!(stream.next().await, Some(Event::Discovered(peer_a)));
+    assert_eq!(events.next(), vec!(Discovered(peer_a), NewInfo(peer_a)));
+    assert_eq!(dials(&mut book), vec!(Dial::A(addr_1p)));
+
     book.add_address(&peer_a, addr_2.clone(), AddressSource::Incoming);
+    assert_eq!(events.next(), vec!(NewInfo(peer_a)));
+
     book.inject_addr_reach_failure(Some(&peer_a), &addr_1, &error);
+    assert_eq!(
+        events.next(),
+        vec!(
+            DialFailure(peer_a, addr_1.clone(), "my error".to_owned()),
+            NewInfo(peer_a)
+        )
+    );
+
     book.inject_dial_failure(&peer_a);
-    // book.poll
+    // Incoming addresses are not eligible for dialling until verified
+    assert_eq!(dials(&mut book), vec!(Dial::P(peer_a, vec!())));
     let peers = book.peers().collect::<Vec<_>>();
     assert_eq!(peers, vec![&peer_a]);
+
     book.inject_addr_reach_failure(Some(&peer_a), &addr_2, &error);
+    assert_eq!(
+        events.next(),
+        vec!(
+            DialFailure(peer_a, addr_2.clone(), "my error".to_owned()),
+            NewInfo(peer_a)
+        )
+    );
+
     book.inject_dial_failure(&peer_a);
-    assert_eq!(
-        stream.next().await,
-        Some(Event::DialFailure(
-            peer_a,
-            addr_1.clone(),
-            "my error".to_owned()
-        ))
-    );
-    assert_eq!(
-        stream.next().await,
-        Some(Event::DialFailure(
-            peer_a,
-            addr_2.clone(),
-            "my error".to_owned()
-        ))
-    );
-    assert_eq!(stream.next().await, Some(Event::Unreachable(peer_a)));
-    #[allow(clippy::needless_collect)]
-    let peers = book.peers().collect::<Vec<_>>();
-    assert!(peers.is_empty());
+    assert_eq!(events.next(), vec!(NewInfo(peer_a), Unreachable(peer_a)));
+    assert!(book.peers().next().is_none());
 }
 
 #[test]
@@ -121,21 +156,8 @@ fn from_docker_host() {
         false,
         false,
     );
-    let events = RefCell::new(Vec::new());
-    let next = {
-        let swarm = LocalExecutor::new();
-        swarm
-            .spawn(book.swarm_events().for_each(|e| {
-                events.borrow_mut().push(e);
-                ready(())
-            }))
-            .detach();
-        let events = &events;
-        move || {
-            while swarm.try_tick() {}
-            std::mem::take(&mut *events.borrow_mut())
-        }
-    };
+    let events = Default::default();
+    let events = Events::new(book.swarm_events(), &events);
 
     let key_b = generate_keypair().to_public();
     let peer_b = PeerId::from(&key_b);
@@ -154,7 +176,7 @@ fn from_docker_host() {
     };
     book.inject_connection_established(&peer_b, &id, &cp);
     assert_eq!(
-        next(),
+        events.next(),
         vec![
             Discovered(peer_b),
             NewInfo(peer_b),
@@ -176,8 +198,11 @@ fn from_docker_host() {
         observed_addr: addr_a_1,
     };
     book.set_info(&peer_b, info);
-    assert_eq!(next(), vec![NewInfo(peer_b)]);
-    assert_eq!(dials(&mut book), vec![addr_b_2p.clone(), addr_b_3p.clone()]);
+    assert_eq!(events.next(), vec![NewInfo(peer_b)]);
+    assert_eq!(
+        dials(&mut book),
+        vec![Dial::A(addr_b_2p.clone()), Dial::A(addr_b_3p.clone())]
+    );
     assert_eq!(
         addrs(&book, peer_b),
         vec![
@@ -192,7 +217,7 @@ fn from_docker_host() {
     };
     book.inject_connection_established(&peer_b, &id2, &cp2);
     assert_eq!(
-        next(),
+        events.next(),
         vec![NewInfo(peer_b), ConnectionEstablished(peer_b, cp2)]
     );
     assert_eq!(dials(&mut book), vec![]);
@@ -207,12 +232,11 @@ fn from_docker_host() {
     let error = anyhow::anyhow!("didn’t work, mate!");
     book.inject_addr_reach_failure(Some(&peer_b), &addr_b_3p, error.as_ref());
     assert_eq!(
-        next(),
-        vec![DialFailure(
-            peer_b,
-            addr_b_3p,
-            "didn’t work, mate!".to_owned()
-        )]
+        events.next(),
+        vec![
+            DialFailure(peer_b, addr_b_3p, "didn’t work, mate!".to_owned()),
+            NewInfo(peer_b)
+        ]
     );
     assert_eq!(dials(&mut book), vec![]);
     assert_eq!(addrs(&book, peer_b), vec![(addr_b_2p, AddressSource::Dial)]);
@@ -231,21 +255,8 @@ fn from_docker_container() {
         false,
         false,
     );
-    let events = RefCell::new(Vec::new());
-    let next = {
-        let swarm = LocalExecutor::new();
-        swarm
-            .spawn(book.swarm_events().for_each(|e| {
-                events.borrow_mut().push(e);
-                ready(())
-            }))
-            .detach();
-        let events = &events;
-        move || {
-            while swarm.try_tick() {}
-            std::mem::take(&mut *events.borrow_mut())
-        }
-    };
+    let events = Default::default();
+    let events = Events::new(book.swarm_events(), &events);
 
     let key_b = generate_keypair().to_public();
     let peer_b = PeerId::from(&key_b);
@@ -264,7 +275,7 @@ fn from_docker_container() {
     };
     book.inject_connection_established(&peer_b, &id, &cp);
     assert_eq!(
-        next(),
+        events.next(),
         vec![
             Discovered(peer_b),
             NewInfo(peer_b),
@@ -286,8 +297,11 @@ fn from_docker_container() {
         observed_addr: addr_a_1.clone(),
     };
     book.set_info(&peer_b, info);
-    assert_eq!(next(), vec![NewInfo(peer_b)]);
-    assert_eq!(dials(&mut book), vec![addr_b_2p.clone(), addr_b_3p.clone()]);
+    assert_eq!(events.next(), vec![NewInfo(peer_b)]);
+    assert_eq!(
+        dials(&mut book),
+        vec![Dial::A(addr_b_2p.clone()), Dial::A(addr_b_3p.clone())]
+    );
     assert_eq!(
         addrs(&book, peer_b),
         vec![
@@ -308,8 +322,11 @@ fn from_docker_container() {
         observed_addr: addr_a_1,
     };
     book.set_info(&peer_b, info);
-    assert_eq!(next(), vec![NewInfo(peer_b)]);
-    assert_eq!(dials(&mut book), vec![addr_b_2p.clone(), addr_b_3p.clone()]);
+    assert_eq!(events.next(), vec![NewInfo(peer_b)]);
+    assert_eq!(
+        dials(&mut book),
+        vec![Dial::A(addr_b_2p.clone()), Dial::A(addr_b_3p.clone())]
+    );
     assert_eq!(
         addrs(&book, peer_b),
         vec![
@@ -321,12 +338,11 @@ fn from_docker_container() {
     let error = anyhow::anyhow!("play it again, Sam");
     book.inject_addr_reach_failure(Some(&peer_b), &addr_b_3p, error.as_ref());
     assert_eq!(
-        next(),
-        vec![DialFailure(
-            peer_b,
-            addr_b_3p,
-            "play it again, Sam".to_owned()
-        )]
+        events.next(),
+        vec![
+            DialFailure(peer_b, addr_b_3p, "play it again, Sam".to_owned()),
+            NewInfo(peer_b)
+        ]
     );
     assert_eq!(dials(&mut book), vec![]);
     assert_eq!(
@@ -340,7 +356,7 @@ fn from_docker_container() {
     };
     book.inject_connection_established(&peer_b, &id2, &cp2);
     assert_eq!(
-        next(),
+        events.next(),
         vec![NewInfo(peer_b), ConnectionEstablished(peer_b, cp2)]
     );
     assert_eq!(dials(&mut book), vec![]);
@@ -351,12 +367,11 @@ fn from_docker_container() {
 
     book.inject_addr_reach_failure(None, &addr_b_2p, error.as_ref());
     assert_eq!(
-        next(),
-        vec![DialFailure(
-            peer_b,
-            addr_b_2p.clone(),
-            "play it again, Sam".to_owned()
-        )]
+        events.next(),
+        vec![
+            DialFailure(peer_b, addr_b_2p.clone(), "play it again, Sam".to_owned()),
+            NewInfo(peer_b)
+        ]
     );
     assert_eq!(dials(&mut book), vec![]);
     assert_eq!(addrs(&book, peer_b), vec![(addr_b_2p, AddressSource::Dial)]);
@@ -389,15 +404,28 @@ fn addrs(book: &AddressBook, peer_id: PeerId) -> Vec<(Multiaddr, AddressSource)>
     v
 }
 
-fn dials(book: &mut AddressBook) -> Vec<Multiaddr> {
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Dial {
+    A(Multiaddr),
+    P(PeerId, Vec<Multiaddr>),
+}
+
+fn dials(book: &mut AddressBook) -> Vec<Dial> {
     let mut v = book
         .actions
         .drain(..)
         .filter_map(|a| match a {
-            NetworkBehaviourAction::DialAddress { address } => Some(address),
+            NetworkBehaviourAction::DialAddress { address } => Some(Dial::A(address)),
+            NetworkBehaviourAction::DialPeer { peer_id, .. } => Some(Dial::P(peer_id, Vec::new())),
             _ => None,
         })
         .collect::<Vec<_>>();
     v.sort();
+    for d in &mut v {
+        match d {
+            Dial::A(_) => {}
+            Dial::P(peer, addrs) => addrs.extend(book.addresses_of_peer(peer)),
+        }
+    }
     v
 }
