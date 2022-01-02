@@ -110,7 +110,7 @@ fn main() -> anyhow::Result<()> {
                 let data = machine
                     .select_draining(|e| match e {
                         Event::Block(data) => Some(data),
-                        _ => None
+                        _ => None,
                     })
                     .deadline(started, 5)
                     .await
