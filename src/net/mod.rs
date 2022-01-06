@@ -1,39 +1,4 @@
-use crate::{
-    executor::{Executor, JoinHandle},
-    net::behaviour::{GetChannel, NetworkBackendBehaviour, SyncChannel},
-};
-use futures::stream::{Stream, StreamExt};
-use futures::task::AtomicWaker;
-use futures::{channel::mpsc, future, pin_mut};
-use libipld::error::BlockNotFound;
-use libipld::store::StoreParams;
-use libipld::{Cid, Result};
-use libp2p::core::either::EitherTransport;
-use libp2p::core::transport::Transport;
-use libp2p::core::upgrade::{AuthenticationVersion, SelectUpgrade};
-#[cfg(feature = "async_global")]
-use libp2p::dns::DnsConfig as Dns;
-#[cfg(all(feature = "tokio", not(feature = "async_global")))]
-use libp2p::dns::TokioDnsConfig as Dns;
-use libp2p::kad::kbucket::Key as BucketKey;
-use libp2p::mplex::MplexConfig;
-use libp2p::noise::{self, NoiseConfig, X25519Spec};
-use libp2p::pnet::{PnetConfig, PreSharedKey};
-use libp2p::swarm::{AddressScore, Swarm, SwarmBuilder};
-#[cfg(feature = "async_global")]
-use libp2p::tcp::TcpConfig;
-#[cfg(all(feature = "tokio", not(feature = "async_global")))]
-use libp2p::tcp::TokioTcpConfig as TcpConfig;
-use libp2p::yamux::YamuxConfig;
-use parking_lot::Mutex;
-use prometheus::Registry;
-use std::collections::HashSet;
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::time::Duration;
-
+mod address_handler;
 mod behaviour;
 mod config;
 mod p2p_wrapper;
@@ -42,22 +7,57 @@ mod peers;
 #[cfg(test)]
 mod tests;
 
-pub use self::peer_info::Direction;
-pub use crate::net::behaviour::{GossipEvent, QueryId, SyncEvent};
-pub use crate::net::config::*;
-pub use crate::net::peer_info::{AddressSource, ConnectionFailure, PeerInfo, Rtt};
-pub use crate::net::peers::{Event, SwarmEvents};
-use chrono::{DateTime, Utc};
-pub use libp2p::core::connection::ListenerId;
-pub use libp2p::kad::record::{Key, Record};
-pub use libp2p::kad::{PeerRecord, Quorum};
-pub use libp2p::swarm::AddressRecord;
-pub use libp2p::{Multiaddr, PeerId, TransportError};
-pub use libp2p_bitswap::BitswapStore;
-pub use libp2p_blake_streams::{
-    DocId, Head, LocalStreamWriter, SignedHead, StreamId, StreamReader,
+pub use self::{
+    behaviour::{GossipEvent, QueryId, SyncEvent},
+    config::{DnsConfig, NetworkConfig},
+    peer_info::{AddressSource, ConnectionFailure, Direction, PeerInfo, Rtt},
+    peers::{Event, SwarmEvents},
 };
-pub use libp2p_quic::{generate_keypair, PublicKey, SecretKey, ToLibp2p};
+
+use self::behaviour::{GetChannel, NetworkBackendBehaviour, SyncChannel};
+use crate::executor::{Executor, JoinHandle};
+use chrono::{DateTime, Utc};
+use futures::{
+    channel::mpsc,
+    future,
+    stream::{Stream, StreamExt},
+    task::AtomicWaker,
+};
+use libipld::{error::BlockNotFound, store::StoreParams, Cid, Result};
+#[cfg(feature = "async_global")]
+use libp2p::dns::DnsConfig as Dns;
+#[cfg(all(feature = "tokio", not(feature = "async_global")))]
+use libp2p::dns::TokioDnsConfig as Dns;
+#[cfg(feature = "async_global")]
+use libp2p::tcp::TcpConfig;
+#[cfg(all(feature = "tokio", not(feature = "async_global")))]
+use libp2p::tcp::TokioTcpConfig as TcpConfig;
+use libp2p::{
+    core::{
+        either::EitherTransport,
+        transport::Transport,
+        upgrade::{SelectUpgrade, Version},
+    },
+    identity::ed25519::PublicKey,
+    kad::{kbucket::Key as BucketKey, record::Key, PeerRecord, Quorum, Record},
+    mplex::MplexConfig,
+    noise::{self, NoiseConfig, X25519Spec},
+    pnet::{PnetConfig, PreSharedKey},
+    swarm::{AddressRecord, AddressScore, Swarm, SwarmBuilder, SwarmEvent},
+    yamux::YamuxConfig,
+    Multiaddr, PeerId,
+};
+use libp2p_bitswap::BitswapStore;
+use parking_lot::Mutex;
+use prometheus::Registry;
+use std::{
+    collections::HashSet,
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ListenerEvent {
@@ -78,7 +78,8 @@ impl<P: StoreParams> NetworkService<P> {
         store: S,
         executor: Executor,
     ) -> Result<Self> {
-        let peer_id = config.node_key.to_peer_id();
+        let peer_id =
+            PeerId::from_public_key(&libp2p::core::PublicKey::Ed25519(config.node_key.public()));
         let behaviour = NetworkBackendBehaviour::<P>::new(&mut config, store).await?;
 
         let tcp = {
@@ -92,14 +93,13 @@ impl<P: StoreParams> NetworkService<P> {
                 EitherTransport::Right(transport)
             };
             let dh_key = noise::Keypair::<X25519Spec>::new()
-                .into_authentic(&config.node_key.to_keypair())
+                .into_authentic(&libp2p::core::identity::Keypair::Ed25519(
+                    config.node_key.clone(),
+                ))
                 .unwrap();
             let transport = transport
-                .upgrade()
-                .authenticate_with_version(
-                    NoiseConfig::xx(dh_key).into_authenticated(),
-                    AuthenticationVersion::V1SimultaneousOpen,
-                )
+                .upgrade(Version::V1)
+                .authenticate(NoiseConfig::xx(dh_key).into_authenticated())
                 .multiplex(SelectUpgrade::new(
                     YamuxConfig::default(),
                     MplexConfig::new(),
@@ -157,15 +157,36 @@ impl<P: StoreParams> NetworkService<P> {
         let waker2 = waker.clone();
         let swarm_task = executor.spawn(future::poll_fn(move |cx| {
             waker.register(cx.waker());
-            let mut guard = swarm.lock();
+            let mut swarm = swarm.lock();
+            let mut count = 0;
             loop {
-                let swarm = &mut *guard;
-                pin_mut!(swarm);
-                if !swarm.poll_next(cx).is_ready() {
-                    break;
+                count += 1;
+                if count > 20 {
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
                 }
+
+                let event = match swarm.poll_next_unpin(cx) {
+                    Poll::Ready(Some(e)) => e,
+                    Poll::Ready(None) => return Poll::Ready(()),
+                    Poll::Pending => return Poll::Pending,
+                };
+
+                if let SwarmEvent::ConnectionClosed {
+                    peer_id,
+                    endpoint,
+                    num_established,
+                    cause,
+                } = event
+                {
+                    swarm.behaviour_mut().connection_closed(
+                        peer_id,
+                        endpoint,
+                        num_established,
+                        cause,
+                    );
+                };
             }
-            Poll::Pending
         }));
 
         Ok(Self {
@@ -177,7 +198,7 @@ impl<P: StoreParams> NetworkService<P> {
 
     pub fn local_public_key(&self) -> PublicKey {
         let swarm = self.swarm.lock();
-        *swarm.behaviour().local_public_key()
+        swarm.behaviour().local_public_key().clone()
     }
 
     pub fn local_peer_id(&self) -> PeerId {
@@ -419,56 +440,6 @@ impl<P: StoreParams> NetworkService<P> {
     pub fn swarm_events(&self) -> SwarmEvents {
         let mut swarm = self.swarm.lock();
         swarm.behaviour_mut().swarm_events()
-    }
-
-    pub fn docs(&self) -> Result<Vec<DocId>> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().docs()
-    }
-
-    pub fn streams(&self) -> Result<Vec<StreamId>> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().streams()
-    }
-
-    pub fn substreams(&self, doc: DocId) -> Result<Vec<StreamId>> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().substreams(doc)
-    }
-
-    pub fn stream_add_peers(&self, doc: DocId, peers: impl Iterator<Item = PeerId>) {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().add_peers(doc, peers)
-    }
-
-    pub fn stream_head(&self, id: &StreamId) -> Result<Option<SignedHead>> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().head(id)
-    }
-
-    pub fn stream_slice(&self, id: &StreamId, start: u64, len: u64) -> Result<StreamReader> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().slice(id, start, len)
-    }
-
-    pub fn stream_remove(&self, id: &StreamId) -> Result<()> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().remove(id)
-    }
-
-    pub fn stream_append(&self, id: DocId) -> Result<LocalStreamWriter> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().append(id)
-    }
-
-    pub fn stream_subscribe(&self, id: &StreamId) -> Result<()> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().subscribe(id)
-    }
-
-    pub fn stream_update_head(&self, head: SignedHead) {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().update_head(head)
     }
 }
 

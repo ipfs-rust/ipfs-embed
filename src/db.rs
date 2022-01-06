@@ -1,23 +1,21 @@
-use ipfs_sqlite_block_store::cache::{CacheTracker, InMemCacheTracker};
 pub use ipfs_sqlite_block_store::TempPin;
 use ipfs_sqlite_block_store::{
-    cache::SqliteCacheTracker, BlockStore, Config, SizeTargets, Synchronous,
+    cache::{CacheTracker, InMemCacheTracker, SqliteCacheTracker},
+    BlockStore, Config, Synchronous,
 };
 use lazy_static::lazy_static;
-use libipld::codec::References;
-use libipld::store::StoreParams;
-use libipld::{Block, Cid, Ipld, Result};
+use libipld::{codec::References, store::StoreParams, Block, Cid, Ipld, Result};
 use parking_lot::Mutex;
-use prometheus::core::{Collector, Desc};
-use prometheus::proto::MetricFamily;
-use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry};
-use std::future::Future;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use prometheus::{
+    core::{Collector, Desc},
+    proto::MetricFamily,
+    HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry,
+};
+use std::{future::Future, path::PathBuf, sync::Arc, time::Duration};
 use tracing::info;
 
 use crate::executor::{Executor, JoinHandle};
+use std::collections::HashSet;
 
 /// Storage configuration.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -128,9 +126,8 @@ where
     Ipld: References<S::Codecs>,
 {
     pub fn open(config: StorageConfig, executor: Executor) -> Result<Self> {
-        let size = SizeTargets::new(config.cache_size_blocks, config.cache_size_bytes);
         let store_config = Config::default()
-            .with_size_targets(size)
+            .with_size_targets(config.cache_size_blocks, config.cache_size_bytes)
             .with_pragma_synchronous(Synchronous::Normal);
         let tracker: Arc<dyn CacheTracker> = if let Some(path) = config.access_db_path {
             let path = if path.is_file() {
@@ -160,38 +157,16 @@ where
         let gc_min_blocks = config.gc_min_blocks;
         let gc_target_duration = config.gc_target_duration;
         let gc_task = executor.spawn(async move {
-            enum Phase {
-                Gc,
-                Delete,
-            }
-            let mut phase = Phase::Gc;
             loop {
                 futures_timer::Delay::new(gc_interval / 2).await;
                 info!("going for gc!");
-                match phase {
-                    Phase::Gc => {
-                        tracing::trace!("gc_loop running incremental gc");
-                        gc.lock()
-                            .incremental_gc(gc_min_blocks, gc_target_duration)
-                            .map_err(|e| {
-                                tracing::warn!("failure during incremental gc: {}", e);
-                                e
-                            })
-                            .ok();
-                        phase = Phase::Delete;
-                    }
-                    Phase::Delete => {
-                        tracing::trace!("gc_loop running incremental delete orphaned");
-                        gc.lock()
-                            .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)
-                            .map_err(|e| {
-                                tracing::warn!("failure during delete_orphaned: {}", e);
-                                e
-                            })
-                            .ok();
-                        phase = Phase::Gc;
-                    }
-                }
+                gc.lock()
+                    .incremental_gc(gc_min_blocks, gc_target_duration)
+                    .map_err(|e| {
+                        tracing::warn!("failure during incremental gc: {}", e);
+                        e
+                    })
+                    .ok();
             }
         });
         Ok(Self {
@@ -208,18 +183,6 @@ impl<S: StoreParams> StorageService<S>
 where
     Ipld: References<S::Codecs>,
 {
-    pub fn ro<F: FnOnce(&mut Batch<'_, S>) -> Result<R>, R>(
-        &self,
-        op: &'static str,
-        f: F,
-    ) -> Result<R> {
-        observe_query(op, || {
-            let mut lock = self.inner.store.lock();
-            let mut txn = Batch(lock.transaction()?);
-            f(&mut txn)
-        })
-    }
-
     pub fn rw<F: FnOnce(&mut Batch<'_, S>) -> Result<R>, R>(
         &self,
         op: &'static str,
@@ -227,7 +190,7 @@ where
     ) -> Result<R> {
         observe_query(op, || {
             let mut lock = self.inner.store.lock();
-            let mut txn = Batch(lock.transaction()?);
+            let mut txn = Batch(lock.transaction());
             let res = f(&mut txn);
             if res.is_ok() {
                 txn.0.commit()?;
@@ -242,22 +205,22 @@ where
 
     pub fn temp_pin(
         &self,
-        temp: &TempPin,
+        temp: &mut TempPin,
         iter: impl IntoIterator<Item = Cid> + Send + 'static,
     ) -> Result<()> {
         self.rw("temp_pin", |x| x.temp_pin(temp, iter))
     }
 
     pub fn iter(&self) -> Result<impl Iterator<Item = Cid>> {
-        self.ro("iter", |x| x.iter())
+        self.rw("iter", |x| x.iter())
     }
 
     pub fn contains(&self, cid: &Cid) -> Result<bool> {
-        self.ro("contains", |x| x.contains(cid))
+        self.rw("contains", |x| x.contains(cid))
     }
 
     pub fn get(&self, cid: &Cid) -> Result<Option<Vec<u8>>> {
-        self.ro("get", |x| x.get(cid))
+        self.rw("get", |x| x.get(cid))
     }
 
     pub fn insert(&self, block: &Block<S>) -> Result<()> {
@@ -269,19 +232,19 @@ where
     }
 
     pub fn aliases(&self) -> Result<Vec<(Vec<u8>, Cid)>> {
-        self.ro("aliases", |x| x.aliases())
+        self.rw("aliases", |x| x.aliases())
     }
 
     pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>> {
-        self.ro("resolve", |x| x.resolve(alias))
+        self.rw("resolve", |x| x.resolve(alias))
     }
 
-    pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
-        self.ro("reverse_alias", |x| x.reverse_alias(cid))
+    pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<HashSet<Vec<u8>>>> {
+        self.rw("reverse_alias", |x| x.reverse_alias(cid))
     }
 
     pub fn missing_blocks(&self, cid: &Cid) -> Result<Vec<Cid>> {
-        self.ro("missing_blocks", |x| x.missing_blocks(cid))
+        self.rw("missing_blocks", |x| x.missing_blocks(cid))
     }
 
     pub async fn evict(&self) -> Result<()> {
@@ -294,11 +257,8 @@ where
                 while !store
                     .lock()
                     .incremental_gc(gc_min_blocks, gc_target_duration)?
-                {}
-                while !store
-                    .lock()
-                    .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)?
                 {
+                    tracing::trace!("x");
                 }
                 Ok(())
             })
@@ -426,13 +386,13 @@ where
     S: StoreParams,
     Ipld: References<S::Codecs>,
 {
-    pub fn create_temp_pin(&self) -> Result<TempPin> {
+    pub fn create_temp_pin(&mut self) -> Result<TempPin> {
         Ok(self.0.temp_pin())
     }
 
     pub fn temp_pin(
-        &self,
-        temp: &TempPin,
+        &mut self,
+        temp: &mut TempPin,
         iter: impl IntoIterator<Item = Cid> + Send + 'static,
     ) -> Result<()> {
         for link in iter {
@@ -441,12 +401,12 @@ where
         Ok(())
     }
 
-    pub fn iter(&self) -> Result<impl Iterator<Item = Cid>> {
+    pub fn iter(&mut self) -> Result<impl Iterator<Item = Cid>> {
         let cids = self.0.get_block_cids::<Vec<Cid>>()?;
         Ok(cids.into_iter())
     }
 
-    pub fn contains(&self, cid: &Cid) -> Result<bool> {
+    pub fn contains(&mut self, cid: &Cid) -> Result<bool> {
         Ok(self.0.has_block(cid)?)
     }
 
@@ -458,7 +418,7 @@ where
         Ok(self.0.put_block(block, None)?)
     }
 
-    pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>> {
+    pub fn resolve(&mut self, alias: &[u8]) -> Result<Option<Cid>> {
         Ok(self.0.resolve(alias)?)
     }
 
@@ -466,15 +426,15 @@ where
         Ok(self.0.alias(alias, cid)?)
     }
 
-    pub fn aliases(&self) -> Result<Vec<(Vec<u8>, Cid)>> {
+    pub fn aliases(&mut self) -> Result<Vec<(Vec<u8>, Cid)>> {
         Ok(self.0.aliases()?)
     }
 
-    pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
+    pub fn reverse_alias(&mut self, cid: &Cid) -> Result<Option<HashSet<Vec<u8>>>> {
         Ok(self.0.reverse_alias(cid)?)
     }
 
-    pub fn missing_blocks(&self, cid: &Cid) -> Result<Vec<Cid>> {
+    pub fn missing_blocks(&mut self, cid: &Cid) -> Result<Vec<Cid>> {
         Ok(self.0.get_missing_blocks(cid)?)
     }
 }
@@ -484,10 +444,7 @@ mod tests {
     use crate::executor::Executor;
 
     use super::*;
-    use libipld::cbor::DagCborCodec;
-    use libipld::multihash::Code;
-    use libipld::store::DefaultParams;
-    use libipld::{alias, ipld};
+    use libipld::{alias, cbor::DagCborCodec, ipld, multihash::Code, store::DefaultParams};
 
     fn create_block(ipld: &Ipld) -> Block<DefaultParams> {
         Block::encode(DagCborCodec, Code::Blake3_256, ipld).unwrap()

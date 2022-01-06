@@ -1,37 +1,41 @@
 use super::peer_info::Direction;
-use crate::net::config::NetworkConfig;
-use crate::net::peers::{AddressBook, Event, SwarmEvents};
-use crate::{AddressSource, PeerInfo};
+use crate::{
+    net::{
+        config::NetworkConfig,
+        peers::{AddressBook, Event, SwarmEvents},
+    },
+    AddressSource, PeerInfo,
+};
 use chrono::{DateTime, Utc};
 use fnv::FnvHashMap;
-use futures::channel::{mpsc, oneshot};
-use futures::stream::Stream;
-use libipld::store::StoreParams;
-use libipld::{Cid, Result};
-use libp2p::gossipsub::{
-    Gossipsub, GossipsubEvent, GossipsubMessage, IdentTopic, MessageAuthenticity,
+use futures::{
+    channel::{mpsc, oneshot},
+    stream::Stream,
 };
-use libp2p::identify::{Identify, IdentifyEvent};
-use libp2p::kad::kbucket::Key as BucketKey;
-use libp2p::kad::record::store::MemoryStore;
-use libp2p::kad::record::{Key, Record};
-use libp2p::kad::{
-    AddProviderOk, BootstrapOk, GetClosestPeersOk, GetProvidersOk, GetRecordOk, Kademlia,
-    KademliaEvent, PeerRecord, PutRecordOk, QueryResult, Quorum,
+use libipld::{store::StoreParams, Cid, DefaultParams, Result};
+use libp2p::{
+    core::{connection::ConnectionError, ConnectedPoint},
+    gossipsub::{Gossipsub, GossipsubEvent, GossipsubMessage, IdentTopic, MessageAuthenticity},
+    identify::{Identify, IdentifyEvent},
+    identity::ed25519::PublicKey,
+    kad::{
+        kbucket::Key as BucketKey,
+        record::{store::MemoryStore, Key, Record},
+        AddProviderOk, BootstrapOk, GetClosestPeersOk, GetProvidersOk, GetRecordOk, Kademlia,
+        KademliaEvent, PeerRecord, PutRecordOk, QueryResult, Quorum,
+    },
+    mdns::{Mdns, MdnsEvent},
+    ping::{Ping, PingEvent, PingFailure, PingSuccess},
+    swarm::{
+        protocols_handler::NodeHandlerWrapperError, toggle::Toggle, IntoProtocolsHandler,
+        NetworkBehaviour, NetworkBehaviourEventProcess, ProtocolsHandler,
+    },
+    Multiaddr, NetworkBehaviour, PeerId,
 };
-use libp2p::mdns::{Mdns, MdnsEvent};
-use libp2p::ping::{Ping, PingEvent, PingFailure, PingSuccess};
-use libp2p::swarm::toggle::Toggle;
-use libp2p::swarm::NetworkBehaviourEventProcess;
-use libp2p::NetworkBehaviour;
-use libp2p::{Multiaddr, PeerId};
 use libp2p_bitswap::{Bitswap, BitswapEvent, BitswapStore};
-use libp2p_blake_streams::{StreamSync, StreamSyncEvent};
 use libp2p_broadcast::{Broadcast, BroadcastEvent, Topic};
-use libp2p_quic::{PublicKey, ToLibp2p};
 use prometheus::Registry;
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -92,8 +96,11 @@ pub enum GossipEvent {
     Message(PeerId, Arc<[u8]>),
     Unsubscribed(PeerId),
 }
-/// Behaviour type.
+
+pub(crate) type MyHandlerError = <<<NetworkBackendBehaviour<DefaultParams> as NetworkBehaviour>::ProtocolsHandler as IntoProtocolsHandler>::Handler as ProtocolsHandler>::Error;
+
 #[derive(NetworkBehaviour)]
+#[behaviour(event_process = true)]
 pub struct NetworkBackendBehaviour<P: StoreParams> {
     peers: AddressBook,
     kad: Toggle<Kademlia<MemoryStore>>,
@@ -103,7 +110,6 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     bitswap: Toggle<Bitswap<P>>,
     gossipsub: Toggle<Gossipsub>,
     broadcast: Toggle<Broadcast>,
-    streams: Toggle<StreamSync>,
 
     #[behaviour(ignore)]
     bootstrap_complete: bool,
@@ -351,6 +357,7 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<GossipsubEvent> for NetworkBac
                     .notify(Event::Unsubscribed(peer_id, topic.to_string()));
                 self.notify_subscribers(&*topic.to_string(), GossipEvent::Unsubscribed(peer_id));
             }
+            GossipsubEvent::GossipsubNotSupported { .. } => {}
         }
     }
 }
@@ -379,16 +386,6 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<BroadcastEvent> for NetworkBac
     }
 }
 
-impl<P: StoreParams> NetworkBehaviourEventProcess<StreamSyncEvent> for NetworkBackendBehaviour<P> {
-    fn inject_event(&mut self, event: StreamSyncEvent) {
-        match event {
-            StreamSyncEvent::NewHead(head) => {
-                self.peers.notify(Event::NewHead(head));
-            }
-        }
-    }
-}
-
 impl<P: StoreParams> NetworkBehaviourEventProcess<void::Void> for NetworkBackendBehaviour<P> {
     fn inject_event(&mut self, _event: void::Void) {}
 }
@@ -399,8 +396,8 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         config: &mut NetworkConfig,
         store: S,
     ) -> Result<Self> {
-        let public = config.node_key.public;
-        let node_key = config.node_key.to_keypair();
+        let public = config.node_key.public();
+        let node_key = libp2p::identity::Keypair::Ed25519(config.node_key.clone());
         let node_name = config.node_name.clone();
         let peer_id = node_key.public().to_peer_id();
         let mdns = if let Some(config) = config.mdns.take() {
@@ -434,11 +431,6 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             .bitswap
             .take()
             .map(|config| Bitswap::new(config, store));
-        let streams = if let Some(config) = config.streams.take() {
-            Some(StreamSync::new(config)?)
-        } else {
-            None
-        };
         Ok(Self {
             bootstrap_complete: false,
             peers: AddressBook::new(
@@ -447,7 +439,6 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
                 public,
                 config.port_reuse,
                 config.enable_loopback,
-                config.prune_addresses,
             ),
             mdns: mdns.into(),
             kad: kad.into(),
@@ -456,7 +447,6 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             bitswap: bitswap.into(),
             gossipsub: gossipsub.into(),
             broadcast: broadcast.into(),
-            streams: streams.into(),
             queries: Default::default(),
             subscriptions: Default::default(),
         })
@@ -486,6 +476,17 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
 
     pub fn dial(&mut self, peer_id: &PeerId) {
         self.peers.dial(peer_id);
+    }
+
+    pub fn connection_closed(
+        &mut self,
+        peer: PeerId,
+        cp: ConnectedPoint,
+        num_established: u32,
+        error: Option<ConnectionError<NodeHandlerWrapperError<MyHandlerError>>>,
+    ) {
+        self.peers
+            .connection_closed(peer, cp, num_established, error);
     }
 
     pub fn peers(&self) -> impl Iterator<Item = &PeerId> + '_ {
@@ -739,9 +740,5 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
 
     pub fn swarm_events(&mut self) -> SwarmEvents {
         self.peers.swarm_events()
-    }
-
-    pub fn streams(&mut self) -> &mut StreamSync {
-        self.streams.as_mut().expect("streams enabled")
     }
 }

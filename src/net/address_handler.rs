@@ -1,0 +1,99 @@
+use libp2p::{
+    core::{upgrade::DeniedUpgrade, ConnectedPoint},
+    swarm::{
+        protocols_handler, IntoProtocolsHandler, KeepAlive, ProtocolsHandler, SubstreamProtocol,
+    },
+    Multiaddr, PeerId,
+};
+use std::task::{Context, Poll};
+use void::Void;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntoAddressHandler(pub Option<Multiaddr>);
+
+impl IntoProtocolsHandler for IntoAddressHandler {
+    type Handler = AddressHandler;
+
+    fn into_handler(
+        self,
+        remote_peer_id: &libp2p::PeerId,
+        connected_point: &libp2p::core::ConnectedPoint,
+    ) -> Self::Handler {
+        AddressHandler {
+            own_dial: self.0,
+            remote_peer_id: *remote_peer_id,
+            connected_point: connected_point.clone(),
+        }
+    }
+
+    fn inbound_protocol(&self) -> DeniedUpgrade {
+        DeniedUpgrade
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddressHandler {
+    pub own_dial: Option<Multiaddr>,
+    pub remote_peer_id: PeerId,
+    pub connected_point: ConnectedPoint,
+}
+
+impl ProtocolsHandler for AddressHandler {
+    type InEvent = Void;
+    type OutEvent = Void;
+    type Error = Void;
+    type InboundProtocol = DeniedUpgrade;
+    type OutboundProtocol = DeniedUpgrade;
+    type InboundOpenInfo = ();
+    type OutboundOpenInfo = Void;
+
+    fn listen_protocol(
+        &self,
+    ) -> libp2p::swarm::SubstreamProtocol<Self::InboundProtocol, Self::InboundOpenInfo> {
+        SubstreamProtocol::new(DeniedUpgrade, ())
+    }
+
+    fn inject_fully_negotiated_inbound(
+        &mut self,
+        _protocol: <Self::InboundProtocol as protocols_handler::InboundUpgradeSend>::Output,
+        _info: Self::InboundOpenInfo,
+    ) {
+    }
+
+    fn inject_fully_negotiated_outbound(
+        &mut self,
+        _protocol: <Self::OutboundProtocol as protocols_handler::OutboundUpgradeSend>::Output,
+        _info: Self::OutboundOpenInfo,
+    ) {
+    }
+
+    fn inject_event(&mut self, _event: Self::InEvent) {}
+
+    fn inject_dial_upgrade_error(
+        &mut self,
+        _info: Self::OutboundOpenInfo,
+        _error: libp2p::swarm::ProtocolsHandlerUpgrErr<
+            <Self::OutboundProtocol as protocols_handler::OutboundUpgradeSend>::Error,
+        >,
+    ) {
+    }
+
+    fn connection_keep_alive(&self) -> KeepAlive {
+        KeepAlive::No
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn poll(
+        &mut self,
+        _cx: &mut Context<'_>,
+    ) -> Poll<
+        libp2p::swarm::ProtocolsHandlerEvent<
+            Self::OutboundProtocol,
+            Self::OutboundOpenInfo,
+            Self::OutEvent,
+            Self::Error,
+        >,
+    > {
+        Poll::Pending
+    }
+}

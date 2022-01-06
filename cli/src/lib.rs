@@ -1,7 +1,6 @@
 use anyhow::Result;
-use ed25519_dalek::{PublicKey, SecretKey};
 use ipfs_embed::{
-    Block, Cid, DefaultParams, Keypair, Multiaddr, PeerId, PeerInfo, StreamId, ToLibp2p,
+    identity::ed25519::Keypair, Block, Cid, DefaultParams, Multiaddr, PeerId, PeerInfo,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::PathBuf};
@@ -86,13 +85,13 @@ impl From<Config> for async_process::Command {
 pub fn keypair(i: u64) -> Keypair {
     let mut keypair = [0; 32];
     keypair[..8].copy_from_slice(&i.to_be_bytes());
-    let secret = SecretKey::from_bytes(&keypair).unwrap();
-    let public = PublicKey::from(&secret);
-    Keypair { secret, public }
+    Keypair::decode(&mut keypair).unwrap()
 }
 
 pub fn peer_id(i: u64) -> PeerId {
-    keypair(i).to_peer_id()
+    ipfs_embed::identity::Keypair::Ed25519(keypair(i))
+        .public()
+        .into()
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -194,7 +193,6 @@ pub enum Event {
     Flushed,
     Synced,
     Bootstrapped,
-    NewHead(StreamId, u64),
     PeerInfo(PeerId, PeerInfoIo),
     PeerRemoved(PeerId),
     DialFailure(PeerId, Multiaddr, String),
@@ -254,7 +252,6 @@ impl std::fmt::Display for Event {
             Self::Flushed => write!(f, "<flushed")?,
             Self::Synced => write!(f, "<synced")?,
             Self::Bootstrapped => write!(f, "<bootstrapped")?,
-            Self::NewHead(id, offset) => write!(f, "<newhead {} {}", id, offset)?,
             Self::PeerInfo(p, i) => {
                 write!(f, "<peer-info {} {}", p, serde_json::to_string(i).unwrap())?
             }
@@ -331,11 +328,6 @@ impl std::str::FromStr for Event {
             Some("<flushed") => Self::Flushed,
             Some("<synced") => Self::Synced,
             Some("<bootstrapped") => Self::Bootstrapped,
-            Some("<newhead") => {
-                let id = parts.next().unwrap().parse()?;
-                let offset = parts.next().unwrap().parse()?;
-                Self::NewHead(id, offset)
-            }
             Some("<peer-info") => {
                 let id = parts.next().unwrap().parse()?;
                 let s = parts.collect::<Vec<_>>().join(" ");

@@ -1,8 +1,12 @@
 use futures::stream::{BoxStream, StreamExt, TryStreamExt};
-use libp2p::core::multiaddr::{Multiaddr, Protocol};
-use libp2p::core::muxing::StreamMuxerBox;
-use libp2p::core::transport::{ListenerEvent, Transport, TransportError};
-use libp2p::PeerId;
+use libp2p::{
+    core::{
+        multiaddr::{Multiaddr, Protocol},
+        muxing::StreamMuxerBox,
+        transport::{ListenerEvent, Transport, TransportError},
+    },
+    PeerId,
+};
 
 #[derive(Clone)]
 pub struct P2pWrapper<T: Transport>(pub T);

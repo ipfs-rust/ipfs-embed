@@ -128,7 +128,8 @@ impl<T> Future for JoinHandle<T> {
 
 #[cfg(test)]
 mod test {
-    use crate::{generate_keypair, Config, DefaultParams, Ipfs};
+    use crate::{Config, DefaultParams, Ipfs};
+    use libp2p::identity::ed25519::Keypair;
     use tempdir::TempDir;
 
     #[test]
@@ -137,7 +138,7 @@ mod test {
         let tmp = TempDir::new("ipfs-embed").unwrap();
         block_on(Ipfs::<DefaultParams>::new(Config::new(
             tmp.path(),
-            generate_keypair(),
+            Keypair::generate(),
         )))
         .unwrap();
     }
@@ -145,13 +146,13 @@ mod test {
     #[cfg(feature = "tokio")]
     #[test]
     #[should_panic(
-        expected = "here is no reactor running, must be called from the context of a Tokio 1.x runtime"
+        expected = "no reactor running, must be called from the context of a Tokio 1.x runtime"
     )]
     fn should_panic_without_a_tokio_runtime() {
         use futures::executor::block_on;
         let tmp = TempDir::new("ipfs-embed").unwrap();
         let _ = block_on(Ipfs::<DefaultParams>::new0(
-            Config::new(tmp.path(), generate_keypair()),
+            Config::new(tmp.path(), Keypair::generate()),
             crate::Executor::Tokio,
         ));
     }
@@ -164,7 +165,7 @@ mod test {
             .build()
             .unwrap();
         rt.block_on(Ipfs::<DefaultParams>::new0(
-            Config::new(tmp.path(), generate_keypair()),
+            Config::new(tmp.path(), Keypair::generate()),
             crate::Executor::Tokio,
         ))
         .unwrap();

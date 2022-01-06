@@ -3,9 +3,7 @@ use async_std::stream::StreamExt;
 use ipfs_embed::{DefaultParams, Ipfs, NetworkConfig, StorageConfig};
 use ipfs_embed_cli::{keypair, Command, Config, Event};
 use parking_lot::Mutex;
-use std::io::Write;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{io::Write, sync::Arc, time::Duration};
 use structopt::StructOpt;
 use tracing_subscriber::fmt::format::FmtSpan;
 
@@ -90,7 +88,6 @@ async fn run() -> Result<()> {
                     Some(Event::Unsubscribed(peer_id, topic))
                 }
                 ipfs_embed::Event::Bootstrapped => Some(Event::Bootstrapped),
-                ipfs_embed::Event::NewHead(head) => Some(Event::NewHead(*head.id(), head.len())),
                 ipfs_embed::Event::NewInfo(peer) => match ipfs2.lock().peer_info(&peer) {
                     Some(info) => Some(Event::PeerInfo(peer, info.into())),
                     None => Some(Event::PeerRemoved(peer)),

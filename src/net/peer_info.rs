@@ -83,11 +83,11 @@ impl PeerInfo {
         self.failures.iter()
     }
 
-    pub(crate) fn push_failure(&mut self, f: ConnectionFailure, was_outbound: bool) {
+    pub(crate) fn push_failure(&mut self, f: ConnectionFailure, probe_result: bool) {
         if self.failures.len() > 9 {
             self.failures.pop_back();
         }
-        if was_outbound
+        if probe_result
             && self
                 .addresses
                 .get(f.addr())
@@ -239,8 +239,7 @@ fn address_source_order() {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionFailure {
     DialError(Multiaddr, DateTime<Utc>, String),
-    #[allow(unused)]
-    PeerDisconnected(Multiaddr, DateTime<Utc>),
+    PeerDisconnected(Multiaddr, DateTime<Utc>, String),
     WeDisconnected(Multiaddr, DateTime<Utc>, String),
 }
 
@@ -248,7 +247,7 @@ impl ConnectionFailure {
     pub fn addr(&self) -> &Multiaddr {
         match self {
             ConnectionFailure::DialError(a, _, _) => a,
-            ConnectionFailure::PeerDisconnected(a, _) => a,
+            ConnectionFailure::PeerDisconnected(a, _, _) => a,
             ConnectionFailure::WeDisconnected(a, _, _) => a,
         }
     }
@@ -256,7 +255,7 @@ impl ConnectionFailure {
     pub fn time(&self) -> DateTime<Utc> {
         match self {
             ConnectionFailure::DialError(_, t, _) => *t,
-            ConnectionFailure::PeerDisconnected(_, t) => *t,
+            ConnectionFailure::PeerDisconnected(_, t, _) => *t,
             ConnectionFailure::WeDisconnected(_, t, _) => *t,
         }
     }
@@ -272,11 +271,12 @@ impl std::fmt::Display for ConnectionFailure {
                 t.to_rfc3339_opts(Millis, true),
                 e
             ),
-            ConnectionFailure::PeerDisconnected(a, t) => write!(
+            ConnectionFailure::PeerDisconnected(a, t, e) => write!(
                 f,
-                "{} disconnected at {}",
+                "{} disconnected at {} ({})",
                 a,
-                t.to_rfc3339_opts(Millis, true)
+                t.to_rfc3339_opts(Millis, true),
+                e
             ),
             ConnectionFailure::WeDisconnected(a, t, e) => write!(
                 f,

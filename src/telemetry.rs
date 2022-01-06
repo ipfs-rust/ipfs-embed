@@ -1,8 +1,6 @@
 use crate::Ipfs;
 use anyhow::Result;
-use libipld::codec::References;
-use libipld::store::StoreParams;
-use libipld::Ipld;
+use libipld::{codec::References, store::StoreParams, Ipld};
 use prometheus::Encoder;
 
 /// Telemetry server

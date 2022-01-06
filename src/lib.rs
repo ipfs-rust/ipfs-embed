@@ -9,36 +9,6 @@
 //! ipfs.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 //! # Ok(()) }
 //! ```
-use async_trait::async_trait;
-use futures::stream::Stream;
-use libipld::{
-    codec::References,
-    error::BlockNotFound,
-    store::{Store, StoreParams},
-    Ipld, Result,
-};
-use libp2p::kad::kbucket::Key as BucketKey;
-use prometheus::Registry;
-use std::{collections::HashSet, path::Path, sync::Arc};
-
-pub use crate::db::StorageService;
-pub use crate::db::{StorageConfig, TempPin};
-pub use crate::net::{
-    generate_keypair, AddressRecord, AddressSource, BitswapConfig, BroadcastConfig,
-    ConnectionFailure, Direction, DnsConfig, DocId, Event, GossipEvent, GossipsubConfig, Head,
-    IdentifyConfig, KadConfig, Key, Keypair, ListenerEvent, ListenerId, LocalStreamWriter,
-    MdnsConfig, Multiaddr, NetworkConfig, PeerId, PeerInfo, PeerRecord, PingConfig, PublicKey,
-    Quorum, Record, Rtt, SecretKey, SignedHead, StreamId, StreamReader, SwarmEvents, SyncEvent,
-    SyncQuery, ToLibp2p, TransportConfig,
-};
-use crate::net::{BitswapStore, NetworkService};
-#[cfg(feature = "telemetry")]
-pub use crate::telemetry::telemetry;
-use chrono::{DateTime, Utc};
-pub use db::Batch;
-pub use executor::Executor;
-pub use libipld::{store::DefaultParams, Block, Cid};
-pub use libp2p::{core::ConnectedPoint, multiaddr};
 
 mod db;
 mod executor;
@@ -47,6 +17,56 @@ mod net;
 mod telemetry;
 #[cfg(test)]
 mod test_util;
+
+/// convenience re-export of configuration types from libp2p
+pub mod config {
+    pub use libp2p::{
+        dns::{ResolverConfig, ResolverOpts},
+        gossipsub::GossipsubConfig,
+        identify::IdentifyConfig,
+        kad::record::store::MemoryStoreConfig as KadConfig,
+        mdns::MdnsConfig,
+        ping::PingConfig,
+    };
+    pub use libp2p_bitswap::BitswapConfig;
+    pub use libp2p_broadcast::BroadcastConfig;
+}
+
+#[cfg(feature = "telemetry")]
+pub use crate::telemetry::telemetry;
+pub use crate::{
+    db::{Batch, StorageConfig, StorageService, TempPin},
+    executor::Executor,
+    net::{
+        AddressSource, ConnectionFailure, Direction, DnsConfig, Event, GossipEvent, ListenerEvent,
+        NetworkConfig, PeerInfo, Rtt, SwarmEvents, SyncEvent, SyncQuery,
+    },
+};
+
+pub use libipld::{store::DefaultParams, Block, Cid};
+pub use libp2p::{
+    core::{connection::ListenerId, ConnectedPoint, Multiaddr, PeerId},
+    identity,
+    kad::{kbucket::Key as BucketKey, record::Key, PeerRecord, Quorum, Record},
+    multiaddr,
+    swarm::{AddressRecord, AddressScore},
+};
+
+use crate::net::NetworkService;
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use futures::stream::Stream;
+use libipld::{
+    codec::References,
+    error::BlockNotFound,
+    store::{Store, StoreParams},
+    Ipld, Result,
+};
+use libp2p::identity::ed25519::{Keypair, PublicKey};
+use libp2p_bitswap::BitswapStore;
+use parking_lot::Mutex;
+use prometheus::Registry;
+use std::{collections::HashSet, path::Path, sync::Arc};
 
 /// Ipfs configuration.
 #[derive(Debug)]
@@ -63,14 +83,14 @@ impl Config {
     pub fn new(path: &Path, keypair: Keypair) -> Self {
         let sweep_interval = std::time::Duration::from_millis(10000);
         let storage = StorageConfig::new(Some(path.join("blocks")), None, 0, sweep_interval);
-        let network = NetworkConfig::new(path.join("streams"), keypair);
+        let network = NetworkConfig::new(keypair);
         Self { storage, network }
     }
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self::new(Path::new("."), generate_keypair())
+        Self::new(Path::new("."), Keypair::generate())
     }
 }
 
@@ -295,7 +315,7 @@ where
     }
 
     /// Adds a new root to a temporary pin.
-    pub fn temp_pin(&self, tmp: &TempPin, cid: &Cid) -> Result<()> {
+    pub fn temp_pin(&self, tmp: &mut TempPin, cid: &Cid) -> Result<()> {
         self.storage.temp_pin(tmp, std::iter::once(*cid))
     }
 
@@ -372,7 +392,7 @@ where
 
     /// Returns a list of aliases preventing a `Cid` from being garbage
     /// collected.
-    pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
+    pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<HashSet<Vec<u8>>>> {
         self.storage.reverse_alias(cid)
     }
 
@@ -382,20 +402,11 @@ where
         self.storage.flush().await
     }
 
-    /// Perform a set of storage operations in a batch, and discards the result.
+    /// Perform a set of storage operations in a batch
     ///
-    /// You should keep a batch open for as short as possible.
-    /// You *must not* create a batch inside a batch, or use the outer ipfs.
-    pub fn read_batch<F: FnOnce(&mut Batch<'_, P>) -> Result<R>, R>(&self, f: F) -> Result<R> {
-        self.storage.ro("read_batch", f)
-    }
-
-    /// Perform a set of storage operations in a batch, and stores the result.
-    ///
-    /// You should keep a batch open for as short as possible.
-    /// You *must not* create a batch inside a batch, or use the outer ipfs.
-    pub fn write_batch<R>(&self, f: impl FnOnce(&mut Batch<'_, P>) -> Result<R>) -> Result<R> {
-        self.storage.rw("write_batch", f)
+    /// The batching concerns only the CacheTracker, it implies no atomicity guarantees!
+    pub fn batch_ops<R>(&self, f: impl FnOnce(&mut Batch<'_, P>) -> Result<R>) -> Result<R> {
+        self.storage.rw("batch_ops", f)
     }
 
     /// Registers prometheus metrics in a registry.
@@ -409,56 +420,6 @@ where
     pub fn swarm_events(&self) -> SwarmEvents {
         self.network.swarm_events()
     }
-
-    /// Returns the documents both local and replicated.
-    pub fn docs(&self) -> Result<Vec<DocId>> {
-        self.network.docs()
-    }
-
-    /// Returns the streams both local and replicated.
-    pub fn streams(&self) -> Result<Vec<StreamId>> {
-        self.network.streams()
-    }
-
-    /// Returns the streams both local and replicated for the given document id.
-    pub fn substreams(&self, doc: DocId) -> Result<Vec<StreamId>> {
-        self.network.substreams(doc)
-    }
-
-    /// Adds the peers to a replicated stream.
-    pub fn stream_add_peers(&self, doc: DocId, peers: impl Iterator<Item = PeerId>) {
-        self.network.stream_add_peers(doc, peers)
-    }
-
-    /// Returns the current head of a stream.
-    pub fn stream_head(&self, id: &StreamId) -> Result<Option<SignedHead>> {
-        self.network.stream_head(id)
-    }
-
-    /// Returns a reader for the slice.
-    pub fn stream_slice(&self, id: &StreamId, start: u64, len: u64) -> Result<StreamReader> {
-        self.network.stream_slice(id, start, len)
-    }
-
-    /// Removes a local or replicated stream.
-    pub fn stream_remove(&self, id: &StreamId) -> Result<()> {
-        self.network.stream_remove(id)
-    }
-
-    /// Returns a writter to append to a local stream.
-    pub fn stream_append(&self, id: DocId) -> Result<LocalStreamWriter> {
-        self.network.stream_append(id)
-    }
-
-    /// Subscribes to a replicated stream.
-    pub fn stream_subscribe(&self, id: &StreamId) -> Result<()> {
-        self.network.stream_subscribe(id)
-    }
-
-    /// Updates the head of a replicated stream.
-    pub fn stream_update_head(&self, head: SignedHead) {
-        self.network.stream_update_head(head)
-    }
 }
 
 #[async_trait]
@@ -467,14 +428,14 @@ where
     Ipld: References<P::Codecs>,
 {
     type Params = P;
-    type TempPin = Arc<TempPin>;
+    type TempPin = Arc<Mutex<TempPin>>;
 
     fn create_temp_pin(&self) -> Result<Self::TempPin> {
-        Ok(Arc::new(Ipfs::create_temp_pin(self)?))
+        Ok(Arc::new(Mutex::new(Ipfs::create_temp_pin(self)?)))
     }
 
     fn temp_pin(&self, tmp: &Self::TempPin, cid: &Cid) -> Result<()> {
-        Ipfs::temp_pin(self, tmp, cid)
+        Ipfs::temp_pin(self, &mut *tmp.lock(), cid)
     }
 
     fn contains(&self, cid: &Cid) -> Result<bool> {
@@ -499,7 +460,7 @@ where
     }
 
     fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
-        Ipfs::reverse_alias(self, cid)
+        Ipfs::reverse_alias(self, cid).map(|x| x.map(|x| x.into_iter().collect()))
     }
 
     async fn flush(&self) -> Result<()> {
@@ -519,13 +480,10 @@ where
 mod tests {
     use super::*;
     use async_std::future::timeout;
-    use futures::join;
-    use futures::stream::StreamExt;
-    use libipld::cbor::DagCborCodec;
-    use libipld::multihash::Code;
-    use libipld::raw::RawCodec;
-    use libipld::store::DefaultParams;
-    use libipld::{alias, ipld};
+    use futures::{join, stream::StreamExt};
+    use libipld::{
+        alias, cbor::DagCborCodec, ipld, multihash::Code, raw::RawCodec, store::DefaultParams,
+    };
     use std::time::Duration;
     use tempdir::TempDir;
 
@@ -541,7 +499,7 @@ mod tests {
         let sweep_interval = Duration::from_millis(10000);
         let storage = StorageConfig::new(None, None, 10, sweep_interval);
 
-        let mut network = NetworkConfig::new(tmp.path().into(), generate_keypair());
+        let mut network = NetworkConfig::new(Keypair::generate());
         if !enable_mdns {
             network.mdns = None;
         }
@@ -563,8 +521,8 @@ mod tests {
         tracing_try_init();
         let (store, _tmp) = create_store(false).await?;
         let block = create_block(b"test_local_store")?;
-        let tmp = store.create_temp_pin()?;
-        store.temp_pin(&tmp, block.cid())?;
+        let mut tmp = store.create_temp_pin()?;
+        store.temp_pin(&mut tmp, block.cid())?;
         let _ = store.insert(&block)?;
         let block2 = store.get(block.cid())?;
         assert_eq!(block.data(), block2.data());
@@ -578,12 +536,12 @@ mod tests {
         let (store1, _tmp) = create_store(true).await?;
         let (store2, _tmp) = create_store(true).await?;
         let block = create_block(b"test_exchange_mdns")?;
-        let tmp1 = store1.create_temp_pin()?;
-        store1.temp_pin(&tmp1, block.cid())?;
+        let mut tmp1 = store1.create_temp_pin()?;
+        store1.temp_pin(&mut tmp1, block.cid())?;
         let _ = store1.insert(&block)?;
         store1.flush().await?;
-        let tmp2 = store2.create_temp_pin()?;
-        store2.temp_pin(&tmp2, block.cid())?;
+        let mut tmp2 = store2.create_temp_pin()?;
+        store2.temp_pin(&mut tmp2, block.cid())?;
         let block2 = store2
             .fetch(block.cid(), vec![store1.local_peer_id()])
             .await?;
@@ -611,14 +569,14 @@ mod tests {
 
         let block = create_block(b"test_exchange_kad")?;
         let key = Key::new(&block.cid().to_bytes());
-        let tmp1 = store1.create_temp_pin()?;
-        store1.temp_pin(&tmp1, block.cid())?;
+        let mut tmp1 = store1.create_temp_pin()?;
+        store1.temp_pin(&mut tmp1, block.cid())?;
         store1.insert(&block)?;
         store1.provide(key.clone()).await?;
         store1.flush().await?;
 
-        let tmp2 = store2.create_temp_pin()?;
-        store2.temp_pin(&tmp2, block.cid())?;
+        let mut tmp2 = store2.create_temp_pin()?;
+        store2.temp_pin(&mut tmp2, block.cid())?;
         let providers = store2.providers(key).await?;
         let block2 = store2
             .fetch(block.cid(), providers.into_iter().collect())
@@ -894,16 +852,14 @@ mod tests {
     #[async_std::test]
     async fn test_batch_read() -> Result<()> {
         tracing_try_init();
-        let tmp = TempDir::new("ipfs-embed")?;
-        let network = NetworkConfig::new(tmp.path().into(), generate_keypair());
+        let network = NetworkConfig::new(Keypair::generate());
         let storage = StorageConfig::new(None, None, 1000000, Duration::from_secs(3600));
         let ipfs = Ipfs::<DefaultParams>::new(Config { storage, network }).await?;
         let a = create_block(b"a")?;
         let b = create_block(b"b")?;
         ipfs.insert(&a)?;
         ipfs.insert(&b)?;
-        let has_blocks =
-            ipfs.read_batch(|db| Ok(db.contains(a.cid())? && db.contains(b.cid())?))?;
+        let has_blocks = ipfs.batch_ops(|db| Ok(db.contains(a.cid())? && db.contains(b.cid())?))?;
         assert!(has_blocks);
         Ok(())
     }
@@ -911,26 +867,26 @@ mod tests {
     #[async_std::test]
     async fn test_batch_write() -> Result<()> {
         tracing_try_init();
-        let tmp = TempDir::new("ipfs-embed")?;
-        let network = NetworkConfig::new(tmp.path().into(), generate_keypair());
+        let network = NetworkConfig::new(Keypair::generate());
         let storage = StorageConfig::new(None, None, 1000000, Duration::from_secs(3600));
         let ipfs = Ipfs::<DefaultParams>::new(Config { storage, network }).await?;
         let a = create_block(b"a")?;
         let b = create_block(b"b")?;
         let c = create_block(b"c")?;
         let d = create_block(b"d")?;
-        ipfs.write_batch(|db| {
+        ipfs.batch_ops(|db| {
             db.insert(&a)?;
             db.insert(&b)?;
             Ok(())
         })?;
         assert!(ipfs.contains(a.cid())? && ipfs.contains(b.cid())?);
-        let _: anyhow::Result<()> = ipfs.write_batch(|db| {
+        #[allow(unreachable_code)]
+        let _: anyhow::Result<()> = ipfs.batch_ops(|db| {
             db.insert(&c)?;
-            db.insert(&d)?;
             anyhow::bail!("nope!");
+            db.insert(&d)?;
         });
-        assert!(!ipfs.contains(c.cid())? && ipfs.contains(b.cid())?);
+        assert!(!ipfs.contains(d.cid())? && ipfs.contains(c.cid())? && ipfs.contains(b.cid())?);
         Ok(())
     }
 

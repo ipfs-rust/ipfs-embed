@@ -17,34 +17,32 @@ tokio = ["tokio-crate", "libp2p/tcp-tokio", "libp2p/dns-tokio"]
 telemetry = ["tide", "async_global"]
 
 [dependencies]
-anyhow = "1.0.41"
+anyhow = "1.0.52"
 async-executor = "1.4.1"
 async-global-executor = { version = "2.0.2", optional = true }
 async-io = "1.6.0"
-async-trait = "0.1.50"
+async-trait = "0.1.52"
 chrono = "0.4.19"
 fnv = "1.0.7"
-futures = "0.3.15"
+futures = "0.3.19"
 futures-timer = "3.0.2"
-ipfs-sqlite-block-store = "0.7.0"
+ipfs-sqlite-block-store = "0.10.3"
 lazy_static = "1.4.0"
 libipld = { version = "0.12.0", default-features = false }
-libp2p-bitswap = "0.19.0"
-libp2p-blake-streams = "0.1.0"
-libp2p-broadcast = "0.5.0"
-libp2p-quic = { version = "0.6.1", features = ["noise"] }
-names = "0.11.0"
-parking_lot = "0.11.1"
-pin-project = "1.0.7"
-prometheus = "0.12.0"
-thiserror = "1.0.26"
+libp2p-bitswap = "0.20.0"
+libp2p-broadcast = "0.7.0"
+names = "0.12.0"
+parking_lot = "0.11.2"
+pin-project = "1.0.10"
+prometheus = "0.13.0"
+thiserror = "1.0.30"
 tide = { version = "0.16.0", optional = true }
-tokio-crate = { package = "tokio", version = "1.8.0", features = ["rt"], optional = true }
-tracing = "0.1.26"
+tokio-crate = { package = "tokio", version = "1.15.0", features = ["rt"], optional = true }
+tracing = "0.1.29"
 void = "1.0.2"
 
 [dependencies.libp2p]
-version = "0.40.0"
+version = "0.41.0"
 default-features = false
 features = [
     "gossipsub",
@@ -57,21 +55,18 @@ features = [
 ]
 
 [dev-dependencies]
-async-std = { version = "1.9.0", features = ["attributes"] }
+async-std = { version = "1.10.0", features = ["attributes"] }
 libipld = { version = "0.12.0", default-features = false, features = ["dag-cbor", "dag-pb", "derive"] }
-libp2p-bitswap = { version = "0.19.0", default-features = false, features = ["compat"] }
+libp2p-bitswap = { version = "0.20.0", default-features = false, features = ["compat"] }
 multihash = { version = "0.14.0", default-features = false, features = ["blake3"] }
 rand = "0.8.4"
 regex = "1.5.4"
 tempdir = "0.3.7"
-tracing-subscriber = "0.2.19"
+tracing-subscriber = { version = "0.3.5", features = ["env-filter"] }
 
 [profile.release]
 debug = true
 
 [patch.crates-io]
-libp2p = { git = "https://github.com/Actyx/rust-libp2p", branch = "sim-open" }
-libp2p-bitswap = { git = "https://github.com/Actyx/libp2p-bitswap", branch = "sim-open" }
-libp2p-broadcast = { git = "https://github.com/Actyx/libp2p-broadcast", branch = "sim-open-2" }
-libp2p-quic = { git = "https://github.com/Actyx/libp2p-quic", branch = "sim-open-2" }
-libp2p-blake-streams = { git = "https://github.com/Actyx/blake-streams", branch = "sim-open" }
+# waiting for version 0.26.1
+libp2p-swarm-derive = { git = "https://github.com/libp2p/rust-libp2p", rev = "17d6b4ba67c3343e1ff5004a3f4975faaf9bc034" }

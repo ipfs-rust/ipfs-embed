@@ -1,18 +1,18 @@
 use anyhow::Result;
 use fnv::FnvHashSet;
 use ipfs_embed::{
-    generate_keypair, Block, Cid, Config, DefaultParams, Ipfs, NetworkConfig, StorageConfig,
+    identity::ed25519::Keypair, Block, Cid, Config, DefaultParams, Ipfs, NetworkConfig,
+    StorageConfig,
 };
-use libipld::cbor::DagCborCodec;
-use libipld::multihash::Code;
-use libipld::DagCbor;
+use libipld::{cbor::DagCborCodec, multihash::Code, DagCbor};
 use rand::{thread_rng, RngCore};
 use std::time::{Duration, Instant};
-use tempdir::TempDir;
+use tracing_subscriber::fmt::format::FmtSpan;
 
 fn tracing_try_init() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE)
         .try_init()
         .ok();
 }
@@ -29,6 +29,8 @@ async fn gc() -> Result<()> {
     let now = Instant::now();
     builder.check().await?;
     println!("checked dags in {}ms", now.elapsed().as_millis());
+    let heads = builder.heads();
+    println!(" {} heads", heads);
     for _ in 0..builder.heads() {
         let now = Instant::now();
         builder.remove_head()?;
@@ -48,21 +50,19 @@ struct Node {
 struct DagBuilder {
     ipfs: Ipfs<DefaultParams>,
     heads: FnvHashSet<Cid>,
-    _tmp: TempDir,
 }
 
 impl DagBuilder {
     async fn new() -> Result<Self> {
-        let tmp = TempDir::new("gc-test")?;
+        let tmp = tempdir::TempDir::new("gc")?;
         let config = Config {
-            storage: StorageConfig::new(None, None, 0, Duration::from_secs(1000)),
-            network: NetworkConfig::new(tmp.path().into(), generate_keypair()),
+            storage: StorageConfig::new(Some(tmp.into_path()), None, 0, Duration::from_secs(1000)),
+            network: NetworkConfig::new(Keypair::generate()),
         };
         let ipfs = Ipfs::new(config).await?;
         Ok(Self {
             ipfs,
             heads: Default::default(),
-            _tmp: tmp,
         })
     }
 

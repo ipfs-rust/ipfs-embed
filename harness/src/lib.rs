@@ -2,21 +2,19 @@
 
 use anyhow::{Context, Result};
 use async_std::future::TimeoutError;
-use futures::future::BoxFuture;
-use futures::prelude::*;
+use futures::{future::BoxFuture, prelude::*};
 use ipfs_embed_cli::{Command, Config, Event};
-use libipld::cbor::DagCborCodec;
-use libipld::multihash::Code;
-use libipld::{Block, Cid, DagCbor, DefaultParams};
-use libp2p::multiaddr::Protocol;
-use libp2p::{multiaddr, Multiaddr, PeerId};
+use libipld::{cbor::DagCborCodec, multihash::Code, Block, Cid, DagCbor, DefaultParams};
+use libp2p::{multiaddr, multiaddr::Protocol, Multiaddr, PeerId};
 use netsim_embed::{DelayBuffer, Ipv4Range, MachineId, Netsim, NetworkId};
 use rand::RngCore;
-use std::collections::HashMap;
-use std::fmt::{Debug, Display};
-use std::ops::Range;
-use std::str::FromStr;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+    ops::Range,
+    str::FromStr,
+    time::{Duration, Instant},
+};
 use structopt::StructOpt;
 use tempdir::TempDir;
 

@@ -1,8 +1,10 @@
 use anyhow::Result;
 use ipfs_embed::{Config, DefaultParams, Ipfs};
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::time::Duration;
+use std::{
+    fs::File,
+    io::{BufRead, BufReader},
+    time::Duration,
+};
 
 #[async_std::main]
 async fn main() -> anyhow::Result<()> {
