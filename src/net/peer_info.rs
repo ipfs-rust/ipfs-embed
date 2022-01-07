@@ -1,7 +1,7 @@
 use chrono::{DateTime, SecondsFormat::Millis, Utc};
 use fnv::FnvHashMap;
 use libp2p::{core::ConnectedPoint, Multiaddr};
-use std::{collections::VecDeque, time::Duration};
+use std::{cmp::Ordering, collections::VecDeque, time::Duration};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PeerInfo {
@@ -120,27 +120,21 @@ impl PeerInfo {
             .map(|x| x.0)
     }
 
-    pub(crate) fn ingest_address(
-        &mut self,
-        addr: Multiaddr,
-        source: AddressSource,
-    ) -> Option<Multiaddr> {
-        let inserted = if let Some((src, dt)) = self.addresses.get_mut(&addr) {
-            if source >= *src {
-                *dt = Utc::now();
-                *src = source;
-                true
-            } else {
-                false
+    pub(crate) fn ingest_address(&mut self, addr: Multiaddr, source: AddressSource) -> bool {
+        if let Some((src, dt)) = self.addresses.get_mut(&addr) {
+            *dt = Utc::now();
+            match source.cmp(src) {
+                Ordering::Less => false,
+                Ordering::Equal => false,
+                Ordering::Greater => {
+                    *src = source;
+                    source.is_to_probe()
+                }
             }
         } else {
-            self.addresses.insert(addr.clone(), (source, Utc::now()));
-            true
-        };
-        (inserted && source.is_to_probe()).then(|| {
-            tracing::debug!("triggering dial to {} ({:?})", addr, source);
-            addr
-        })
+            self.addresses.insert(addr, (source, Utc::now()));
+            source.is_to_probe()
+        }
     }
 }
 

@@ -7,7 +7,13 @@ use crate::net::peer_info::ConnectionFailure;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use fnv::{FnvHashMap, FnvHashSet};
-use futures::{channel::mpsc, stream::Stream};
+use futures::{
+    channel::mpsc,
+    future::BoxFuture,
+    stream::{FuturesUnordered, Stream},
+    FutureExt, StreamExt,
+};
+use futures_timer::Delay;
 use lazy_static::lazy_static;
 use libp2p::{
     core::connection::{ConnectedPoint, ConnectionError, ConnectionId, ListenerId},
@@ -158,6 +164,9 @@ pub struct AddressBook {
     peers: FnvHashMap<PeerId, PeerInfo>,
     event_stream: Vec<mpsc::UnboundedSender<Event>>,
     pub(crate) actions: VecDeque<NetworkBehaviourAction<void::Void, IntoAddressHandler>>,
+    deferred: FuturesUnordered<
+        BoxFuture<'static, NetworkBehaviourAction<void::Void, IntoAddressHandler>>,
+    >,
 }
 
 impl AddressBook {
@@ -178,6 +187,7 @@ impl AddressBook {
             peers: Default::default(),
             event_stream: Default::default(),
             actions: Default::default(),
+            deferred: Default::default(),
         }
     }
 
@@ -214,26 +224,36 @@ impl AddressBook {
             return;
         }
         let discovered = !self.peers.contains_key(peer);
-        let info = self.peers.entry(*peer).or_default();
-        normalize_addr(&mut address, peer);
-        tracing::trace!(peer = %peer, "adding address {} from {:?}", address, source);
-        if let Some(address) = info.ingest_address(address, source) {
-            let mut tcp = address.clone();
-            tcp.pop();
-            if !self.listeners.contains(&tcp) {
+        let addr_full = match normalize_addr_ref(&address, peer) {
+            Cow::Borrowed(a) => {
+                let ret = a.clone();
+                address.pop();
+                ret
+            }
+            Cow::Owned(a) => a,
+        };
+        if !self.listeners.contains(&address) {
+            // addr_full is with peerId, address is guaranteed without
+            tracing::debug!(peer = %peer, "adding address {} from {:?}", address, source);
+            let info = self.peers.entry(*peer).or_default();
+            if info.ingest_address(addr_full.clone(), source)
+                && !info.connections.contains_key(&addr_full)
+            {
                 self.actions.push_back(NetworkBehaviourAction::Dial {
                     opts: DialOpts::peer_id(*peer)
                         .condition(PeerCondition::Always)
-                        .addresses(vec![tcp])
+                        .addresses(vec![address])
                         .build(),
-                    handler: IntoAddressHandler(Some(address)),
-                })
+                    handler: IntoAddressHandler(Some((addr_full, 3))),
+                });
             }
+            if discovered {
+                self.notify(Event::Discovered(*peer));
+            }
+            self.notify(Event::NewInfo(*peer));
+        } else {
+            tracing::debug!(peer = %peer, addr = %&address, "ignoring peer address from unreachable scope");
         }
-        if discovered {
-            self.notify(Event::Discovered(*peer));
-        }
-        self.notify(Event::NewInfo(*peer));
     }
 
     pub fn remove_address(&mut self, peer: &PeerId, address: &Multiaddr) {
@@ -334,6 +354,7 @@ impl AddressBook {
     }
 
     pub fn set_info(&mut self, peer_id: &PeerId, identify: IdentifyInfo) {
+        let _span = tracing::trace_span!("set_info", peer = %peer_id).entered();
         if let Some(info) = self.peers.get_mut(peer_id) {
             info.protocol_version = Some(identify.protocol_version);
             info.agent_version = Some(identify.agent_version);
@@ -354,6 +375,7 @@ impl AddressBook {
                 })
                 .filter_map(ip_port)
                 .collect::<Vec<_>>();
+            tracing::trace!(lp = ?&listen_port);
 
             // collect all advertised listen ports (which includes actual listeners as well
             // as observed addresses, which may be NATed) so that we can at
@@ -363,6 +385,7 @@ impl AddressBook {
                 .iter()
                 .map(|(_a, p)| *p)
                 .collect::<FnvHashSet<_>>();
+            tracing::trace!(cp = ?&common_port);
 
             // in the absence of port_reuse or the presence of NAT the remote port on an
             // incoming connection won’t be reachable for us, so attempt a
@@ -373,11 +396,13 @@ impl AddressBook {
                 if let Some((ip, _p)) = ip_port(addr) {
                     let mut added = false;
                     for (_a, lp) in listen_port.iter().filter(|(a, _p)| *a == ip) {
+                        tracing::trace!("adding lp {} -> {}", addr, lp);
                         translated.insert(addr.replace(1, |_| Some(Protocol::Tcp(*lp))).unwrap());
                         added = true;
                     }
                     if !added {
                         for cp in &common_port {
+                            tracing::trace!("adding cp {} -> {}", addr, cp);
                             translated
                                 .insert(addr.replace(1, |_| Some(Protocol::Tcp(*cp))).unwrap());
                             added = true;
@@ -385,8 +410,11 @@ impl AddressBook {
                     }
                     if !added {
                         // no idea for a translation, so add it for validation
+                        tracing::trace!("adding raw {}", addr);
                         translated.insert(addr.clone());
                     }
+                } else {
+                    tracing::trace!("ignoring {}", addr);
                 }
             }
 
@@ -405,26 +433,26 @@ impl AddressBook {
                 tcp.pop();
                 if self.listeners.contains(&tcp) {
                     // diallling our own listener somehow breaks the Swarm
+                    tracing::trace!("not adding self-addr {}", tcp);
                     continue;
                 }
-                if let Some(address) = info.ingest_address(addr, AddressSource::Listen) {
+                tracing::debug!(peer = %peer_id, addr = %&tcp, "adding address derived from Identify");
+                if info.ingest_address(addr.clone(), AddressSource::Listen) {
                     // no point trying to dial if we’re already connected and port_reuse==true since
                     // a second connection is fundamentally impossible in this
                     // case
-                    if self.port_reuse && info.connections.contains_key(&address) {
+                    if self.port_reuse && info.connections.contains_key(&addr) {
                         // this will offer the address as soon as the Swarm asks for one for this
                         // peer, leading to a dial attempt that will answer
                         // the question
-                        info.ingest_address(address, AddressSource::Candidate);
+                        info.ingest_address(addr, AddressSource::Candidate);
                     } else {
-                        let mut tcp = address.clone();
-                        tcp.pop();
                         self.actions.push_back(NetworkBehaviourAction::Dial {
                             opts: DialOpts::peer_id(*peer_id)
                                 .condition(PeerCondition::Always)
                                 .addresses(vec![tcp])
                                 .build(),
-                            handler: IntoAddressHandler(Some(address)),
+                            handler: IntoAddressHandler(Some((addr, 3))),
                         })
                     }
                 }
@@ -503,11 +531,13 @@ impl NetworkBehaviour for AddressBook {
 
     fn poll(
         &mut self,
-        _cx: &mut Context,
+        cx: &mut Context,
         _params: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<void::Void, IntoAddressHandler>> {
         if let Some(action) = self.actions.pop_front() {
             Poll::Ready(action)
+        } else if !self.deferred.is_empty() {
+            self.deferred.poll_next_unpin(cx).map(|p| p.unwrap())
         } else {
             Poll::Pending
         }
@@ -597,30 +627,61 @@ impl NetworkBehaviour for AddressBook {
             return;
         };
         if let Some(info) = self.peers.get_mut(&peer_id) {
-            if let IntoAddressHandler(Some(addr)) = handler {
+            if let IntoAddressHandler(Some((addr, retries))) = handler {
                 // this was our own validation dial
                 let probe_result = matches!(
                     error,
                     DialError::InvalidPeerId | DialError::ConnectionIo(_) | DialError::Transport(_)
                 );
+                let transport = matches!(error, DialError::Transport(_));
                 let error = error.to_string();
                 let failure = ConnectionFailure::DialError(addr.clone(), Utc::now(), error.clone());
-                tracing::debug!(addr = %&addr, error = %&error, "validation dial failure");
+                tracing::debug!(addr = %&addr, error = %&error, active = probe_result, "validation dial failure");
                 info.push_failure(failure, probe_result);
+                if transport
+                    && retries > 0
+                    && error.contains("Other(A(B(Apply(Io(Kind(InvalidData))))))")
+                {
+                    let delay = Duration::from_secs(1) * rand::random::<u32>() / u32::MAX;
+                    let action = NetworkBehaviourAction::Dial {
+                        opts: DialOpts::peer_id(peer_id)
+                            .addresses(vec![addr.clone()])
+                            .build(),
+                        handler: IntoAddressHandler(Some((addr.clone(), retries - 1))),
+                    };
+                    self.deferred
+                        .push(Delay::new(delay).map(move |_| action).boxed());
+                }
                 self.notify(Event::DialFailure(peer_id, addr, error));
                 self.notify(Event::NewInfo(peer_id));
             } else if let DialError::Transport(v) = error {
                 let mut events = Vec::with_capacity(v.len());
+                let mut deferred = Vec::new();
                 for (addr, error) in v {
-                    let error = error.to_string();
+                    let error = format!("{:?}", error);
                     let failure =
                         ConnectionFailure::DialError(addr.clone(), Utc::now(), error.clone());
                     tracing::debug!(addr = %&addr, error = %&error, "non-validation dial failure");
                     info.push_failure(failure, true);
+                    // TCP simultaneous open leads to both sides being initiator in the Noise handshake,
+                    // which yields this particular error
+                    if error.contains("Other(A(B(Apply(Io(Kind(InvalidData))))))") {
+                        deferred.push(NetworkBehaviourAction::Dial {
+                            opts: DialOpts::peer_id(peer_id)
+                                .addresses(vec![addr.clone()])
+                                .build(),
+                            handler: IntoAddressHandler(Some((addr.clone(), 3))),
+                        })
+                    }
                     events.push(Event::DialFailure(peer_id, addr.clone(), error));
                 }
                 for event in events {
                     self.notify(event);
+                }
+                for action in deferred {
+                    let delay = Duration::from_secs(1) * rand::random::<u32>() / u32::MAX;
+                    self.deferred
+                        .push(Delay::new(delay).map(move |_| action).boxed());
                 }
                 self.notify(Event::NewInfo(peer_id));
             } else {

@@ -9,7 +9,7 @@ use std::task::{Context, Poll};
 use void::Void;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IntoAddressHandler(pub Option<Multiaddr>);
+pub struct IntoAddressHandler(pub Option<(Multiaddr, usize)>);
 
 impl IntoProtocolsHandler for IntoAddressHandler {
     type Handler = AddressHandler;
@@ -33,7 +33,7 @@ impl IntoProtocolsHandler for IntoAddressHandler {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddressHandler {
-    pub own_dial: Option<Multiaddr>,
+    pub own_dial: Option<(Multiaddr, usize)>,
     pub remote_peer_id: PeerId,
     pub connected_point: ConnectedPoint,
 }

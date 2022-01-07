@@ -1,6 +1,7 @@
 use anyhow::Result;
 use ipfs_embed::{
-    identity::ed25519::Keypair, Block, Cid, DefaultParams, Multiaddr, PeerId, PeerInfo,
+    identity::ed25519::{Keypair, SecretKey},
+    Block, Cid, DefaultParams, Multiaddr, PeerId, PeerInfo,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::PathBuf};
@@ -83,9 +84,9 @@ impl From<Config> for async_process::Command {
 }
 
 pub fn keypair(i: u64) -> Keypair {
-    let mut keypair = [0; 32];
-    keypair[..8].copy_from_slice(&i.to_be_bytes());
-    Keypair::decode(&mut keypair).unwrap()
+    let mut secret = [0; 32];
+    secret[..8].copy_from_slice(&i.to_be_bytes());
+    Keypair::from(SecretKey::from_bytes(secret).unwrap())
 }
 
 pub fn peer_id(i: u64) -> PeerId {
