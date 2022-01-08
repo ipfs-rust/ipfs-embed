@@ -13,7 +13,10 @@ fn run(bin: &str, args: impl IntoIterator<Item = &'static str>) -> anyhow::Resul
         .run()?
         .command()
         .args(args)
-        .env("RUST_LOG", "netsim_embed_machine=debug,info")
+        .env(
+            "RUST_LOG",
+            "netsim_embed_machine=debug,ipfs_embed=trace,info",
+        )
         .assert();
     let out = cmd.get_output().stdout.clone();
     (|| {

@@ -263,9 +263,20 @@ impl<P: StoreParams> NetworkService<P> {
         self.waker.wake();
     }
 
+    pub fn prune_peers(&self, min_age: Duration) {
+        let mut swarm = self.swarm.lock();
+        swarm.behaviour_mut().prune_peers(min_age);
+    }
+
     pub fn dial(&self, peer: &PeerId) {
         let mut swarm = self.swarm.lock();
         swarm.behaviour_mut().dial(peer);
+        self.waker.wake();
+    }
+
+    pub fn dial_address(&self, peer: &PeerId, addr: Multiaddr) {
+        let mut swarm = self.swarm.lock();
+        swarm.behaviour_mut().dial_address(peer, addr);
         self.waker.wake();
     }
 

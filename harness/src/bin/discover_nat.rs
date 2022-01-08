@@ -139,8 +139,13 @@ fn main() -> anyhow::Result<()> {
                         .unwrap();
                     tracing::info!("provider {} saw close from {}", id, m_id);
                     m.send(Command::Dial(*peer));
+                    m.select(|e| matches!(e, Event::DialFailure(p, ..) if p == peer).then(|| ()))
+                        .timeout(10)
+                        .await
+                        .unwrap();
+                    m.send(Command::PrunePeers);
                     m.select(|e| {
-                        // prune_addresses will remove the peer when a failure happens while not
+                        // prune_peers will remove the peer when a failure happens while not
                         // connected
                         matches!(e, Event::PeerRemoved(p) if p == peer).then(|| ())
                     })

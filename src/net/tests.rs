@@ -13,6 +13,7 @@ use libp2p::{
 };
 use regex::Regex;
 use std::{cell::RefCell, io::ErrorKind};
+use tracing_subscriber::EnvFilter;
 use Event::*;
 
 struct Events<'a> {
@@ -40,6 +41,11 @@ impl<'a> Events<'a> {
 
 #[test]
 fn test_dial_basic() {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::default())
+        .try_init()
+        .ok();
+
     let mut book = AddressBook::new(
         PeerId::random(),
         "".into(),
@@ -67,7 +73,7 @@ fn test_dial_basic() {
     assert_eq!(peers, vec![&peer_a]);
     book.inject_dial_failure(
         Some(peer_a),
-        IntoAddressHandler(Some(addr_1.clone())),
+        IntoAddressHandler(Some((addr_1.clone(), 3))),
         &DialError::ConnectionIo(error),
     );
     assert_eq!(
@@ -92,7 +98,11 @@ fn test_dial_basic() {
     assert_eq!(
         events.next(),
         vec!(
-            DialFailure(peer_a, addr_2, "my other error".to_owned()),
+            DialFailure(
+                peer_a,
+                addr_2,
+                "Other(Custom { kind: Other, error: \"my other error\" })".to_owned()
+            ),
             NewInfo(peer_a)
         )
     );
@@ -161,6 +171,11 @@ fn test_dial_basic() {
 
 #[test]
 fn from_docker_host() {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::default())
+        .try_init()
+        .ok();
+
     let peer_a = PeerId::random();
     let addr_a_1: Multiaddr = "/ip4/10.0.0.2/tcp/4001".parse().unwrap();
 
@@ -247,7 +262,7 @@ fn from_docker_host() {
     let error = std::io::Error::new(ErrorKind::Other, "didn’t work, mate!");
     book.inject_dial_failure(
         Some(peer_b),
-        IntoAddressHandler(Some(addr_b_3p.clone())),
+        IntoAddressHandler(Some((addr_b_3p.clone(), 3))),
         &DialError::ConnectionIo(error),
     );
     assert_eq!(
@@ -269,6 +284,11 @@ fn from_docker_host() {
 
 #[test]
 fn from_docker_container() {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::default())
+        .try_init()
+        .ok();
+
     let peer_a = PeerId::random();
     let addr_a_1: Multiaddr = "/ip4/10.0.0.2/tcp/4001".parse().unwrap();
 
@@ -347,10 +367,8 @@ fn from_docker_container() {
     };
     book.set_info(&peer_b, info);
     assert_eq!(events.next(), vec![NewInfo(peer_b)]);
-    assert_eq!(
-        dials(&mut book),
-        vec![Dial::A(addr_b_2p.clone()), Dial::A(addr_b_3p.clone())]
-    );
+    // no dials: we dialled all addresses last time already
+    assert_eq!(dials(&mut book), vec![]);
     assert_eq!(
         addrs(&book, peer_b),
         vec![
@@ -362,7 +380,7 @@ fn from_docker_container() {
     let error = std::io::Error::new(ErrorKind::Other, "play it again, Sam");
     book.inject_dial_failure(
         Some(peer_b),
-        IntoAddressHandler(Some(addr_b_3p.clone())),
+        IntoAddressHandler(Some((addr_b_3p.clone(), 3))),
         &DialError::ConnectionIo(error),
     );
     assert_eq!(
@@ -402,7 +420,7 @@ fn from_docker_container() {
     let error = std::io::Error::new(ErrorKind::Other, "play it yet another time, Sam");
     book.inject_dial_failure(
         Some(peer_b),
-        IntoAddressHandler(Some(addr_b_2p.clone())),
+        IntoAddressHandler(Some((addr_b_2p.clone(), 3))),
         &DialError::ConnectionIo(error),
     );
     assert_eq!(
@@ -465,7 +483,7 @@ fn dials(book: &mut AddressBook) -> Vec<Dial> {
         .drain(..)
         .filter_map(|a| match a {
             NetworkBehaviourAction::Dial {
-                handler: IntoAddressHandler(Some(address)),
+                handler: IntoAddressHandler(Some((address, _retries))),
                 ..
             } => Some(Dial::A(address)),
             NetworkBehaviourAction::Dial { opts, .. } => opts

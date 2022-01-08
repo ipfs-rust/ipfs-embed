@@ -35,7 +35,7 @@ use libp2p::{
 use libp2p_bitswap::{Bitswap, BitswapEvent, BitswapStore};
 use libp2p_broadcast::{Broadcast, BroadcastEvent, Topic};
 use prometheus::Registry;
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -474,8 +474,16 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         }
     }
 
+    pub fn prune_peers(&mut self, min_age: Duration) {
+        self.peers.prune_peers(min_age);
+    }
+
     pub fn dial(&mut self, peer_id: &PeerId) {
         self.peers.dial(peer_id);
+    }
+
+    pub fn dial_address(&mut self, peer_id: &PeerId, addr: Multiaddr) {
+        self.peers.dial_address(peer_id, addr);
     }
 
     pub fn connection_closed(

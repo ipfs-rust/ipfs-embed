@@ -118,6 +118,9 @@ async fn run() -> Result<()> {
             Command::Dial(peer) => {
                 ipfs.lock().dial(&peer);
             }
+            Command::PrunePeers => {
+                ipfs.lock().prune_peers(Duration::ZERO);
+            }
             Command::Get(cid) => {
                 let block = ipfs.lock().get(&cid)?;
                 writeln!(stdout, "{}", Event::Block(block))?;

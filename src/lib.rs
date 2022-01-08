@@ -66,7 +66,7 @@ use libp2p::identity::ed25519::{Keypair, PublicKey};
 use libp2p_bitswap::BitswapStore;
 use parking_lot::Mutex;
 use prometheus::Registry;
-use std::{collections::HashSet, path::Path, sync::Arc};
+use std::{collections::HashSet, path::Path, sync::Arc, time::Duration};
 
 /// Ipfs configuration.
 #[derive(Debug)]
@@ -196,6 +196,12 @@ where
         self.network.remove_address(peer, addr)
     }
 
+    /// Removes all unconnected peers without addresses which have been
+    /// in this state for at least the given duration
+    pub fn prune_peers(&self, min_age: Duration) {
+        self.network.prune_peers(min_age);
+    }
+
     /// Dials a `PeerId` using a known address.
     pub fn dial(&self, peer: &PeerId) {
         self.network.dial(peer);
@@ -203,8 +209,7 @@ where
 
     /// Dials a `PeerId` using `Multiaddr`.
     pub fn dial_address(&self, peer: &PeerId, addr: Multiaddr) {
-        self.network.add_address(peer, addr);
-        self.network.dial(peer);
+        self.network.dial_address(peer, addr);
     }
 
     /// Bans a `PeerId` from the swarm, dropping all existing connections and

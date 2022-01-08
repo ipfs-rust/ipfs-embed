@@ -190,13 +190,18 @@ fn main() -> anyhow::Result<()> {
                 let m = sim.machine(*id);
                 for (m_id, (peer, _addr)) in consumers.iter() {
                     m.send(Command::Dial(*peer));
+                    m.select(|e| matches!(e, Event::DialFailure(p, ..) if p == peer).then(|| ()))
+                        .timeout(10)
+                        .await
+                        .unwrap();
+                    m.send(Command::PrunePeers);
                     if *m_id == m_nat {
                         m.select(|e| {
                             matches!(e, Event::PeerRemoved(p) if p == peer).then(|| ())
                         }).timeout(10).await.unwrap();
                     } else {
                         m.select(|e| {
-                            // prune_addresses will remove the peer when a failure happens while
+                            // prune_peers will remove the peer when a failure happens while
                             // not connected
                             matches!(e, Event::Unreachable(p) if p == peer).then(|| ())
                         })

@@ -99,6 +99,7 @@ pub fn peer_id(i: u64) -> PeerId {
 pub enum Command {
     AddAddress(PeerId, Multiaddr),
     Dial(PeerId),
+    PrunePeers,
     Get(Cid),
     Insert(Block<DefaultParams>),
     Alias(String, Option<Cid>),
@@ -111,6 +112,7 @@ impl std::fmt::Display for Command {
         match self {
             Self::AddAddress(peer, addr) => write!(f, ">add-address {} {}", peer, addr)?,
             Self::Dial(peer) => write!(f, ">dial {}", peer)?,
+            Self::PrunePeers => write!(f, ">prune-peers")?,
             Self::Get(cid) => write!(f, ">get {}", cid)?,
             Self::Insert(block) => {
                 write!(f, ">insert {} ", block.cid())?;
@@ -146,6 +148,7 @@ impl std::str::FromStr for Command {
                 let peer = parts.next().unwrap().parse()?;
                 Self::Dial(peer)
             }
+            Some(">prune-peers") => Self::PrunePeers,
             Some(">get") => {
                 let cid = parts.next().unwrap().parse()?;
                 Self::Get(cid)

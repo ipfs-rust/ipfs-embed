@@ -61,9 +61,6 @@ pub enum Event {
     /// a dialling attempt for the given peer has failed
     DialFailure(PeerId, Multiaddr, String),
     /// a peer could not be reached by any known address
-    ///
-    /// if `prune_addresses == true` then it has been removed from the address
-    /// book
     Unreachable(PeerId),
     /// a new connection has been opened to the given peer
     ConnectionEstablished(PeerId, ConnectedPoint),
@@ -216,6 +213,25 @@ impl AddressBook {
         });
     }
 
+    pub fn dial_address(&mut self, peer: &PeerId, addr: Multiaddr) {
+        if peer == self.local_peer_id() {
+            tracing::error!("attempting to dial self");
+            return;
+        }
+        let target = normalize_addr_ref(&addr, peer);
+        if let Some(info) = self.peers.get(peer) {
+            if info.connections.contains_key(target.as_ref()) {
+                tracing::debug!(peer = %peer, addr = %&addr, "skipping dial since already connected");
+            }
+        }
+        tracing::debug!(peer = %peer, addr = %&addr, "request dialing");
+        let handler = IntoAddressHandler(Some((target.into_owned(), 3)));
+        self.actions.push_back(NetworkBehaviourAction::Dial {
+            opts: DialOpts::peer_id(*peer).addresses(vec![addr]).build(),
+            handler,
+        });
+    }
+
     pub fn add_address(&mut self, peer: &PeerId, mut address: Multiaddr, source: AddressSource) {
         if peer == self.local_peer_id() {
             return;
@@ -261,6 +277,43 @@ impl AddressBook {
         if let Some(info) = self.peers.get_mut(peer) {
             tracing::trace!("removing address {}", address);
             info.addresses.remove(&address);
+        }
+    }
+
+    pub fn prune_peers(&mut self, min_age: Duration) {
+        let _span = tracing::trace_span!("prune_peers").entered();
+        let now = Utc::now();
+        let mut remove = Vec::new();
+        'l: for (peer, info) in self.peers.iter() {
+            if info.connections().next().is_some() {
+                tracing::trace!(peer = %peer, "keeping connected");
+                continue;
+            }
+            if let Some(f) = info.recent_failures().next() {
+                // do not remove if most recent failure is younger than min_age
+                if diff_time(f.time(), now) < min_age {
+                    tracing::trace!(peer = %peer, "keeping recently failed");
+                    continue;
+                }
+            }
+            for (a, s, dt) in info.addresses() {
+                if s.is_confirmed() {
+                    // keep those that have confirmed addresses
+                    tracing::trace!(peer = %peer, addr = %a, "keeping confirmed");
+                    continue 'l;
+                }
+                if s.is_to_probe() && diff_time(dt, now) < min_age.max(Duration::from_secs(10)) {
+                    // keep those which we are presumably trying to probe
+                    tracing::trace!(peer = %peer, addr = %a, "keeping probed");
+                    continue 'l;
+                }
+            }
+            tracing::trace!(peer = %peer, "pruning");
+            remove.push(*peer);
+        }
+        for peer in remove {
+            self.peers.remove(&peer);
+            self.notify(Event::NewInfo(peer));
         }
     }
 
@@ -499,6 +552,13 @@ fn ip_port(m: &Multiaddr) -> Option<(IpAddr, u16)> {
         _ => return None,
     };
     Some((addr, port))
+}
+
+fn diff_time(former: DateTime<Utc>, latter: DateTime<Utc>) -> Duration {
+    latter
+        .signed_duration_since(former)
+        .to_std()
+        .unwrap_or(Duration::ZERO)
 }
 
 pub struct SwarmEvents(mpsc::UnboundedReceiver<Event>);
