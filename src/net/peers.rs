@@ -221,7 +221,8 @@ impl AddressBook {
         let target = normalize_addr_ref(&addr, peer);
         if let Some(info) = self.peers.get(peer) {
             if info.connections.contains_key(target.as_ref()) {
-                tracing::debug!(peer = %peer, addr = %&addr, "skipping dial since already connected");
+                tracing::debug!(peer = %peer, addr = %&addr,
+                    "skipping dial since already connected");
             }
         }
         tracing::debug!(peer = %peer, addr = %&addr, "request dialing");
@@ -268,7 +269,8 @@ impl AddressBook {
             }
             self.notify(Event::NewInfo(*peer));
         } else {
-            tracing::debug!(peer = %peer, addr = %&address, "ignoring peer address from unreachable scope");
+            tracing::debug!(peer = %peer, addr = %&address,
+                "ignoring peer address from unreachable scope");
         }
     }
 
@@ -489,7 +491,8 @@ impl AddressBook {
                     tracing::trace!("not adding self-addr {}", tcp);
                     continue;
                 }
-                tracing::debug!(peer = %peer_id, addr = %&tcp, "adding address derived from Identify");
+                tracing::debug!(peer = %peer_id, addr = %&tcp,
+                    "adding address derived from Identify");
                 if info.ingest_address(addr.clone(), AddressSource::Listen) {
                     // no point trying to dial if we’re already connected and port_reuse==true since
                     // a second connection is fundamentally impossible in this
@@ -696,7 +699,8 @@ impl NetworkBehaviour for AddressBook {
                 let transport = matches!(error, DialError::Transport(_));
                 let error = error.to_string();
                 let failure = ConnectionFailure::DialError(addr.clone(), Utc::now(), error.clone());
-                tracing::debug!(addr = %&addr, error = %&error, active = probe_result, "validation dial failure");
+                tracing::debug!(addr = %&addr, error = %&error, active = probe_result,
+                    "validation dial failure");
                 info.push_failure(failure, probe_result);
                 if transport
                     && retries > 0

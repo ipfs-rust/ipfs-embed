@@ -97,7 +97,8 @@ pub enum GossipEvent {
     Unsubscribed(PeerId),
 }
 
-pub(crate) type MyHandlerError = <<<NetworkBackendBehaviour<DefaultParams> as NetworkBehaviour>::ProtocolsHandler as IntoProtocolsHandler>::Handler as ProtocolsHandler>::Error;
+pub(crate) type MyHandlerError = <<<NetworkBackendBehaviour<DefaultParams> as NetworkBehaviour>
+    ::ProtocolsHandler as IntoProtocolsHandler>::Handler as ProtocolsHandler>::Error;
 
 #[derive(NetworkBehaviour)]
 #[behaviour(event_process = true)]
