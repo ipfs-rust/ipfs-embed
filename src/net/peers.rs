@@ -680,7 +680,7 @@ impl NetworkBehaviour for AddressBook {
         handler: Self::ProtocolsHandler,
         error: &DialError,
     ) {
-        let peer_id = if let Some(peer_id) = peer_id {
+        let peer_id = if let Some(peer_id) = handler.peer_id().or(peer_id) {
             peer_id
         } else {
             tracing::debug!("dial failure without peer ID: {}", error);
@@ -702,6 +702,8 @@ impl NetworkBehaviour for AddressBook {
                     && retries > 0
                     && error.contains("Other(A(B(Apply(Io(Kind(InvalidData))))))")
                 {
+                    // TCP simultaneous open leads to both sides being initiator in the Noise
+                    // handshake, which yields this particular error
                     let delay = Duration::from_secs(1) * rand::random::<u32>() / u32::MAX;
                     let action = NetworkBehaviourAction::Dial {
                         opts: DialOpts::peer_id(peer_id)
@@ -723,8 +725,8 @@ impl NetworkBehaviour for AddressBook {
                         ConnectionFailure::DialError(addr.clone(), Utc::now(), error.clone());
                     tracing::debug!(addr = %&addr, error = %&error, "non-validation dial failure");
                     info.push_failure(failure, true);
-                    // TCP simultaneous open leads to both sides being initiator in the Noise handshake,
-                    // which yields this particular error
+                    // TCP simultaneous open leads to both sides being initiator in the Noise
+                    // handshake, which yields this particular error
                     if error.contains("Other(A(B(Apply(Io(Kind(InvalidData))))))") {
                         deferred.push(NetworkBehaviourAction::Dial {
                             opts: DialOpts::peer_id(peer_id)

@@ -1,5 +1,4 @@
-use super::address_handler::IntoAddressHandler;
-use super::*;
+use super::{address_handler::IntoAddressHandler, *};
 use crate::net::peers::AddressBook;
 use async_executor::LocalExecutor;
 use futures::{future::ready, stream::StreamExt};

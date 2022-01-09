@@ -1,15 +1,29 @@
 use libp2p::{
     core::{upgrade::DeniedUpgrade, ConnectedPoint},
+    multiaddr::Protocol,
     swarm::{
         protocols_handler, IntoProtocolsHandler, KeepAlive, ProtocolsHandler, SubstreamProtocol,
     },
     Multiaddr, PeerId,
 };
-use std::task::{Context, Poll};
+use std::{
+    convert::TryInto,
+    task::{Context, Poll},
+};
 use void::Void;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntoAddressHandler(pub Option<(Multiaddr, usize)>);
+
+impl IntoAddressHandler {
+    pub fn peer_id(&self) -> Option<PeerId> {
+        let (addr, _retries) = self.0.as_ref()?;
+        match addr.iter().last() {
+            Some(Protocol::P2p(p)) => p.try_into().ok(),
+            _ => None,
+        }
+    }
+}
 
 impl IntoProtocolsHandler for IntoAddressHandler {
     type Handler = AddressHandler;

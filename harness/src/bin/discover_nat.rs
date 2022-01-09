@@ -137,6 +137,7 @@ fn main() -> anyhow::Result<()> {
                         .deadline(started, 30)
                         .await
                         .unwrap();
+                    m.drain_matching(|e| matches!(e, Event::DialFailure(p, ..) if p == peer));
                     tracing::info!("provider {} saw close from {}", id, m_id);
                     m.send(Command::Dial(*peer));
                     m.select(|e| matches!(e, Event::DialFailure(p, ..) if p == peer).then(|| ()))

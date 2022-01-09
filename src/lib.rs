@@ -409,7 +409,8 @@ where
 
     /// Perform a set of storage operations in a batch
     ///
-    /// The batching concerns only the CacheTracker, it implies no atomicity guarantees!
+    /// The batching concerns only the CacheTracker, it implies no atomicity
+    /// guarantees!
     pub fn batch_ops<R>(&self, f: impl FnOnce(&mut Batch<'_, P>) -> Result<R>) -> Result<R> {
         self.storage.rw("batch_ops", f)
     }
