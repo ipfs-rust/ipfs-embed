@@ -736,6 +736,7 @@ impl NetworkBehaviour for AddressBook {
                     // TCP simultaneous open leads to both sides being initiator in the Noise
                     // handshake, which yields this particular error
                     if error.contains("Other(A(B(Apply(Io(Kind(InvalidData))))))") {
+                        tracing::debug!("scheduling redial after presumed TCP simultaneous open");
                         deferred.push(NetworkBehaviourAction::Dial {
                             opts: DialOpts::peer_id(peer_id)
                                 .addresses(vec![addr.clone()])
