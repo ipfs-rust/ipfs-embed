@@ -60,12 +60,13 @@ fn test_dial_basic() {
     let addr_1: Multiaddr = "/ip4/1.1.1.1/tcp/3333".parse().unwrap();
     let addr_1p = addr_1.clone().with(Protocol::P2p(peer_a.into()));
     let addr_2: Multiaddr = "/ip4/2.2.2.2/tcp/3333".parse().unwrap();
+    let addr_2p = addr_2.clone().with(Protocol::P2p(peer_a.into()));
     let error = std::io::Error::new(ErrorKind::Other, "my error");
     book.add_address(&peer_a, addr_1.clone(), AddressSource::Mdns);
-    assert_eq!(events.next(), vec!(Discovered(peer_a), NewInfo(peer_a)));
-    assert_eq!(dials(&mut book), vec!(Dial::A(addr_1p.clone())));
-    book.add_address(&peer_a, addr_1p, AddressSource::User);
     assert_eq!(events.next(), vec!(NewInfo(peer_a)));
+    assert_eq!(dials(&mut book), vec!(Dial::A(addr_1p.clone())));
+    book.add_address(&peer_a, addr_1p.clone(), AddressSource::User);
+    assert_eq!(events.next(), vec!(Discovered(peer_a), NewInfo(peer_a)));
     book.add_address(&peer_a, addr_2.clone(), AddressSource::Incoming);
     assert_eq!(events.next(), vec!(NewInfo(peer_a)));
     let peers = book.peers().collect::<Vec<_>>();
@@ -99,14 +100,37 @@ fn test_dial_basic() {
         vec!(
             DialFailure(
                 peer_a,
-                addr_2,
+                addr_2.clone(),
                 "Other(Custom { kind: Other, error: \"my other error\" })".to_owned()
             ),
+            Unreachable(peer_a),
             NewInfo(peer_a)
         )
     );
-    // assert!(book.peers().next().is_none());
+    assert_eq!(book.peers().next(), Some(&peer_a));
     assert_eq!(dials(&mut book), vec![]);
+
+    assert_eq!(
+        addrs(&book, peer_a),
+        vec![
+            (addr_1p.clone(), AddressSource::User),
+            (addr_2p.clone(), AddressSource::Incoming)
+        ]
+    );
+    book.remove_address(&peer_a, &addr_1p);
+    book.remove_address(&peer_a, &addr_2p);
+    assert_eq!(addrs(&book, peer_a), vec![]);
+
+    book.add_address(&peer_a, addr_2.clone(), AddressSource::Kad);
+    assert_eq!(
+        addrs(&book, peer_a),
+        vec![(addr_2p.clone(), AddressSource::Kad)]
+    );
+    assert_eq!(events.next(), vec![NewInfo(peer_a)]);
+
+    book.add_address(&peer_a, addr_2, AddressSource::User);
+    assert_eq!(addrs(&book, peer_a), vec![(addr_2p, AddressSource::User)]);
+    assert_eq!(events.next(), vec![Discovered(peer_a), NewInfo(peer_a)]);
 }
 
 // #[test]
@@ -206,11 +230,7 @@ fn from_docker_host() {
     book.inject_connection_established(&peer_b, &id, &cp, None);
     assert_eq!(
         events.next(),
-        vec![
-            Discovered(peer_b),
-            NewInfo(peer_b),
-            ConnectionEstablished(peer_b, cp.clone())
-        ]
+        vec![NewInfo(peer_b), ConnectionEstablished(peer_b, cp.clone())]
     );
     assert_eq!(dials(&mut book), vec![]);
     assert_eq!(
@@ -247,7 +267,11 @@ fn from_docker_host() {
     book.inject_connection_established(&peer_b, &id2, &cp2, None);
     assert_eq!(
         events.next(),
-        vec![NewInfo(peer_b), ConnectionEstablished(peer_b, cp2)]
+        vec![
+            Discovered(peer_b),
+            NewInfo(peer_b),
+            ConnectionEstablished(peer_b, cp2)
+        ]
     );
     assert_eq!(dials(&mut book), vec![]);
     assert_eq!(
@@ -319,11 +343,7 @@ fn from_docker_container() {
     book.inject_connection_established(&peer_b, &id, &cp, None);
     assert_eq!(
         events.next(),
-        vec![
-            Discovered(peer_b),
-            NewInfo(peer_b),
-            ConnectionEstablished(peer_b, cp.clone())
-        ]
+        vec![NewInfo(peer_b), ConnectionEstablished(peer_b, cp.clone())]
     );
     assert_eq!(dials(&mut book), vec![]);
     assert_eq!(
@@ -408,7 +428,11 @@ fn from_docker_container() {
     book.inject_connection_established(&peer_b, &id2, &cp2, None);
     assert_eq!(
         events.next(),
-        vec![NewInfo(peer_b), ConnectionEstablished(peer_b, cp2)]
+        vec![
+            Discovered(peer_b),
+            NewInfo(peer_b),
+            ConnectionEstablished(peer_b, cp2)
+        ]
     );
     assert_eq!(dials(&mut book), vec![]);
     assert_eq!(

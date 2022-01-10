@@ -240,7 +240,11 @@ impl AddressBook {
         if !self.enable_loopback && address.is_loopback() {
             return;
         }
-        let discovered = !self.peers.contains_key(peer);
+        let discovered = self
+            .peers
+            .get(peer)
+            .filter(|info| info.confirmed_addresses().next().is_some())
+            .is_none();
         let addr_full = match normalize_addr_ref(&address, peer) {
             Cow::Borrowed(a) => {
                 let ret = a.clone();
@@ -264,7 +268,7 @@ impl AddressBook {
                     handler: IntoAddressHandler(Some((addr_full, 3))),
                 });
             }
-            if discovered {
+            if discovered && source.is_confirmed() {
                 self.notify(Event::Discovered(*peer));
             }
             self.notify(Event::NewInfo(*peer));
@@ -744,6 +748,9 @@ impl NetworkBehaviour for AddressBook {
                 for event in events {
                     self.notify(event);
                 }
+                if deferred.is_empty() {
+                    self.notify(Event::Unreachable(peer_id));
+                }
                 for action in deferred {
                     let delay = Duration::from_secs(1) * rand::random::<u32>() / u32::MAX;
                     self.deferred
@@ -752,12 +759,12 @@ impl NetworkBehaviour for AddressBook {
                 self.notify(Event::NewInfo(peer_id));
             } else {
                 tracing::debug!(peer = %peer_id, error = %error, "dial failure");
+                if !matches!(error, DialError::Banned | DialError::LocalPeerId) {
+                    self.notify(Event::Unreachable(peer_id));
+                }
             }
         } else {
             tracing::debug!(peer = %peer_id, error = %error, "dial failure for unknown peer");
-        }
-        if matches!(error, DialError::NoAddresses) {
-            self.notify(Event::Unreachable(peer_id));
         }
     }
 
