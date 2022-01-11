@@ -158,7 +158,7 @@ where
         let gc_target_duration = config.gc_target_duration;
         let gc_task = executor.spawn(async move {
             loop {
-                futures_timer::Delay::new(gc_interval / 2).await;
+                futures_timer::Delay::new(gc_interval).await;
                 info!("going for gc!");
                 gc.lock()
                     .incremental_gc(gc_min_blocks, gc_target_duration)

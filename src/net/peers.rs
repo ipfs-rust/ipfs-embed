@@ -758,6 +758,8 @@ impl NetworkBehaviour for AddressBook {
                         .push(Delay::new(delay).map(move |_| action).boxed());
                 }
                 self.notify(Event::NewInfo(peer_id));
+            } else if let DialError::DialPeerConditionFalse(d) = error {
+                tracing::trace!(peer = %peer_id, cond = ?d, "dial condition not satisfied");
             } else {
                 tracing::debug!(peer = %peer_id, error = %error, "dial failure");
                 if !matches!(error, DialError::Banned | DialError::LocalPeerId) {

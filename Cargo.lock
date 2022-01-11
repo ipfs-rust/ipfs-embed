@@ -1780,7 +1780,7 @@ dependencies = [
  "libp2p-pnet",
  "libp2p-request-response",
  "libp2p-swarm 0.32.0",
- "libp2p-swarm-derive 0.26.1",
+ "libp2p-swarm-derive 0.26.0",
  "libp2p-tcp",
  "libp2p-yamux",
  "multiaddr",
@@ -2112,8 +2112,9 @@ dependencies = [
 
 [[package]]
 name = "libp2p-swarm-derive"
-version = "0.26.1"
-source = "git+https://github.com/libp2p/rust-libp2p?rev=17d6b4ba67c3343e1ff5004a3f4975faaf9bc034#17d6b4ba67c3343e1ff5004a3f4975faaf9bc034"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dd93a7dad9b61c39797572e4fb4fdba8415d6348b4e745b3d4cb008f84331ab"
 dependencies = [
  "quote",
  "syn",
