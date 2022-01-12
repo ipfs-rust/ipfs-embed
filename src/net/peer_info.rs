@@ -284,12 +284,17 @@ impl ConnectionFailure {
         let display = match error {
             DialError::ConnectionIo(e) => format!("I/O error: {}", e),
             DialError::Transport(e) => {
-                let mut s = "transport error(s):".to_owned();
-                for (addr, err) in e {
-                    s.push('\n');
-                    let _ = write!(&mut s, "{} {}", without_peer(addr), err);
+                if e.len() == 1 {
+                    // this should always be the case since we only get here for validation dials
+                    format!("transport error: {}", e[0].1)
+                } else {
+                    let mut s = "transport errors:".to_owned();
+                    for (addr, err) in e {
+                        s.push('\n');
+                        let _ = write!(&mut s, "{} {}", without_peer(addr), err);
+                    }
+                    s
                 }
-                s
             }
             x => x.to_string(),
         };
