@@ -701,11 +701,17 @@ impl NetworkBehaviour for AddressBook {
                     DialError::InvalidPeerId | DialError::ConnectionIo(_) | DialError::Transport(_)
                 );
                 let transport = matches!(error, DialError::Transport(_));
+                let wrong_peer = matches!(error, DialError::InvalidPeerId);
                 let error = error.to_string();
                 let failure = ConnectionFailure::DialError(addr.clone(), Utc::now(), error.clone());
                 tracing::debug!(addr = %&addr, error = %&error, active = probe_result,
                     "validation dial failure");
                 info.push_failure(failure, probe_result);
+                if wrong_peer {
+                    // we know who we dialled and we know someone else answered => kill the address
+                    // regardless of whether it was confirmed
+                    info.addresses.remove(&addr);
+                }
                 if transport
                     && retries > 0
                     && error.contains("Other(A(B(Apply(Io(Kind(InvalidData))))))")
