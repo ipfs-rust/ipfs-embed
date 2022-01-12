@@ -172,24 +172,35 @@ impl Rtt {
         self.failure_rate = self.failure_rate * 99 / 100 + 10_000;
     }
 
-    /// Get a reference to the rtt's current.
+    /// Get the rtt's last recent value.
     pub fn current(&self) -> Duration {
         self.current
     }
 
-    /// Get a reference to the rtt's decay 3.
+    /// Get the rtt's exponentially weighted moving average
+    ///
+    /// Decay parameter is 30%.
     pub fn decay_3(&self) -> Duration {
         self.decay_3
     }
 
-    /// Get a reference to the rtt's decay 10.
+    /// Get the rtt's exponentially weighted moving average
+    ///
+    /// Decay parameter is 10%.
     pub fn decay_10(&self) -> Duration {
         self.decay_10
     }
 
-    /// Get a reference to the rtt's failures.
+    /// Get the rtt's failure counter.
     pub fn failures(&self) -> u32 {
         self.failures
+    }
+
+    /// Get the rtt's exponentially weighted moving average of the failure rate
+    ///
+    /// Decay parameter is 1% and the returned value is rate * 1e6.
+    pub fn failure_rate(&self) -> u32 {
+        self.failure_rate
     }
 }
 
