@@ -144,6 +144,7 @@ pub struct Rtt {
     decay_3: Duration,
     decay_10: Duration,
     failures: u32,
+    failure_rate: u32,
 }
 
 impl Rtt {
@@ -153,6 +154,7 @@ impl Rtt {
             decay_3: current,
             decay_10: current,
             failures: 0,
+            failure_rate: 0,
         }
     }
 
@@ -161,10 +163,13 @@ impl Rtt {
         self.decay_3 = self.decay_3 * 7 / 10 + current * 3 / 10;
         self.decay_10 = self.decay_10 * 9 / 10 + current / 10;
         self.failures = 0;
+        self.failure_rate = self.failure_rate * 99 / 100;
     }
 
     pub fn register_failure(&mut self) {
         self.failures += 1;
+        // failures decay at 1% rate, failure_rate is 1_000_000 for only failures
+        self.failure_rate = self.failure_rate * 99 / 100 + 10_000;
     }
 
     /// Get a reference to the rtt's current.
