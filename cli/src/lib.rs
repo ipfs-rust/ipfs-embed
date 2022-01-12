@@ -227,7 +227,7 @@ impl From<PeerInfo> for PeerInfoIo {
                 .map(|(a, s, _dt)| (a.clone(), format!("{:?}", s)))
                 .collect(),
             connections: info.connections().map(|(a, ..)| a.clone()).collect(),
-            failures: info.recent_failures().map(ToString::to_string).collect(),
+            failures: info.recent_failures().map(|f| format!("{:?}", f)).collect(),
         }
     }
 }

@@ -10,7 +10,6 @@ use libp2p::{
     swarm::{DialError, NetworkBehaviour, NetworkBehaviourAction},
     TransportError,
 };
-use regex::Regex;
 use std::{cell::RefCell, io::ErrorKind};
 use tracing_subscriber::EnvFilter;
 use Event::*;
@@ -462,23 +461,28 @@ fn from_docker_container() {
     assert_eq!(dials(&mut book), vec![]);
     assert_eq!(addrs(&book, peer_b), vec![(addr_b_2p, AddressSource::Dial)]);
 
-    let dates = Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z").unwrap();
-    let addrs = Regex::new(r"/ip./(?P<a>[0-9a-fA-F.:]+)/tcp/(?P<p>\d+)/p2p/[0-9a-zA-Z]+").unwrap();
     assert_eq!(
         book.info(&peer_b)
             .unwrap()
             .recent_failures()
-            .map(|f| addrs
-                .replace_all(dates.replace_all(&*f.to_string(), "XXX").as_ref(), "$a:$p")
-                .into_owned())
+            .map(|cf| (
+                cf.addr().to_string(),
+                cf.display().to_owned(),
+                cf.debug().to_owned()
+            ))
             .collect::<Vec<_>>(),
         vec![
-            "outbound dial error for 10.0.0.10:4001 at XXX: \
-                Dial error: An I/O error occurred on the connection: \
-                Custom { kind: Other, error: \"play it yet another time, Sam\" }.",
-            "outbound dial error for 172.17.0.3:4001 at XXX: \
-                Dial error: An I/O error occurred on the connection: \
-                Custom { kind: Other, error: \"play it again, Sam\" }."
+            (
+                "/ip4/10.0.0.10/tcp/4001".to_owned(),
+                "I/O error: play it yet another time, Sam".to_owned(),
+                "ConnectionIo(Custom { kind: Other, error: \"play it yet another time, Sam\" })"
+                    .to_owned(),
+            ),
+            (
+                "/ip4/172.17.0.3/tcp/4001".to_owned(),
+                "I/O error: play it again, Sam".to_owned(),
+                "ConnectionIo(Custom { kind: Other, error: \"play it again, Sam\" })".to_owned(),
+            )
         ]
     );
 }

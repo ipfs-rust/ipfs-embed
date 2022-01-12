@@ -337,7 +337,8 @@ impl AddressBook {
         let mut addr = conn.get_remote_address().clone();
         normalize_addr(&mut addr, &peer);
 
-        let (reason, closed) = match error {
+        let debug = format!("{:?}", error);
+        let (reason, peer_closed) = match error {
             Some(ConnHandler(NodeHandler(A(A(A(A(A(A(A(e)))))))))) => void::unreachable(e),
             Some(ConnHandler(NodeHandler(A(A(A(A(A(A(B(e)))))))))) => {
                 (format!("Kademlia I/O error: {}", e), false)
@@ -369,12 +370,12 @@ impl AddressBook {
 
         let entry = self.peers.entry(peer).or_default();
         entry.connections.remove(&addr);
-        let failure = if closed {
-            ConnectionFailure::WeDisconnected(addr, Utc::now(), reason)
+        let failure = if peer_closed {
+            ConnectionFailure::them(addr.clone(), reason, debug)
         } else {
-            ConnectionFailure::PeerDisconnected(addr, Utc::now(), reason)
+            ConnectionFailure::us(addr.clone(), reason, debug)
         };
-        entry.push_failure(failure, false);
+        entry.push_failure(&addr, failure, false);
         self.notify(Event::ConnectionClosed(peer, conn));
         self.notify(Event::NewInfo(peer));
     }
@@ -702,11 +703,11 @@ impl NetworkBehaviour for AddressBook {
                 );
                 let transport = matches!(error, DialError::Transport(_));
                 let wrong_peer = matches!(error, DialError::InvalidPeerId);
+                let failure = ConnectionFailure::dial(addr.clone(), error);
                 let error = error.to_string();
-                let failure = ConnectionFailure::DialError(addr.clone(), Utc::now(), error.clone());
                 tracing::debug!(addr = %&addr, error = %&error, active = probe_result,
                     "validation dial failure");
-                info.push_failure(failure, probe_result);
+                info.push_failure(&addr, failure, probe_result);
                 if wrong_peer {
                     // we know who we dialled and we know someone else answered => kill the address
                     // regardless of whether it was confirmed
@@ -734,11 +735,10 @@ impl NetworkBehaviour for AddressBook {
                 let mut events = Vec::with_capacity(v.len());
                 let mut deferred = Vec::new();
                 for (addr, error) in v {
+                    let failure = ConnectionFailure::transport(addr.clone(), error);
                     let error = format!("{:?}", error);
-                    let failure =
-                        ConnectionFailure::DialError(addr.clone(), Utc::now(), error.clone());
                     tracing::debug!(addr = %&addr, error = %&error, "non-validation dial failure");
-                    info.push_failure(failure, true);
+                    info.push_failure(normalize_addr_ref(addr, &peer_id).as_ref(), failure, true);
                     // TCP simultaneous open leads to both sides being initiator in the Noise
                     // handshake, which yields this particular error
                     if error.contains("Other(A(B(Apply(Io(Kind(InvalidData))))))") {

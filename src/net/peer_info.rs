@@ -1,7 +1,9 @@
-use chrono::{DateTime, SecondsFormat::Millis, Utc};
+use chrono::{DateTime, Utc};
 use fnv::FnvHashMap;
-use libp2p::{core::ConnectedPoint, Multiaddr};
-use std::{cmp::Ordering, collections::VecDeque, time::Duration};
+use libp2p::{
+    core::ConnectedPoint, multiaddr::Protocol, swarm::DialError, Multiaddr, TransportError,
+};
+use std::{borrow::Cow, cmp::Ordering, collections::VecDeque, fmt::Write, time::Duration};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PeerInfo {
@@ -83,18 +85,23 @@ impl PeerInfo {
         self.failures.iter()
     }
 
-    pub(crate) fn push_failure(&mut self, f: ConnectionFailure, probe_result: bool) {
+    pub(crate) fn push_failure(
+        &mut self,
+        addr: &Multiaddr,
+        f: ConnectionFailure,
+        probe_result: bool,
+    ) {
         if self.failures.len() > 9 {
             self.failures.pop_back();
         }
         if probe_result
             && self
                 .addresses
-                .get(f.addr())
+                .get(addr)
                 .iter()
                 .any(|(s, _dt)| s.is_to_probe())
         {
-            self.addresses.remove(f.addr());
+            self.addresses.remove(addr);
         }
         self.failures.push_front(f);
     }
@@ -247,54 +254,97 @@ fn address_source_order() {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConnectionFailure {
-    DialError(Multiaddr, DateTime<Utc>, String),
-    PeerDisconnected(Multiaddr, DateTime<Utc>, String),
-    WeDisconnected(Multiaddr, DateTime<Utc>, String),
+pub struct ConnectionFailure {
+    kind: ConnectionFailureKind,
+    addr: Multiaddr,
+    time: DateTime<Utc>,
+    display: String,
+    debug: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionFailureKind {
+    DialError,
+    PeerDisconnected,
+    WeDisconnected,
+}
+
+fn without_peer(a: &Multiaddr) -> Cow<'_, Multiaddr> {
+    if matches!(a.iter().last(), Some(Protocol::P2p(_))) {
+        let mut a = a.clone();
+        a.pop();
+        Cow::Owned(a)
+    } else {
+        Cow::Borrowed(a)
+    }
 }
 
 impl ConnectionFailure {
-    pub fn addr(&self) -> &Multiaddr {
-        match self {
-            ConnectionFailure::DialError(a, _, _) => a,
-            ConnectionFailure::PeerDisconnected(a, _, _) => a,
-            ConnectionFailure::WeDisconnected(a, _, _) => a,
+    pub(crate) fn dial(addr: Multiaddr, error: &DialError) -> Self {
+        let display = match error {
+            DialError::ConnectionIo(e) => format!("I/O error: {}", e),
+            DialError::Transport(e) => {
+                let mut s = "transport error(s):".to_owned();
+                for (addr, err) in e {
+                    s.push('\n');
+                    let _ = write!(&mut s, "{} {}", without_peer(addr), err);
+                }
+                s
+            }
+            x => x.to_string(),
+        };
+        Self {
+            kind: ConnectionFailureKind::DialError,
+            addr: without_peer(&addr).into_owned(),
+            time: Utc::now(),
+            display,
+            debug: format!("{:?}", error),
         }
+    }
+
+    pub(crate) fn transport(addr: Multiaddr, error: &TransportError<std::io::Error>) -> Self {
+        Self {
+            kind: ConnectionFailureKind::DialError,
+            addr: without_peer(&addr).into_owned(),
+            time: Utc::now(),
+            display: format!("transport error: {}", error),
+            debug: format!("{:?}", error),
+        }
+    }
+
+    pub(crate) fn us(addr: Multiaddr, display: String, debug: String) -> Self {
+        Self {
+            kind: ConnectionFailureKind::WeDisconnected,
+            addr,
+            time: Utc::now(),
+            display,
+            debug,
+        }
+    }
+
+    pub(crate) fn them(addr: Multiaddr, display: String, debug: String) -> Self {
+        Self {
+            kind: ConnectionFailureKind::PeerDisconnected,
+            addr,
+            time: Utc::now(),
+            display,
+            debug,
+        }
+    }
+
+    pub fn addr(&self) -> &Multiaddr {
+        &self.addr
     }
 
     pub fn time(&self) -> DateTime<Utc> {
-        match self {
-            ConnectionFailure::DialError(_, t, _) => *t,
-            ConnectionFailure::PeerDisconnected(_, t, _) => *t,
-            ConnectionFailure::WeDisconnected(_, t, _) => *t,
-        }
+        self.time
     }
-}
 
-impl std::fmt::Display for ConnectionFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConnectionFailure::DialError(a, t, e) => write!(
-                f,
-                "outbound dial error for {} at {}: {}",
-                a,
-                t.to_rfc3339_opts(Millis, true),
-                e
-            ),
-            ConnectionFailure::PeerDisconnected(a, t, e) => write!(
-                f,
-                "{} disconnected at {} ({})",
-                a,
-                t.to_rfc3339_opts(Millis, true),
-                e
-            ),
-            ConnectionFailure::WeDisconnected(a, t, e) => write!(
-                f,
-                "we disconnected from {} at {}: {}",
-                a,
-                t.to_rfc3339_opts(Millis, true),
-                e
-            ),
-        }
+    pub fn display(&self) -> &str {
+        self.display.as_str()
+    }
+
+    pub fn debug(&self) -> &str {
+        self.debug.as_str()
     }
 }
