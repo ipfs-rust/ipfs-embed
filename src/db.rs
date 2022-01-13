@@ -188,15 +188,19 @@ where
         op: &'static str,
         f: F,
     ) -> Result<R> {
-        observe_query(op, || {
-            let mut lock = self.inner.store.lock();
-            let mut txn = Batch(lock.transaction());
-            let res = f(&mut txn);
-            if res.is_ok() {
-                txn.0.commit()?;
-            }
-            res
-        })
+        QUERIES_TOTAL.with_label_values(&[op]).inc();
+        let timer = QUERY_DURATION
+            .with_label_values(&["lock_wait"])
+            .start_timer();
+        let mut lock = self.inner.store.lock();
+        timer.stop_and_record();
+        let _timer = QUERY_DURATION.with_label_values(&[op]).start_timer();
+        let mut txn = Batch(lock.transaction());
+        let res = f(&mut txn);
+        if res.is_ok() {
+            txn.0.commit()?;
+        }
+        res
     }
 
     pub fn create_temp_pin(&self) -> Result<TempPin> {
@@ -297,25 +301,14 @@ lazy_static! {
         HistogramOpts::new(
             "block_store_query_duration",
             "Duration of store queries labelled by type.",
-        ),
+        )
+        .buckets(vec![
+            0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0,
+            5.0, 10.0
+        ]),
         &["type"],
     )
     .unwrap();
-}
-
-fn observe_query<T, F>(name: &'static str, query: F) -> Result<T>
-where
-    F: FnOnce() -> Result<T>,
-{
-    QUERIES_TOTAL.with_label_values(&[name]).inc();
-    let timer = QUERY_DURATION.with_label_values(&[name]).start_timer();
-    let res = query();
-    if res.is_ok() {
-        timer.observe_duration();
-    } else {
-        timer.stop_and_discard();
-    }
-    res
 }
 
 async fn observe_future<T, F>(name: &'static str, query: F) -> Result<T>
