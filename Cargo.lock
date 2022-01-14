@@ -1571,9 +1571,9 @@ dependencies = [
 
 [[package]]
 name = "ipfs-sqlite-block-store"
-version = "0.10.3"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a94990b697e76b307e8fbed1b97975401666bf5fb3d36c7f7d918b3f4ef2b57d"
+checksum = "bce1bba17c234fa921f172350686393375eaf5ab148f3d39e9c6038656180ddc"
 dependencies = [
  "anyhow",
  "derive_more",

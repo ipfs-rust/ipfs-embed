@@ -193,7 +193,10 @@ where
             .with_label_values(&["lock_wait"])
             .start_timer();
         let mut lock = self.inner.store.lock();
-        timer.stop_and_record();
+        let t = timer.stop_and_record();
+        if t > 1.0 {
+            tracing::warn!(op, "very long storage lock wait time of {:.1}s", t);
+        }
         let _timer = QUERY_DURATION.with_label_values(&[op]).start_timer();
         let mut txn = Batch(lock.transaction());
         let res = f(&mut txn);

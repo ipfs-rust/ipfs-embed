@@ -26,7 +26,7 @@ chrono = "0.4.19"
 fnv = "1.0.7"
 futures = "0.3.19"
 futures-timer = "3.0.2"
-ipfs-sqlite-block-store = "0.10.3"
+ipfs-sqlite-block-store = "0.11.0"
 lazy_static = "1.4.0"
 libipld = { version = "0.12.0", default-features = false }
 libp2p-bitswap = "0.20.0"
