@@ -140,6 +140,9 @@ where
         } else {
             Arc::new(InMemCacheTracker::new(|access, _| Some(access)))
         };
+
+        let is_memory = config.path.is_none();
+        // create DB connection
         let store = if let Some(path) = config.path {
             let path = if path.is_file() {
                 path
@@ -152,23 +155,41 @@ where
             BlockStore::memory(store_config.with_cache_tracker(tracker))?
         };
         let store = Arc::new(Mutex::new(store));
-        let gc = store.clone();
+
+        // spawn GC task
         let gc_interval = config.gc_interval;
         let gc_min_blocks = config.gc_min_blocks;
         let gc_target_duration = config.gc_target_duration;
-        let gc_task = executor.spawn(async move {
-            loop {
-                futures_timer::Delay::new(gc_interval).await;
-                info!("going for gc!");
-                gc.lock()
-                    .incremental_gc(gc_min_blocks, gc_target_duration)
-                    .map_err(|e| {
-                        tracing::warn!("failure during incremental gc: {}", e);
-                        e
-                    })
-                    .ok();
-            }
-        });
+        let gc_task = if is_memory {
+            let gc = store.clone();
+            executor.spawn(async move {
+                loop {
+                    futures_timer::Delay::new(gc_interval).await;
+                    info!("going for gc!");
+                    gc.lock()
+                        .incremental_gc(gc_min_blocks, gc_target_duration)
+                        .map_err(|e| {
+                            tracing::warn!("failure during incremental gc: {:#}", e);
+                            e
+                        })
+                        .ok();
+                }
+            })
+        } else {
+            let mut gc = store.lock().additional_connection()?;
+            executor.spawn(async move {
+                loop {
+                    futures_timer::Delay::new(gc_interval).await;
+                    info!("going for gc!");
+                    gc.incremental_gc(gc_min_blocks, gc_target_duration)
+                        .map_err(|e| {
+                            tracing::warn!("failure during incremental gc: {:#}", e);
+                            e
+                        })
+                        .ok();
+                }
+            })
+        };
         Ok(Self {
             executor,
             gc_target_duration: config.gc_target_duration,
