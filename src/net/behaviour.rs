@@ -27,8 +27,8 @@ use libp2p::{
     mdns::{Mdns, MdnsEvent},
     ping::{Ping, PingEvent, PingFailure, PingSuccess},
     swarm::{
-        protocols_handler::NodeHandlerWrapperError, toggle::Toggle, IntoProtocolsHandler,
-        NetworkBehaviour, NetworkBehaviourEventProcess, ProtocolsHandler,
+        behaviour::toggle::Toggle, protocols_handler::NodeHandlerWrapperError,
+        IntoProtocolsHandler, NetworkBehaviour, NetworkBehaviourEventProcess, ProtocolsHandler,
     },
     Multiaddr, NetworkBehaviour, PeerId,
 };
@@ -487,7 +487,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         self.peers.dial_address(peer_id, addr);
     }
 
-    pub fn connection_closed(
+    pub(crate) fn connection_closed(
         &mut self,
         peer: PeerId,
         cp: ConnectedPoint,

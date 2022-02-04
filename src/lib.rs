@@ -377,6 +377,7 @@ where
 
     pub fn sync(&self, cid: &Cid, providers: Vec<PeerId>) -> SyncQuery<P> {
         let missing = self.storage.missing_blocks(cid).ok().unwrap_or_default();
+        tracing::trace!(cid = %cid, missing = %missing.len(), "sync");
         self.network.sync(*cid, providers, missing)
     }
 

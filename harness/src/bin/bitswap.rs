@@ -59,7 +59,7 @@ fn main() -> anyhow::Result<()> {
         for machine in network.machines_mut() {
             machine
                 .select_draining(|e| matches!(e, Event::Flushed).then(|| ()))
-                .deadline(started, 3)
+                .deadline(started, 10)
                 .await
                 .unwrap()
                 .unwrap();
@@ -80,14 +80,14 @@ fn main() -> anyhow::Result<()> {
         for machine in &mut network.machines_mut()[consumers.clone()] {
             machine
                 .select_draining(|e| matches!(e, Event::Synced).then(|| ()))
-                .deadline(started, 10)
+                .deadline(started, 20)
                 .await
                 .unwrap()
                 .unwrap();
             machine.send(Command::Flush);
             machine
                 .select_draining(|e| matches!(e, Event::Flushed).then(|| ()))
-                .deadline(started, 3)
+                .timeout(1)
                 .await
                 .unwrap()
                 .unwrap();

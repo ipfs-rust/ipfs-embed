@@ -109,6 +109,8 @@ lazy_static! {
         IntCounter::new("peers_dial_failure", "Number of dial failures.").unwrap();
 }
 
+const SIM_OPEN_RETRIES: u8 = 10;
+
 #[inline]
 pub(crate) fn normalize_addr(addr: &mut Multiaddr, peer: &PeerId) {
     if let Some(Protocol::P2p(_)) = addr.iter().last() {
@@ -125,6 +127,29 @@ fn normalize_addr_ref<'a>(addr: &'a Multiaddr, peer: &PeerId) -> Cow<'a, Multiad
         let mut addr = addr.clone();
         addr.push(Protocol::P2p((*peer).into()));
         Cow::Owned(addr)
+    }
+}
+
+fn normalize_connected_point(
+    cp: &ConnectedPoint,
+    local: &PeerId,
+    remote: &PeerId,
+) -> ConnectedPoint {
+    match cp {
+        ConnectedPoint::Dialer {
+            address,
+            role_override,
+        } => ConnectedPoint::Dialer {
+            address: normalize_addr_ref(address, remote).into_owned(),
+            role_override: *role_override,
+        },
+        ConnectedPoint::Listener {
+            local_addr,
+            send_back_addr,
+        } => ConnectedPoint::Listener {
+            local_addr: normalize_addr_ref(local_addr, local).into_owned(),
+            send_back_addr: normalize_addr_ref(send_back_addr, remote).into_owned(),
+        },
     }
 }
 
@@ -226,7 +251,7 @@ impl AddressBook {
             }
         }
         tracing::debug!(peer = %peer, addr = %&addr, "request dialing");
-        let handler = IntoAddressHandler(Some((target.into_owned(), 3)));
+        let handler = IntoAddressHandler(Some((target.into_owned(), SIM_OPEN_RETRIES + 1)));
         self.actions.push_back(NetworkBehaviourAction::Dial {
             opts: DialOpts::peer_id(*peer).addresses(vec![addr]).build(),
             handler,
@@ -265,7 +290,7 @@ impl AddressBook {
                         .condition(PeerCondition::Always)
                         .addresses(vec![address])
                         .build(),
-                    handler: IntoAddressHandler(Some((addr_full, 3))),
+                    handler: IntoAddressHandler(Some((addr_full, SIM_OPEN_RETRIES + 1))),
                 });
             }
             if discovered && source.is_confirmed() {
@@ -279,8 +304,8 @@ impl AddressBook {
     }
 
     pub fn remove_address(&mut self, peer: &PeerId, address: &Multiaddr) {
-        let address = normalize_addr_ref(address, peer);
         if let Some(info) = self.peers.get_mut(peer) {
+            let address = normalize_addr_ref(address, peer);
             tracing::trace!("removing address {}", address);
             info.addresses.remove(&address);
         }
@@ -334,8 +359,8 @@ impl AddressBook {
         use ConnectionError::Handler as ConnHandler;
         use NodeHandlerWrapperError::Handler as NodeHandler;
 
-        let mut addr = conn.get_remote_address().clone();
-        normalize_addr(&mut addr, &peer);
+        let conn = normalize_connected_point(&conn, &self.local_peer_id, &peer);
+        let addr = conn.get_remote_address();
 
         let debug = format!("{:?}", error);
         let (reason, peer_closed) = match error {
@@ -369,13 +394,13 @@ impl AddressBook {
         );
 
         let entry = self.peers.entry(peer).or_default();
-        entry.connections.remove(&addr);
+        entry.connections.remove(addr);
         let failure = if peer_closed {
             ConnectionFailure::them(addr.clone(), reason, debug)
         } else {
             ConnectionFailure::us(addr.clone(), reason, debug)
         };
-        entry.push_failure(&addr, failure, false);
+        entry.push_failure(addr, failure, false);
         self.notify(Event::ConnectionClosed(peer, conn));
         self.notify(Event::NewInfo(peer));
     }
@@ -513,7 +538,7 @@ impl AddressBook {
                                 .condition(PeerCondition::Always)
                                 .addresses(vec![tcp])
                                 .build(),
-                            handler: IntoAddressHandler(Some((addr, 3))),
+                            handler: IntoAddressHandler(Some((addr, 4))),
                         })
                     }
                 }
@@ -630,10 +655,10 @@ impl NetworkBehaviour for AddressBook {
         conn: &ConnectedPoint,
         _failures: Option<&Vec<Multiaddr>>,
     ) {
-        let mut address = conn.get_remote_address().clone();
-        normalize_addr(&mut address, peer_id);
+        let conn = normalize_connected_point(conn, &self.local_peer_id, peer_id);
+        let address = conn.get_remote_address();
         tracing::debug!(
-            addr = display(&address),
+            addr = %address,
             out = conn.is_dialer(),
             "connection established"
         );
@@ -647,8 +672,8 @@ impl NetworkBehaviour for AddressBook {
             .entry(*peer_id)
             .or_default()
             .connections
-            .insert(address, (Utc::now(), Direction::from(conn)));
-        self.notify(Event::ConnectionEstablished(*peer_id, conn.clone()));
+            .insert(address.clone(), (Utc::now(), Direction::from(&conn)));
+        self.notify(Event::ConnectionEstablished(*peer_id, conn));
     }
 
     fn inject_address_change(
@@ -658,13 +683,13 @@ impl NetworkBehaviour for AddressBook {
         old: &ConnectedPoint,
         new: &ConnectedPoint,
     ) {
-        let mut old_addr = old.get_remote_address().clone();
-        normalize_addr(&mut old_addr, peer_id);
-        let mut new_addr = new.get_remote_address().clone();
-        normalize_addr(&mut new_addr, peer_id);
+        let old = normalize_connected_point(old, &self.local_peer_id, peer_id);
+        let new = normalize_connected_point(new, &self.local_peer_id, peer_id);
+        let old_addr = old.get_remote_address();
+        let new_addr = new.get_remote_address();
         tracing::debug!(
-            old = display(old.get_remote_address()),
-            new = display(&new_addr),
+            old = %old.get_remote_address(),
+            new = %new_addr,
             out = new.is_dialer(),
             "address changed"
         );
@@ -675,11 +700,11 @@ impl NetworkBehaviour for AddressBook {
         };
         self.add_address(peer_id, new_addr.clone(), src);
         let entry = self.peers.entry(*peer_id).or_default();
-        entry.connections.remove(&old_addr);
+        entry.connections.remove(old_addr);
         entry
             .connections
-            .insert(new_addr, (Utc::now(), Direction::from(new)));
-        self.notify(Event::AddressChanged(*peer_id, old.clone(), new.clone()));
+            .insert(new_addr.clone(), (Utc::now(), Direction::from(&new)));
+        self.notify(Event::AddressChanged(*peer_id, old, new));
     }
 
     fn inject_dial_failure(
@@ -697,12 +722,10 @@ impl NetworkBehaviour for AddressBook {
         if let Some(info) = self.peers.get_mut(&peer_id) {
             if let IntoAddressHandler(Some((addr, retries))) = handler {
                 // this was our own validation dial
-                let probe_result = matches!(
-                    error,
-                    DialError::InvalidPeerId | DialError::ConnectionIo(_) | DialError::Transport(_)
-                );
                 let transport = matches!(error, DialError::Transport(_));
-                let wrong_peer = matches!(error, DialError::InvalidPeerId);
+                let wrong_peer = matches!(error, DialError::WrongPeerId { .. });
+                let probe_result =
+                    transport || wrong_peer || matches!(error, DialError::ConnectionIo(_));
                 let failure = ConnectionFailure::dial(addr.clone(), error);
                 let error = error.to_string();
                 tracing::debug!(addr = %&addr, error = %&error, active = probe_result,
@@ -719,6 +742,9 @@ impl NetworkBehaviour for AddressBook {
                 {
                     // TCP simultaneous open leads to both sides being initiator in the Noise
                     // handshake, which yields this particular error
+                    if retries == SIM_OPEN_RETRIES + 1 {
+                        tracing::debug!("scheduling redial after presumed TCP simultaneous open");
+                    }
                     let delay = Duration::from_secs(1) * rand::random::<u32>() / u32::MAX;
                     let action = NetworkBehaviourAction::Dial {
                         opts: DialOpts::peer_id(peer_id)
@@ -747,7 +773,7 @@ impl NetworkBehaviour for AddressBook {
                             opts: DialOpts::peer_id(peer_id)
                                 .addresses(vec![addr.clone()])
                                 .build(),
-                            handler: IntoAddressHandler(Some((addr.clone(), 3))),
+                            handler: IntoAddressHandler(Some((addr.clone(), SIM_OPEN_RETRIES))),
                         })
                     }
                     events.push(Event::DialFailure(peer_id, addr.clone(), error));

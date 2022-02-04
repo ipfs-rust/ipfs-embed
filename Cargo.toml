@@ -3,7 +3,7 @@ members = [".", "cli", "harness"]
 
 [package]
 name = "ipfs-embed"
-version = "0.23.0"
+version = "0.24.0"
 authors = ["David Craven <david@craven.ch>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
@@ -29,8 +29,8 @@ futures-timer = "3.0.2"
 ipfs-sqlite-block-store = "0.11.0"
 lazy_static = "1.4.0"
 libipld = { version = "0.12.0", default-features = false }
-libp2p-bitswap = "0.20.0"
-libp2p-broadcast = "0.7.0"
+libp2p-bitswap = "0.21.0"
+libp2p-broadcast = "0.8.0"
 names = "0.12.0"
 parking_lot = "0.11.2"
 pin-project = "1.0.10"
@@ -43,7 +43,7 @@ tracing = "0.1.29"
 void = "1.0.2"
 
 [dependencies.libp2p]
-version = "0.41.0"
+version = "0.42.1"
 default-features = false
 features = [
     "gossipsub",
@@ -52,13 +52,16 @@ features = [
     "mdns",
     "ping",
     #"relay",
-    "mplex", "noise", "pnet", "yamux",
+    "mplex",
+    "noise",
+    "pnet",
+    "yamux",
 ]
 
 [dev-dependencies]
 async-std = { version = "1.10.0", features = ["attributes"] }
 libipld = { version = "0.12.0", default-features = false, features = ["dag-cbor", "dag-pb", "derive"] }
-libp2p-bitswap = { version = "0.20.0", default-features = false, features = ["compat"] }
+libp2p-bitswap = { version = "0.21.0", default-features = false, features = ["compat"] }
 multihash = { version = "0.14.0", default-features = false, features = ["blake3"] }
 rand = "0.8.4"
 regex = "1.5.4"

@@ -13,7 +13,7 @@ use std::{
 use void::Void;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IntoAddressHandler(pub Option<(Multiaddr, usize)>);
+pub struct IntoAddressHandler(pub Option<(Multiaddr, u8)>);
 
 impl IntoAddressHandler {
     pub fn peer_id(&self) -> Option<PeerId> {
@@ -47,7 +47,7 @@ impl IntoProtocolsHandler for IntoAddressHandler {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddressHandler {
-    pub own_dial: Option<(Multiaddr, usize)>,
+    pub own_dial: Option<(Multiaddr, u8)>,
     pub remote_peer_id: PeerId,
     pub connected_point: ConnectedPoint,
 }

@@ -3,7 +3,7 @@ use crate::net::peers::AddressBook;
 use async_executor::LocalExecutor;
 use futures::{future::ready, stream::StreamExt};
 use libp2p::{
-    core::{connection::ConnectionId, ConnectedPoint},
+    core::{connection::ConnectionId, ConnectedPoint, Endpoint},
     identify::IdentifyInfo,
     identity::ed25519::Keypair,
     multiaddr::Protocol,
@@ -200,6 +200,7 @@ fn from_docker_host() {
 
     let peer_a = PeerId::random();
     let addr_a_1: Multiaddr = "/ip4/10.0.0.2/tcp/4001".parse().unwrap();
+    let addr_a_1p = addr_a_1.clone().with(Protocol::P2p(peer_a.into()));
 
     let mut book = AddressBook::new(
         peer_a,
@@ -214,7 +215,7 @@ fn from_docker_host() {
     let key_b = libp2p::identity::PublicKey::Ed25519(Keypair::generate().public());
     let peer_b = PeerId::from(&key_b);
     let addr_b_1: Multiaddr = "/ip4/10.0.0.10/tcp/57634".parse().unwrap();
-    let addr_b_1p = addr_b_1.clone().with(Protocol::P2p(peer_b.into()));
+    let addr_b_1p = addr_b_1.with(Protocol::P2p(peer_b.into()));
     let addr_b_2: Multiaddr = "/ip4/10.0.0.10/tcp/4001".parse().unwrap();
     let addr_b_2p = addr_b_2.clone().with(Protocol::P2p(peer_b.into()));
     let addr_b_3: Multiaddr = "/ip4/172.17.0.3/tcp/4001".parse().unwrap();
@@ -223,8 +224,8 @@ fn from_docker_host() {
 
     let id = ConnectionId::new(1);
     let cp = ConnectedPoint::Listener {
-        local_addr: addr_a_1.clone(),
-        send_back_addr: addr_b_1,
+        local_addr: addr_a_1p,
+        send_back_addr: addr_b_1p.clone(),
     };
     book.inject_connection_established(&peer_b, &id, &cp, None);
     assert_eq!(
@@ -262,6 +263,7 @@ fn from_docker_host() {
     let id2 = ConnectionId::new(2);
     let cp2 = ConnectedPoint::Dialer {
         address: addr_b_2p.clone(),
+        role_override: Endpoint::Dialer,
     };
     book.inject_connection_established(&peer_b, &id2, &cp2, None);
     assert_eq!(
@@ -313,6 +315,7 @@ fn from_docker_container() {
 
     let peer_a = PeerId::random();
     let addr_a_1: Multiaddr = "/ip4/10.0.0.2/tcp/4001".parse().unwrap();
+    let addr_a_1p = addr_a_1.clone().with(Protocol::P2p(peer_a.into()));
 
     let mut book = AddressBook::new(
         peer_a,
@@ -327,7 +330,7 @@ fn from_docker_container() {
     let key_b = libp2p::identity::PublicKey::Ed25519(Keypair::generate().public());
     let peer_b = PeerId::from(&key_b);
     let addr_b_1: Multiaddr = "/ip4/10.0.0.10/tcp/57634".parse().unwrap();
-    let addr_b_1p = addr_b_1.clone().with(Protocol::P2p(peer_b.into()));
+    let addr_b_1p = addr_b_1.with(Protocol::P2p(peer_b.into()));
     let addr_b_2: Multiaddr = "/ip4/10.0.0.10/tcp/4001".parse().unwrap();
     let addr_b_2p = addr_b_2.clone().with(Protocol::P2p(peer_b.into()));
     let addr_b_3: Multiaddr = "/ip4/172.17.0.3/tcp/4001".parse().unwrap();
@@ -336,8 +339,8 @@ fn from_docker_container() {
 
     let id = ConnectionId::new(1);
     let cp = ConnectedPoint::Listener {
-        local_addr: addr_a_1.clone(),
-        send_back_addr: addr_b_1,
+        local_addr: addr_a_1p,
+        send_back_addr: addr_b_1p.clone(),
     };
     book.inject_connection_established(&peer_b, &id, &cp, None);
     assert_eq!(
@@ -423,6 +426,7 @@ fn from_docker_container() {
     let id2 = ConnectionId::new(2);
     let cp2 = ConnectedPoint::Dialer {
         address: addr_b_2p.clone(),
+        role_override: Endpoint::Dialer,
     };
     book.inject_connection_established(&peer_b, &id2, &cp2, None);
     assert_eq!(

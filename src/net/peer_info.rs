@@ -139,6 +139,7 @@ impl PeerInfo {
                 }
             }
         } else {
+            debug_assert!(matches!(addr.iter().last(), Some(Protocol::P2p(_))));
             self.addresses.insert(addr, (source, Utc::now()));
             source.is_to_probe()
         }

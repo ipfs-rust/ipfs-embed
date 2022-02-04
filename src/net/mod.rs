@@ -1,7 +1,6 @@
 mod address_handler;
 mod behaviour;
 mod config;
-mod p2p_wrapper;
 mod peer_info;
 mod peers;
 #[cfg(test)]
@@ -97,7 +96,7 @@ impl<P: StoreParams> NetworkService<P> {
                     config.node_key.clone(),
                 ))
                 .unwrap();
-            let transport = transport
+            transport
                 .upgrade(Version::V1)
                 .authenticate(NoiseConfig::xx(dh_key).into_authenticated())
                 .multiplex(SelectUpgrade::new(
@@ -105,8 +104,7 @@ impl<P: StoreParams> NetworkService<P> {
                     MplexConfig::new(),
                 ))
                 .timeout(Duration::from_secs(5))
-                .boxed();
-            p2p_wrapper::P2pWrapper(transport)
+                .boxed()
         };
         /*let quic = {
             QuicConfig {
@@ -436,6 +434,7 @@ impl<P: StoreParams> NetworkService<P> {
             .behaviour_mut()
             .sync(cid, providers, missing.into_iter());
         self.waker.wake();
+        drop(swarm);
         SyncQuery {
             swarm: Some(self.swarm.clone()),
             id: Some(id),
@@ -504,7 +503,9 @@ impl<P: StoreParams> Future for SyncQuery<P> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
-            match Pin::new(&mut self.rx).poll_next(cx) {
+            let poll = Pin::new(&mut self.rx).poll_next(cx);
+            tracing::trace!("sync progress: {:?}", poll);
+            match poll {
                 Poll::Ready(Some(SyncEvent::Complete(result))) => return Poll::Ready(result),
                 Poll::Ready(_) => continue,
                 Poll::Pending => return Poll::Pending,
@@ -517,7 +518,9 @@ impl<P: StoreParams> Stream for SyncQuery<P> {
     type Item = SyncEvent;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.rx).poll_next(cx)
+        let poll = Pin::new(&mut self.rx).poll_next(cx);
+        tracing::trace!("sync progress: {:?}", poll);
+        poll
     }
 }
 
