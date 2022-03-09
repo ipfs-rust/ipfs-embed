@@ -42,11 +42,19 @@ pub struct NetworkConfig {
 
 /// `DNS` configuration.
 #[derive(Debug)]
-pub struct DnsConfig {
-    /// Configures the nameservers to use.
-    pub config: ResolverConfig,
-    /// Configuration for the resolver.
-    pub opts: ResolverOpts,
+pub enum DnsConfig {
+    Custom {
+        /// Configures the nameservers to use.
+        config: ResolverConfig,
+        /// Configuration for the resolver.
+        opts: ResolverOpts,
+    },
+    SystemWithFallback {
+        /// Configures the nameservers to use.
+        config: ResolverConfig,
+        /// Configuration for the resolver.
+        opts: ResolverOpts,
+    },
 }
 
 impl NetworkConfig {

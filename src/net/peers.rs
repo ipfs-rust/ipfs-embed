@@ -130,6 +130,14 @@ fn normalize_addr_ref<'a>(addr: &'a Multiaddr, peer: &PeerId) -> Cow<'a, Multiad
     }
 }
 
+fn without_peer_id(addr: &Multiaddr) -> Multiaddr {
+    let mut addr = addr.clone();
+    if let Some(Protocol::P2p(_)) = addr.iter().last() {
+        addr.pop();
+    }
+    addr
+}
+
 fn normalize_connected_point(
     cp: &ConnectedPoint,
     local: &PeerId,
@@ -395,10 +403,11 @@ impl AddressBook {
 
         let entry = self.peers.entry(peer).or_default();
         entry.connections.remove(addr);
+        let addr_no_peer = without_peer_id(addr);
         let failure = if peer_closed {
-            ConnectionFailure::them(addr.clone(), reason, debug)
+            ConnectionFailure::them(addr_no_peer, reason, debug)
         } else {
-            ConnectionFailure::us(addr.clone(), reason, debug)
+            ConnectionFailure::us(addr_no_peer, reason, debug)
         };
         entry.push_failure(addr, failure, false);
         self.notify(Event::ConnectionClosed(peer, conn));
@@ -726,7 +735,7 @@ impl NetworkBehaviour for AddressBook {
                 let wrong_peer = matches!(error, DialError::WrongPeerId { .. });
                 let probe_result =
                     transport || wrong_peer || matches!(error, DialError::ConnectionIo(_));
-                let failure = ConnectionFailure::dial(addr.clone(), error);
+                let failure = ConnectionFailure::dial(without_peer_id(&addr), error);
                 let error = error.to_string();
                 tracing::debug!(addr = %&addr, error = %&error, active = probe_result,
                     "validation dial failure");
@@ -761,7 +770,7 @@ impl NetworkBehaviour for AddressBook {
                 let mut events = Vec::with_capacity(v.len());
                 let mut deferred = Vec::new();
                 for (addr, error) in v {
-                    let failure = ConnectionFailure::transport(addr.clone(), error);
+                    let failure = ConnectionFailure::transport(without_peer_id(addr), error);
                     let error = format!("{:?}", error);
                     tracing::debug!(addr = %&addr, error = %&error, "non-validation dial failure");
                     info.push_failure(normalize_addr_ref(addr, &peer_id).as_ref(), failure, true);

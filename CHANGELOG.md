@@ -14,3 +14,4 @@ This changelog was begun after 0.22.
   - all incoming connections’ remote addresses are translated to likely listen addresses using IdentifyInfo
 - offer detailed peer information and error history in PeerInfo
 - forward all connection-related swarm events
+- allow DNS fallback configuration in case system config parsing fails
