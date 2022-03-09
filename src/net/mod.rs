@@ -142,7 +142,20 @@ impl<P: StoreParams> NetworkService<P> {
         };
         #[cfg(all(feature = "tokio", not(feature = "async_global")))]
         let transport = if let Some(config) = config.dns {
-            Dns::custom(quic_or_tcp, config.config, config.opts)?.boxed()
+            match config {
+                DnsConfig::Custom { config, opts } => {
+                    Dns::custom(quic_or_tcp, config, opts)?.boxed()
+                }
+                DnsConfig::SystemWithFallback { config, opts } => {
+                    match trust_dns_resolver::system_conf::read_system_conf() {
+                        Ok((config, opts)) => Dns::custom(quic_or_tcp, config, opts)?.boxed(),
+                        Err(e) => {
+                            tracing::warn!("falling back to custom DNS config, system default yielded error `${:#}`", e);
+                            Dns::custom(quic_or_tcp, config, opts)?.boxed()
+                        }
+                    }
+                }
+            }
         } else {
             Dns::system(quic_or_tcp)?.boxed()
         };
