@@ -88,12 +88,13 @@ impl DagBuilder {
         let node = Node { nonce, children };
         let block = Block::encode(DagCborCodec, Code::Blake3_256, &node)?;
         self.ipfs.alias(block.cid().to_bytes(), Some(block.cid()))?;
-        self.ipfs.insert(&block)?;
+        let cid = *block.cid();
+        self.ipfs.insert(block)?;
         for cid in node.children.into_iter().take(n_children_rm) {
             self.ipfs.alias(cid.to_bytes(), None)?;
             self.heads.remove(&cid);
         }
-        self.heads.insert(*block.cid());
+        self.heads.insert(cid);
         Ok(())
     }
 

@@ -126,7 +126,7 @@ async fn run() -> Result<()> {
                 writeln!(stdout, "{}", Event::Block(block))?;
             }
             Command::Insert(block) => {
-                ipfs.lock().insert(&block)?;
+                ipfs.lock().insert(block)?;
             }
             Command::Alias(alias, cid) => {
                 ipfs.lock().alias(&alias, cid.as_ref())?;

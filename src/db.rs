@@ -251,7 +251,7 @@ where
         self.rw("get", |x| x.get(cid))
     }
 
-    pub fn insert(&self, block: &Block<S>) -> Result<()> {
+    pub fn insert(&self, block: Block<S>) -> Result<()> {
         self.rw("insert", |x| x.insert(block))
     }
 
@@ -431,7 +431,7 @@ where
         Ok(self.0.get_block(cid)?)
     }
 
-    pub fn insert(&mut self, block: &Block<S>) -> Result<()> {
+    pub fn insert(&mut self, block: Block<S>) -> Result<()> {
         Ok(self.0.put_block(block, None)?)
     }
 
@@ -513,31 +513,29 @@ mod tests {
     async fn test_store_evict() {
         tracing_try_init();
         let store = create_store();
-        let blocks = [
-            create_block(&ipld!(0)),
-            create_block(&ipld!(1)),
-            create_block(&ipld!(2)),
-            create_block(&ipld!(3)),
-        ];
-        store.insert(&blocks[0]).unwrap();
-        store.insert(&blocks[1]).unwrap();
+        let a = create_block(&ipld!(0));
+        let b = create_block(&ipld!(1));
+        let c = create_block(&ipld!(2));
+        let d = create_block(&ipld!(3));
+        store.insert(a.clone()).unwrap();
+        store.insert(b.clone()).unwrap();
         store.flush().await.unwrap();
         store.evict().await.unwrap();
-        assert_unpinned!(&store, &blocks[0]);
-        assert_unpinned!(&store, &blocks[1]);
-        store.insert(&blocks[2]).unwrap();
+        assert_unpinned!(&store, &a);
+        assert_unpinned!(&store, &b);
+        store.insert(c.clone()).unwrap();
         store.flush().await.unwrap();
         store.evict().await.unwrap();
-        assert_evicted!(&store, &blocks[0]);
-        assert_unpinned!(&store, &blocks[1]);
-        assert_unpinned!(&store, &blocks[2]);
-        store.get(blocks[1].cid()).unwrap();
-        store.insert(&blocks[3]).unwrap();
+        assert_evicted!(&store, &a);
+        assert_unpinned!(&store, &b);
+        assert_unpinned!(&store, &c);
+        store.get(b.cid()).unwrap();
+        store.insert(d.clone()).unwrap();
         store.flush().await.unwrap();
         store.evict().await.unwrap();
-        assert_unpinned!(&store, &blocks[1]);
-        assert_evicted!(&store, &blocks[2]);
-        assert_unpinned!(&store, &blocks[3]);
+        assert_unpinned!(&store, &b);
+        assert_evicted!(&store, &c);
+        assert_unpinned!(&store, &d);
     }
 
     #[async_std::test]
@@ -550,9 +548,9 @@ mod tests {
         let c = create_block(&ipld!({ "c": [a.cid()] }));
         let x = alias!(x).as_bytes().to_vec();
         let y = alias!(y).as_bytes().to_vec();
-        store.insert(&a).unwrap();
-        store.insert(&b).unwrap();
-        store.insert(&c).unwrap();
+        store.insert(a.clone()).unwrap();
+        store.insert(b.clone()).unwrap();
+        store.insert(c.clone()).unwrap();
         store.alias(&x, Some(b.cid())).unwrap();
         store.alias(&y, Some(c.cid())).unwrap();
         store.flush().await.unwrap();
@@ -580,8 +578,8 @@ mod tests {
         let b = create_block(&ipld!({ "b": [a.cid()] }));
         let x = alias!(x).as_bytes().to_vec();
         let y = alias!(y).as_bytes().to_vec();
-        store.insert(&a).unwrap();
-        store.insert(&b).unwrap();
+        store.insert(a.clone()).unwrap();
+        store.insert(b.clone()).unwrap();
         store.alias(&x, Some(b.cid())).unwrap();
         store.alias(&y, Some(b.cid())).unwrap();
         store.flush().await.unwrap();

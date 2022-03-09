@@ -124,7 +124,7 @@ where
     }
 
     fn insert(&mut self, block: &Block<P>) -> Result<()> {
-        self.0.insert(block)
+        self.0.insert(block.clone())
     }
 
     fn missing_blocks(&mut self, cid: &Cid) -> Result<Vec<Cid>> {
@@ -363,7 +363,7 @@ where
     }
 
     /// Inserts a block in to the block store.
-    pub fn insert(&self, block: &Block<P>) -> Result<()> {
+    pub fn insert(&self, block: Block<P>) -> Result<()> {
         self.storage.insert(block)?;
         Ok(())
     }
@@ -454,7 +454,7 @@ where
     }
 
     fn insert(&self, block: &Block<P>) -> Result<()> {
-        let _ = Ipfs::insert(self, block)?;
+        let _ = Ipfs::insert(self, block.clone())?;
         Ok(())
     }
 
@@ -530,7 +530,7 @@ mod tests {
         let block = create_block(b"test_local_store")?;
         let mut tmp = store.create_temp_pin()?;
         store.temp_pin(&mut tmp, block.cid())?;
-        let _ = store.insert(&block)?;
+        let _ = store.insert(block.clone())?;
         let block2 = store.get(block.cid())?;
         assert_eq!(block.data(), block2.data());
         Ok(())
@@ -545,7 +545,7 @@ mod tests {
         let block = create_block(b"test_exchange_mdns")?;
         let mut tmp1 = store1.create_temp_pin()?;
         store1.temp_pin(&mut tmp1, block.cid())?;
-        let _ = store1.insert(&block)?;
+        let _ = store1.insert(block.clone())?;
         store1.flush().await?;
         let mut tmp2 = store2.create_temp_pin()?;
         store2.temp_pin(&mut tmp2, block.cid())?;
@@ -578,7 +578,7 @@ mod tests {
         let key = Key::new(&block.cid().to_bytes());
         let mut tmp1 = store1.create_temp_pin()?;
         store1.temp_pin(&mut tmp1, block.cid())?;
-        store1.insert(&block)?;
+        store1.insert(block.clone())?;
         store1.provide(key.clone()).await?;
         store1.flush().await?;
 
@@ -652,9 +652,9 @@ mod tests {
         let c2 = create_ipld_block(&ipld!({ "c": [a1.cid(), b2.cid()] }))?;
         let x = alias!(x);
 
-        let _ = local1.insert(&a1)?;
-        let _ = local1.insert(&b1)?;
-        let _ = local1.insert(&c1)?;
+        let _ = local1.insert(a1.clone())?;
+        let _ = local1.insert(b1.clone())?;
+        let _ = local1.insert(c1.clone())?;
         local1.alias(x, Some(c1.cid()))?;
         local1.flush().await?;
         assert_pinned!(&local1, &a1);
@@ -668,8 +668,8 @@ mod tests {
         assert_pinned!(&local2, &b1);
         assert_pinned!(&local2, &c1);
 
-        let _ = local2.insert(&b2)?;
-        let _ = local2.insert(&c2)?;
+        let _ = local2.insert(b2.clone())?;
+        let _ = local2.insert(c2.clone())?;
         local2.alias(x, Some(c2.cid()))?;
         local2.flush().await?;
         assert_pinned!(&local2, &a1);
@@ -864,8 +864,8 @@ mod tests {
         let ipfs = Ipfs::<DefaultParams>::new(Config { storage, network }).await?;
         let a = create_block(b"a")?;
         let b = create_block(b"b")?;
-        ipfs.insert(&a)?;
-        ipfs.insert(&b)?;
+        ipfs.insert(a.clone())?;
+        ipfs.insert(b.clone())?;
         let has_blocks = ipfs.batch_ops(|db| Ok(db.contains(a.cid())? && db.contains(b.cid())?))?;
         assert!(has_blocks);
         Ok(())
@@ -882,16 +882,16 @@ mod tests {
         let c = create_block(b"c")?;
         let d = create_block(b"d")?;
         ipfs.batch_ops(|db| {
-            db.insert(&a)?;
-            db.insert(&b)?;
+            db.insert(a.clone())?;
+            db.insert(b.clone())?;
             Ok(())
         })?;
         assert!(ipfs.contains(a.cid())? && ipfs.contains(b.cid())?);
         #[allow(unreachable_code)]
         let _: anyhow::Result<()> = ipfs.batch_ops(|db| {
-            db.insert(&c)?;
+            db.insert(c.clone())?;
             anyhow::bail!("nope!");
-            db.insert(&d)?;
+            db.insert(d.clone())?;
         });
         assert!(!ipfs.contains(d.cid())? && ipfs.contains(c.cid())? && ipfs.contains(b.cid())?);
         Ok(())
@@ -913,7 +913,7 @@ mod tests {
         let size: usize = blocks.iter().map(|block| block.data().len()).sum();
         tracing::info!("chain built {} blocks, {} bytes", blocks.len(), size);
         for block in blocks.iter() {
-            let _ = a.insert(block)?;
+            let _ = a.insert(block.clone())?;
         }
         a.flush().await?;
 
@@ -953,7 +953,7 @@ mod tests {
         let size: usize = blocks.iter().map(|block| block.data().len()).sum();
         tracing::info!("chain built {} blocks, {} bytes", blocks.len(), size);
         for block in blocks.iter() {
-            let _ = a.insert(block)?;
+            let _ = a.insert(block.clone())?;
         }
         a.flush().await?;
 
