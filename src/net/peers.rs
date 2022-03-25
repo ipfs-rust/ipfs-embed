@@ -636,6 +636,7 @@ impl NetworkBehaviour for AddressBook {
         cx: &mut Context,
         _params: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<void::Void, IntoAddressHandler>> {
+        tracing::trace!("AddressBook polled");
         if let Some(action) = self.actions.pop_front() {
             Poll::Ready(action)
         } else if !self.deferred.is_empty() {
