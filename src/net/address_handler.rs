@@ -2,7 +2,8 @@ use libp2p::{
     core::{upgrade::DeniedUpgrade, ConnectedPoint},
     multiaddr::Protocol,
     swarm::{
-        protocols_handler, IntoProtocolsHandler, KeepAlive, ProtocolsHandler, SubstreamProtocol,
+        handler::{InboundUpgradeSend, OutboundUpgradeSend},
+        ConnectionHandler, IntoConnectionHandler, KeepAlive, SubstreamProtocol,
     },
     Multiaddr, PeerId,
 };
@@ -25,7 +26,7 @@ impl IntoAddressHandler {
     }
 }
 
-impl IntoProtocolsHandler for IntoAddressHandler {
+impl IntoConnectionHandler for IntoAddressHandler {
     type Handler = AddressHandler;
 
     fn into_handler(
@@ -52,7 +53,7 @@ pub struct AddressHandler {
     pub connected_point: ConnectedPoint,
 }
 
-impl ProtocolsHandler for AddressHandler {
+impl ConnectionHandler for AddressHandler {
     type InEvent = Void;
     type OutEvent = Void;
     type Error = Void;
@@ -69,14 +70,14 @@ impl ProtocolsHandler for AddressHandler {
 
     fn inject_fully_negotiated_inbound(
         &mut self,
-        _protocol: <Self::InboundProtocol as protocols_handler::InboundUpgradeSend>::Output,
+        _protocol: <Self::InboundProtocol as InboundUpgradeSend>::Output,
         _info: Self::InboundOpenInfo,
     ) {
     }
 
     fn inject_fully_negotiated_outbound(
         &mut self,
-        _protocol: <Self::OutboundProtocol as protocols_handler::OutboundUpgradeSend>::Output,
+        _protocol: <Self::OutboundProtocol as OutboundUpgradeSend>::Output,
         _info: Self::OutboundOpenInfo,
     ) {
     }
@@ -86,8 +87,8 @@ impl ProtocolsHandler for AddressHandler {
     fn inject_dial_upgrade_error(
         &mut self,
         _info: Self::OutboundOpenInfo,
-        _error: libp2p::swarm::ProtocolsHandlerUpgrErr<
-            <Self::OutboundProtocol as protocols_handler::OutboundUpgradeSend>::Error,
+        _error: libp2p::swarm::ConnectionHandlerUpgrErr<
+            <Self::OutboundProtocol as OutboundUpgradeSend>::Error,
         >,
     ) {
     }
@@ -101,7 +102,7 @@ impl ProtocolsHandler for AddressHandler {
         &mut self,
         _cx: &mut Context<'_>,
     ) -> Poll<
-        libp2p::swarm::ProtocolsHandlerEvent<
+        libp2p::swarm::ConnectionHandlerEvent<
             Self::OutboundProtocol,
             Self::OutboundOpenInfo,
             Self::OutEvent,

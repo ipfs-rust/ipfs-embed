@@ -281,7 +281,7 @@ where
     }
 
     /// Gets a record from the dht.
-    pub async fn get_record(&self, key: &Key, quorum: Quorum) -> Result<Vec<PeerRecord>> {
+    pub async fn get_record(&self, key: Key, quorum: Quorum) -> Result<Vec<PeerRecord>> {
         self.network.get_record(key, quorum).await
     }
 
@@ -734,7 +734,7 @@ mod tests {
                 Quorum::One,
             )
             .await?;
-        let records = stores[1].0.get_record(&key, Quorum::One).await?;
+        let records = stores[1].0.get_record(key, Quorum::One).await?;
         assert_eq!(records.len(), 1);
         Ok(())
     }

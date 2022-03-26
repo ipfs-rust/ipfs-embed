@@ -391,7 +391,7 @@ impl<P: StoreParams> NetworkService<P> {
         self.waker.wake();
     }
 
-    pub async fn get_record(&self, key: &Key, quorum: Quorum) -> Result<Vec<PeerRecord>> {
+    pub async fn get_record(&self, key: Key, quorum: Quorum) -> Result<Vec<PeerRecord>> {
         let rx = {
             let mut swarm = self.swarm.lock();
             swarm.behaviour_mut().get_record(key, quorum)

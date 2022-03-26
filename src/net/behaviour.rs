@@ -14,7 +14,7 @@ use futures::{
 };
 use libipld::{store::StoreParams, Cid, DefaultParams, Result};
 use libp2p::{
-    core::{connection::ConnectionError, ConnectedPoint},
+    core::ConnectedPoint,
     gossipsub::{Gossipsub, GossipsubEvent, GossipsubMessage, IdentTopic, MessageAuthenticity},
     identify::{Identify, IdentifyEvent},
     identity::ed25519::PublicKey,
@@ -27,8 +27,8 @@ use libp2p::{
     mdns::{Mdns, MdnsEvent},
     ping::{Ping, PingEvent, PingFailure, PingSuccess},
     swarm::{
-        behaviour::toggle::Toggle, protocols_handler::NodeHandlerWrapperError,
-        IntoProtocolsHandler, NetworkBehaviour, NetworkBehaviourEventProcess, ProtocolsHandler,
+        behaviour::toggle::Toggle, ConnectionError, ConnectionHandler, IntoConnectionHandler,
+        NetworkBehaviour, NetworkBehaviourEventProcess,
     },
     Multiaddr, NetworkBehaviour, PeerId,
 };
@@ -98,7 +98,7 @@ pub enum GossipEvent {
 }
 
 pub(crate) type MyHandlerError = <<<NetworkBackendBehaviour<DefaultParams> as NetworkBehaviour>
-    ::ProtocolsHandler as IntoProtocolsHandler>::Handler as ProtocolsHandler>::Error;
+    ::ConnectionHandler as IntoConnectionHandler>::Handler as ConnectionHandler>::Error;
 
 #[derive(NetworkBehaviour)]
 #[behaviour(event_process = true)]
@@ -492,7 +492,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         peer: PeerId,
         cp: ConnectedPoint,
         num_established: u32,
-        error: Option<ConnectionError<NodeHandlerWrapperError<MyHandlerError>>>,
+        error: Option<ConnectionError<MyHandlerError>>,
     ) {
         self.peers
             .connection_closed(peer, cp, num_established, error);
@@ -594,7 +594,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         rx
     }
 
-    pub fn get_record(&mut self, key: &Key, quorum: Quorum) -> GetRecordChannel {
+    pub fn get_record(&mut self, key: Key, quorum: Quorum) -> GetRecordChannel {
         let (tx, rx) = oneshot::channel();
         if self.bootstrap_complete {
             if let Some(kad) = self.kad.as_mut() {

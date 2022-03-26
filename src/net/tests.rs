@@ -227,7 +227,7 @@ fn from_docker_host() {
         local_addr: addr_a_1p,
         send_back_addr: addr_b_1p.clone(),
     };
-    book.inject_connection_established(&peer_b, &id, &cp, None);
+    book.inject_connection_established(&peer_b, &id, &cp, None, 0);
     assert_eq!(
         events.next(),
         vec![NewInfo(peer_b), ConnectionEstablished(peer_b, cp.clone())]
@@ -265,7 +265,7 @@ fn from_docker_host() {
         address: addr_b_2p.clone(),
         role_override: Endpoint::Dialer,
     };
-    book.inject_connection_established(&peer_b, &id2, &cp2, None);
+    book.inject_connection_established(&peer_b, &id2, &cp2, None, 0);
     assert_eq!(
         events.next(),
         vec![
@@ -342,7 +342,7 @@ fn from_docker_container() {
         local_addr: addr_a_1p,
         send_back_addr: addr_b_1p.clone(),
     };
-    book.inject_connection_established(&peer_b, &id, &cp, None);
+    book.inject_connection_established(&peer_b, &id, &cp, None, 0);
     assert_eq!(
         events.next(),
         vec![NewInfo(peer_b), ConnectionEstablished(peer_b, cp.clone())]
@@ -428,7 +428,7 @@ fn from_docker_container() {
         address: addr_b_2p.clone(),
         role_override: Endpoint::Dialer,
     };
-    book.inject_connection_established(&peer_b, &id2, &cp2, None);
+    book.inject_connection_established(&peer_b, &id2, &cp2, None, 0);
     assert_eq!(
         events.next(),
         vec![

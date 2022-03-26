@@ -16,14 +16,13 @@ use futures::{
 use futures_timer::Delay;
 use lazy_static::lazy_static;
 use libp2p::{
-    core::connection::{ConnectedPoint, ConnectionError, ConnectionId, ListenerId},
+    core::connection::{ConnectedPoint, ConnectionId, ListenerId},
     identify::IdentifyInfo,
     identity::ed25519::PublicKey,
     multiaddr::Protocol,
     swarm::{
         dial_opts::{DialOpts, PeerCondition},
-        protocols_handler::NodeHandlerWrapperError,
-        DialError, NetworkBehaviour, NetworkBehaviourAction, PollParameters,
+        ConnectionError, DialError, NetworkBehaviour, NetworkBehaviourAction, PollParameters,
     },
     Multiaddr, PeerId,
 };
@@ -361,35 +360,30 @@ impl AddressBook {
         peer: PeerId,
         conn: ConnectedPoint,
         num_established: u32,
-        error: Option<ConnectionError<NodeHandlerWrapperError<MyHandlerError>>>,
+        error: Option<ConnectionError<MyHandlerError>>,
     ) {
         use libp2p::core::either::EitherError::*;
         use ConnectionError::Handler as ConnHandler;
-        use NodeHandlerWrapperError::Handler as NodeHandler;
 
         let conn = normalize_connected_point(&conn, &self.local_peer_id, &peer);
         let addr = conn.get_remote_address();
 
         let debug = format!("{:?}", error);
         let (reason, peer_closed) = match error {
-            Some(ConnHandler(NodeHandler(A(A(A(A(A(A(A(e)))))))))) => void::unreachable(e),
-            Some(ConnHandler(NodeHandler(A(A(A(A(A(A(B(e)))))))))) => {
+            Some(ConnHandler(A(A(A(A(A(A(A(e))))))))) => void::unreachable(e),
+            Some(ConnHandler(A(A(A(A(A(A(B(e))))))))) => {
                 (format!("Kademlia I/O error: {}", e), false)
             }
-            Some(ConnHandler(NodeHandler(A(A(A(A(A(B(e))))))))) => void::unreachable(e),
-            Some(ConnHandler(NodeHandler(A(A(A(A(B(e)))))))) => {
-                (format!("Ping failure: {}", e), false)
-            }
-            Some(ConnHandler(NodeHandler(A(A(A(B(e))))))) => {
-                (format!("Identify I/O error: {}", e), false)
-            }
-            Some(ConnHandler(NodeHandler(A(A(B(e)))))) => (format!("Bitswap error: {}", e), false),
-            Some(ConnHandler(NodeHandler(A(B(e))))) => (format!("Gossipsub error: {}", e), false),
-            Some(ConnHandler(NodeHandler(B(e)))) => (format!("Broadcast error: {}", e), false),
-            Some(ConnHandler(NodeHandlerWrapperError::KeepAliveTimeout)) => {
+            Some(ConnHandler(A(A(A(A(A(B(e)))))))) => void::unreachable(e),
+            Some(ConnHandler(A(A(A(A(B(e))))))) => (format!("Ping failure: {}", e), false),
+            Some(ConnHandler(A(A(A(B(e)))))) => (format!("Identify I/O error: {}", e), false),
+            Some(ConnHandler(A(A(B(e))))) => (format!("Bitswap error: {}", e), false),
+            Some(ConnHandler(A(B(e)))) => (format!("Gossipsub error: {}", e), false),
+            Some(ConnHandler(B(e))) => (format!("Broadcast error: {}", e), false),
+            Some(ConnectionError::IO(e)) => (format!("connection I/O error: {}", e), true),
+            Some(ConnectionError::KeepAliveTimeout) => {
                 ("we closed due to missing keepalive".to_owned(), false)
             }
-            Some(ConnectionError::IO(e)) => (format!("connection I/O error: {}", e), true),
             None => ("we closed".to_owned(), false),
         };
 
@@ -614,10 +608,10 @@ impl Stream for SwarmEvents {
 }
 
 impl NetworkBehaviour for AddressBook {
-    type ProtocolsHandler = IntoAddressHandler;
+    type ConnectionHandler = IntoAddressHandler;
     type OutEvent = void::Void;
 
-    fn new_handler(&mut self) -> Self::ProtocolsHandler {
+    fn new_handler(&mut self) -> Self::ConnectionHandler {
         IntoAddressHandler(None)
     }
 
@@ -636,7 +630,7 @@ impl NetworkBehaviour for AddressBook {
         cx: &mut Context,
         _params: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<void::Void, IntoAddressHandler>> {
-        tracing::trace!("AddressBook polled");
+        println!("AddressBook polled");
         if let Some(action) = self.actions.pop_front() {
             Poll::Ready(action)
         } else if !self.deferred.is_empty() {
@@ -646,24 +640,13 @@ impl NetworkBehaviour for AddressBook {
         }
     }
 
-    fn inject_connected(&mut self, peer_id: &PeerId) {
-        tracing::trace!("connected to {}", peer_id);
-        CONNECTED.inc();
-        self.notify(Event::Connected(*peer_id));
-    }
-
-    fn inject_disconnected(&mut self, peer_id: &PeerId) {
-        tracing::trace!("disconnected from {}", peer_id);
-        CONNECTED.dec();
-        self.notify(Event::Disconnected(*peer_id));
-    }
-
     fn inject_connection_established(
         &mut self,
         peer_id: &PeerId,
         _: &ConnectionId,
         conn: &ConnectedPoint,
         _failures: Option<&Vec<Multiaddr>>,
+        _remaining_established: usize,
     ) {
         let conn = normalize_connected_point(conn, &self.local_peer_id, peer_id);
         let address = conn.get_remote_address();
@@ -720,7 +703,7 @@ impl NetworkBehaviour for AddressBook {
     fn inject_dial_failure(
         &mut self,
         peer_id: Option<PeerId>,
-        handler: Self::ProtocolsHandler,
+        handler: Self::ConnectionHandler,
         error: &DialError,
     ) {
         let peer_id = if let Some(peer_id) = handler.peer_id().or(peer_id) {
