@@ -230,7 +230,11 @@ fn from_docker_host() {
     book.inject_connection_established(&peer_b, &id, &cp, None, 0);
     assert_eq!(
         events.next(),
-        vec![NewInfo(peer_b), ConnectionEstablished(peer_b, cp.clone())]
+        vec![
+            NewInfo(peer_b),
+            Connected(peer_b),
+            ConnectionEstablished(peer_b, cp.clone())
+        ]
     );
     assert_eq!(dials(&mut book), vec![]);
     assert_eq!(
@@ -271,6 +275,7 @@ fn from_docker_host() {
         vec![
             Discovered(peer_b),
             NewInfo(peer_b),
+            Connected(peer_b),
             ConnectionEstablished(peer_b, cp2)
         ]
     );
@@ -345,7 +350,11 @@ fn from_docker_container() {
     book.inject_connection_established(&peer_b, &id, &cp, None, 0);
     assert_eq!(
         events.next(),
-        vec![NewInfo(peer_b), ConnectionEstablished(peer_b, cp.clone())]
+        vec![
+            NewInfo(peer_b),
+            Connected(peer_b),
+            ConnectionEstablished(peer_b, cp.clone())
+        ]
     );
     assert_eq!(dials(&mut book), vec![]);
     assert_eq!(
@@ -434,6 +443,7 @@ fn from_docker_container() {
         vec![
             Discovered(peer_b),
             NewInfo(peer_b),
+            Connected(peer_b),
             ConnectionEstablished(peer_b, cp2)
         ]
     );

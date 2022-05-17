@@ -405,6 +405,9 @@ impl AddressBook {
         };
         entry.push_failure(addr, failure, false);
         self.notify(Event::ConnectionClosed(peer, conn));
+        if num_established == 0 {
+            self.notify(Event::Disconnected(peer));
+        }
         self.notify(Event::NewInfo(peer));
     }
 
@@ -645,7 +648,7 @@ impl NetworkBehaviour for AddressBook {
         _: &ConnectionId,
         conn: &ConnectedPoint,
         _failures: Option<&Vec<Multiaddr>>,
-        _remaining_established: usize,
+        other_established: usize,
     ) {
         let conn = normalize_connected_point(conn, &self.local_peer_id, peer_id);
         let address = conn.get_remote_address();
@@ -665,6 +668,9 @@ impl NetworkBehaviour for AddressBook {
             .or_default()
             .connections
             .insert(address.clone(), (Utc::now(), Direction::from(&conn)));
+        if other_established == 0 {
+            self.notify(Event::Connected(*peer_id));
+        }
         self.notify(Event::ConnectionEstablished(*peer_id, conn));
     }
 

@@ -19,6 +19,7 @@ fn run(bin: &str, args: impl IntoIterator<Item = &'static str>) -> anyhow::Resul
         )
         .assert();
     let out = cmd.get_output().stdout.clone();
+    let err = cmd.get_output().stderr.clone();
     (|| {
         cmd.try_stderr(is_empty())?
             .try_stdout(contains("ERROR").not())?
@@ -26,7 +27,11 @@ fn run(bin: &str, args: impl IntoIterator<Item = &'static str>) -> anyhow::Resul
     })()
     .map(|_| ())
     .map_err(|e| {
+        eprintln!("--- stdout");
         std::io::stderr().write_all(out.as_slice()).ok();
+        eprintln!("--- stderr");
+        std::io::stderr().write_all(err.as_slice()).ok();
+        eprintln!("---");
         e.into()
     })
 }
