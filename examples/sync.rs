@@ -1,10 +1,9 @@
 use anyhow::Result;
 use futures::stream::StreamExt;
-use ipfs_embed::{generate_keypair, Config, Ipfs};
-use libipld::cbor::DagCborCodec;
-use libipld::multihash::Code;
-use libipld::store::DefaultParams;
-use libipld::{alias, Block, Cid, DagCbor};
+use ipfs_embed::{identity::ed25519::Keypair, Config, Ipfs};
+use libipld::{
+    alias, cbor::DagCborCodec, multihash::Code, store::DefaultParams, Block, Cid, DagCbor,
+};
 use rand::RngCore;
 
 const ROOT: &str = alias!(root);
@@ -44,7 +43,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    let mut config = Config::new("/tmp/local1".as_ref(), generate_keypair());
+    let mut config = Config::new("/tmp/local1".as_ref(), Keypair::generate());
     config.network.kad = None;
     let a = Ipfs::<DefaultParams>::new(config).await?;
     a.listen_on("/ip4/127.0.0.1/tcp/0".parse()?)?
@@ -52,19 +51,19 @@ async fn main() -> Result<()> {
         .await
         .unwrap();
 
-    let mut config = Config::new("/tmp/local2".as_ref(), generate_keypair());
+    let mut config = Config::new("/tmp/local2".as_ref(), Keypair::generate());
     config.network.kad = None;
     let b = Ipfs::<DefaultParams>::new(config).await?;
 
     println!("starting import");
     let start = std::time::Instant::now();
 
-    let tmp = a.create_temp_pin()?;
+    let mut tmp = a.create_temp_pin()?;
     let mut builder = NodeBuilder::default();
     for _ in 0..1000 {
         let block = builder.create()?;
-        a.temp_pin(&tmp, block.cid())?;
-        let _ = a.insert(&block)?;
+        a.temp_pin(&mut tmp, block.cid())?;
+        let _ = a.insert(block)?;
     }
     a.alias(ROOT, builder.prev.as_ref())?;
     a.flush().await?;

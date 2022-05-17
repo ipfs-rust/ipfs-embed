@@ -1,15 +1,20 @@
 #![cfg(target_os = "linux")]
 
-use anyhow::Result;
-use futures::prelude::*;
+use anyhow::{Context, Result};
+use async_std::future::TimeoutError;
+use futures::{future::BoxFuture, prelude::*};
 use ipfs_embed_cli::{Command, Config, Event};
-use libipld::cbor::DagCborCodec;
-use libipld::multihash::Code;
-use libipld::{Block, Cid, DagCbor, DefaultParams};
-use libp2p::{multiaddr, Multiaddr, PeerId};
-use netsim_embed::{DelayBuffer, Ipv4Range, Netsim};
+use libipld::{cbor::DagCborCodec, multihash::Code, Block, Cid, DagCbor, DefaultParams};
+use libp2p::{multiaddr, multiaddr::Protocol, Multiaddr, PeerId};
+use netsim_embed::{DelayBuffer, Ipv4Range, MachineId, Netsim, NetworkId};
 use rand::RngCore;
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+    ops::Range,
+    str::FromStr,
+    time::{Duration, Instant},
+};
 use structopt::StructOpt;
 use tempdir::TempDir;
 
@@ -38,6 +43,9 @@ pub struct HarnessOpts {
 
     #[structopt(long, default_value = "4")]
     pub tree_depth: u64,
+
+    #[structopt(long)]
+    pub disable_port_reuse: bool,
 }
 
 pub trait MachineExt {
@@ -70,15 +78,52 @@ impl MultiaddrExt for Multiaddr {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Provider,
+    Consumer,
+    Idle,
+}
+pub trait NetsimExt {
+    fn role(&self, opts: &HarnessOpts, r: Role) -> HashMap<MachineId, (PeerId, Multiaddr)>;
+    fn nodes(&self, range: Range<usize>) -> HashMap<MachineId, (PeerId, Multiaddr)>;
+}
+impl<C, E> NetsimExt for Netsim<C, E>
+where
+    C: Display + Send + 'static,
+    E: FromStr + Display + Send + 'static,
+    E::Err: Display + Debug + Send + Sync,
+{
+    fn role(&self, opts: &HarnessOpts, r: Role) -> HashMap<MachineId, (PeerId, Multiaddr)> {
+        let range = match r {
+            Role::Provider => 0..opts.n_providers,
+            Role::Consumer => opts.n_providers..(opts.n_providers + opts.n_consumers),
+            Role::Idle => (opts.n_providers + opts.n_consumers)..opts.n_nodes,
+        };
+        self.nodes(range)
+    }
+    fn nodes(&self, range: Range<usize>) -> HashMap<MachineId, (PeerId, Multiaddr)> {
+        self.machines()[range]
+            .iter()
+            .map(|m| {
+                let peer = m.peer_id();
+                let mut addr = m.multiaddr();
+                addr.push(Protocol::P2p(peer.into()));
+                (m.id(), (peer, addr))
+            })
+            .collect()
+    }
+}
+
 pub fn run_netsim<F, F2>(mut f: F) -> Result<()>
 where
-    F: FnMut(Netsim<Command, Event>, HarnessOpts) -> F2,
+    F: FnMut(Netsim<Command, Event>, HarnessOpts, NetworkId, TempDir) -> F2,
     F2: Future<Output = Result<()>>,
 {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    netsim_embed::unshare_user()?;
+    netsim_embed::unshare_user().context("unshare_user")?;
     let opts = HarnessOpts::from_args();
     let temp_dir = TempDir::new("ipfs-embed-harness")?;
     async_global_executor::block_on(async move {
@@ -101,6 +146,7 @@ where
                 bootstrap: vec![],
                 external: vec![],
                 enable_mdns: opts.enable_mdns,
+                disable_port_reuse: opts.disable_port_reuse,
             };
             let mut delay = DelayBuffer::new();
             delay.set_delay(Duration::from_millis(opts.delay_ms));
@@ -115,8 +161,30 @@ where
                 m.peer_id(),
             );
         }
-        f(sim, opts).await
+        f(sim, opts, net, temp_dir).await
     })
+}
+
+pub trait MyFutureExt<'a>: 'a {
+    type Output;
+    fn timeout(self, d: u64) -> BoxFuture<'a, Result<Self::Output, TimeoutError>>;
+    fn deadline(self, i: Instant, d: u64) -> BoxFuture<'a, Result<Self::Output, TimeoutError>>;
+}
+impl<'a, F: Future + Send + 'a> MyFutureExt<'a> for F {
+    type Output = F::Output;
+    fn timeout(self, dur: u64) -> BoxFuture<'a, Result<Self::Output, TimeoutError>> {
+        async_std::future::timeout(Duration::from_secs(dur), self).boxed()
+    }
+    fn deadline(self, i: Instant, d: u64) -> BoxFuture<'a, Result<Self::Output, TimeoutError>> {
+        let elapsed = i.elapsed();
+        let d = Duration::from_secs(d);
+        let dur = if elapsed + Duration::from_millis(100) >= d {
+            Duration::from_millis(100)
+        } else {
+            d - elapsed
+        };
+        async_std::future::timeout(dur, self).boxed()
+    }
 }
 
 #[derive(Debug, DagCbor)]
@@ -165,6 +233,34 @@ fn build_tree_0(width: u64, depth: u64, blocks: &mut Vec<Block<DefaultParams>>) 
 
 pub fn build_tree(width: u64, depth: u64) -> Result<(Cid, Vec<Block<DefaultParams>>)> {
     let mut blocks = vec![];
-    let cid = build_tree_0(width, depth, &mut blocks)?;
+    let cid = build_tree_0(width, depth, &mut blocks).context("build_tree")?;
     Ok((cid, blocks))
+}
+
+pub fn build_bin() -> Result<()> {
+    use escargot::CargoBuild;
+
+    for msg in CargoBuild::new()
+        .manifest_path(concat!(env!("CARGO_MANIFEST_DIR"), "/../cli/Cargo.toml"))
+        .bin("ipfs-embed-cli")
+        .current_release()
+        .exec()?
+    {
+        match msg?.decode()? {
+            escargot::format::Message::BuildFinished(x) => println!("{:?}", x),
+            escargot::format::Message::CompilerArtifact(x) => {
+                if !x.fresh {
+                    println!("{:?}", x.package_id);
+                }
+            }
+            escargot::format::Message::CompilerMessage(x) => {
+                if let Some(msg) = x.message.rendered {
+                    println!("{}", msg);
+                }
+            }
+            escargot::format::Message::BuildScriptExecuted(_) => {}
+            escargot::format::Message::Unknown => {}
+        }
+    }
+    Ok(())
 }

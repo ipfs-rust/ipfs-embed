@@ -2,14 +2,16 @@ use anyhow::Result;
 use async_std::stream::StreamExt;
 use ipfs_embed::{DefaultParams, Ipfs, NetworkConfig, StorageConfig};
 use ipfs_embed_cli::{keypair, Command, Config, Event};
-use std::io::Write;
-use std::time::Duration;
+use parking_lot::Mutex;
+use std::{io::Write, sync::Arc, time::Duration};
 use structopt::StructOpt;
+use tracing_subscriber::fmt::format::FmtSpan;
 
 #[async_std::main]
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_span_events(FmtSpan::ACTIVE | FmtSpan::CLOSE)
         .init();
     if let Err(err) = run().await {
         tracing::error!("{}", err);
@@ -33,6 +35,7 @@ async fn run() -> Result<()> {
             None
         },
         kad: None,
+        port_reuse: !config.disable_port_reuse,
         ..Default::default()
     };
     let node_name = if let Some(node_name) = config.node_name {
@@ -58,6 +61,9 @@ async fn run() -> Result<()> {
         unimplemented!()
     }
 
+    let ipfs = Arc::new(Mutex::new(ipfs));
+    let ipfs2 = ipfs.clone();
+
     async_std::task::spawn(async move {
         while let Some(event) = events.next().await {
             let event = match event {
@@ -82,7 +88,19 @@ async fn run() -> Result<()> {
                     Some(Event::Unsubscribed(peer_id, topic))
                 }
                 ipfs_embed::Event::Bootstrapped => Some(Event::Bootstrapped),
-                ipfs_embed::Event::NewHead(head) => Some(Event::NewHead(*head.id(), head.len())),
+                ipfs_embed::Event::NewInfo(peer) => match ipfs2.lock().peer_info(&peer) {
+                    Some(info) => Some(Event::PeerInfo(peer, info.into())),
+                    None => Some(Event::PeerRemoved(peer)),
+                },
+                ipfs_embed::Event::ListenerError(_, _) => None,
+                ipfs_embed::Event::DialFailure(p, a, e) => Some(Event::DialFailure(p, a, e)),
+                ipfs_embed::Event::ConnectionEstablished(p, a) => Some(
+                    Event::ConnectionEstablished(p, a.get_remote_address().clone()),
+                ),
+                ipfs_embed::Event::ConnectionClosed(p, a) => {
+                    Some(Event::ConnectionClosed(p, a.get_remote_address().clone()))
+                }
+                ipfs_embed::Event::AddressChanged(_, _, _) => None,
             };
             if let Some(event) = event {
                 println!("{}", event);
@@ -95,27 +113,32 @@ async fn run() -> Result<()> {
         stdin.read_line(&mut line)?;
         match line.parse()? {
             Command::AddAddress(peer, addr) => {
-                ipfs.add_address(&peer, addr);
+                ipfs.lock().add_address(&peer, addr);
             }
             Command::Dial(peer) => {
-                ipfs.dial(&peer);
+                ipfs.lock().dial(&peer);
+            }
+            Command::PrunePeers => {
+                ipfs.lock().prune_peers(Duration::ZERO);
             }
             Command::Get(cid) => {
-                let block = ipfs.get(&cid)?;
+                let block = ipfs.lock().get(&cid)?;
                 writeln!(stdout, "{}", Event::Block(block))?;
             }
             Command::Insert(block) => {
-                ipfs.insert(&block)?;
+                ipfs.lock().insert(block)?;
             }
             Command::Alias(alias, cid) => {
-                ipfs.alias(&alias, cid.as_ref())?;
+                ipfs.lock().alias(&alias, cid.as_ref())?;
             }
             Command::Flush => {
-                ipfs.flush().await?;
+                ipfs.lock().flush().await?;
                 writeln!(stdout, "{}", Event::Flushed)?;
             }
             Command::Sync(cid) => {
-                ipfs.sync(&cid, ipfs.peers()).await?;
+                let providers = ipfs.lock().peers();
+                tracing::debug!("sync {} from {:?}", cid, providers);
+                ipfs.lock().sync(&cid, providers).await?;
                 writeln!(stdout, "{}", Event::Synced)?;
             }
         }

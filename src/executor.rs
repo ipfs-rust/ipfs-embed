@@ -1,10 +1,12 @@
-//! ipfs-embed supports different configuration of the used async executor to spawn its background
-//! tasks (network, garbage collection, etc.). Those can be configured with the following feature
-//! flags:
-//! * `async_global`: Uses the `async-global-executor` crate (with async-std). This is the default.
-//! * `tokio`: Uses a user provided tokio >= 1.0 runtime to spawn its background tasks.  Note, that
-//! for this to work `ipfs-embed` needs to be executed within the context of a tokio runtime.
-//! ipfs-embed won't spawn any on its own.
+//! ipfs-embed supports different configuration of the used async executor to
+//! spawn its background tasks (network, garbage collection, etc.). Those can be
+//! configured with the following feature flags:
+//! * `async_global`: Uses the `async-global-executor` crate (with async-std).
+//!   This is the default.
+//! * `tokio`: Uses a user provided tokio >= 1.0 runtime to spawn its background
+//!   tasks.  Note, that
+//! for this to work `ipfs-embed` needs to be executed within the context of a
+//! tokio runtime. ipfs-embed won't spawn any on its own.
 
 use futures::{Future, FutureExt};
 use pin_project::pin_project;
@@ -60,6 +62,12 @@ impl Executor {
                 JoinHandle::Tokio(task)
             }
         }
+    }
+}
+
+impl Default for Executor {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -120,7 +128,8 @@ impl<T> Future for JoinHandle<T> {
 
 #[cfg(test)]
 mod test {
-    use crate::{generate_keypair, Config, DefaultParams, Ipfs};
+    use crate::{Config, DefaultParams, Ipfs};
+    use libp2p::identity::ed25519::Keypair;
     use tempdir::TempDir;
 
     #[test]
@@ -129,7 +138,7 @@ mod test {
         let tmp = TempDir::new("ipfs-embed").unwrap();
         block_on(Ipfs::<DefaultParams>::new(Config::new(
             tmp.path(),
-            generate_keypair(),
+            Keypair::generate(),
         )))
         .unwrap();
     }
@@ -137,13 +146,13 @@ mod test {
     #[cfg(feature = "tokio")]
     #[test]
     #[should_panic(
-        expected = "here is no reactor running, must be called from the context of a Tokio 1.x runtime"
+        expected = "no reactor running, must be called from the context of a Tokio 1.x runtime"
     )]
     fn should_panic_without_a_tokio_runtime() {
         use futures::executor::block_on;
         let tmp = TempDir::new("ipfs-embed").unwrap();
         let _ = block_on(Ipfs::<DefaultParams>::new0(
-            Config::new(tmp.path(), generate_keypair()),
+            Config::new(tmp.path(), Keypair::generate()),
             crate::Executor::Tokio,
         ));
     }
@@ -156,7 +165,7 @@ mod test {
             .build()
             .unwrap();
         rt.block_on(Ipfs::<DefaultParams>::new0(
-            Config::new(tmp.path(), generate_keypair()),
+            Config::new(tmp.path(), Keypair::generate()),
             crate::Executor::Tokio,
         ))
         .unwrap();

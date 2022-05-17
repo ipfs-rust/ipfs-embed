@@ -1,11 +1,14 @@
 #[cfg(target_os = "linux")]
 fn main() -> anyhow::Result<()> {
+    use anyhow::Context;
+    use harness::{MachineExt, MultiaddrExt, MyFutureExt};
     use ipfs_embed_cli::{Command, Event};
-    use ipfs_embed_harness::{MachineExt, MultiaddrExt};
     use libipld::alias;
     use std::time::Instant;
 
-    ipfs_embed_harness::run_netsim(|mut network, opts| async move {
+    harness::build_bin()?;
+
+    harness::run_netsim(|mut network, opts, _net, _tmp| async move {
         let providers = 0..opts.n_providers;
         let consumers = opts.n_providers..(opts.n_providers + opts.n_consumers);
 
@@ -13,18 +16,12 @@ fn main() -> anyhow::Result<()> {
         for machine in network.machines_mut() {
             let peer = machine.peer_id();
             loop {
-                if let Some(Event::NewListenAddr(addr)) = machine.recv().await {
+                if let Some(Event::NewListenAddr(addr)) = machine.recv().timeout(3).await.unwrap() {
                     if !addr.is_loopback() {
                         peers.push((peer, addr));
                         break;
                     }
                 }
-            }
-        }
-
-        for machine in network.machines_mut() {
-            for (peer, addr) in &peers {
-                machine.send(Command::AddAddress(*peer, addr.clone()));
             }
         }
 
@@ -34,8 +31,7 @@ fn main() -> anyhow::Result<()> {
         }
         for i in 0..opts.n_spam {
             let alias = format!("passive-{}", i);
-            let (cid, blocks) =
-                ipfs_embed_harness::build_tree(opts.tree_width, opts.tree_depth).unwrap();
+            let (cid, blocks) = harness::build_tree(opts.tree_width, opts.tree_depth)?;
             for machine in network.machines_mut() {
                 machine.send(Command::Alias(alias.clone(), Some(cid)));
                 for block in blocks.iter().rev() {
@@ -47,8 +43,7 @@ fn main() -> anyhow::Result<()> {
         // create the blocks to be synced in n_providers nodes
         println!("creating test data");
         let root = alias!(root);
-        let (cid, blocks) =
-            ipfs_embed_harness::build_tree(opts.tree_width, opts.tree_depth).unwrap();
+        let (cid, blocks) = harness::build_tree(opts.tree_width, opts.tree_depth)?;
         for machine in &mut network.machines_mut()[providers] {
             machine.send(Command::Alias(root.to_string(), Some(cid)));
             for block in blocks.iter().rev() {
@@ -60,12 +55,14 @@ fn main() -> anyhow::Result<()> {
         for machine in network.machines_mut() {
             machine.send(Command::Flush);
         }
+        let started = Instant::now();
         for machine in network.machines_mut() {
-            loop {
-                if let Some(Event::Flushed) = machine.recv().await {
-                    break;
-                }
-            }
+            machine
+                .select_draining(|e| matches!(e, Event::Flushed).then(|| ()))
+                .deadline(started, 10)
+                .await
+                .unwrap()
+                .unwrap();
         }
 
         // compute total size of data to be synced
@@ -79,18 +76,21 @@ fn main() -> anyhow::Result<()> {
             machine.send(Command::Sync(cid));
         }
 
+        let started = Instant::now();
         for machine in &mut network.machines_mut()[consumers.clone()] {
-            loop {
-                if let Some(Event::Synced) = machine.recv().await {
-                    break;
-                }
-            }
+            machine
+                .select_draining(|e| matches!(e, Event::Synced).then(|| ()))
+                .deadline(started, 20)
+                .await
+                .unwrap()
+                .unwrap();
             machine.send(Command::Flush);
-            loop {
-                if let Some(Event::Flushed) = machine.recv().await {
-                    break;
-                }
-            }
+            machine
+                .select_draining(|e| matches!(e, Event::Flushed).then(|| ()))
+                .timeout(1)
+                .await
+                .unwrap()
+                .unwrap();
         }
 
         println!(
@@ -102,20 +102,26 @@ fn main() -> anyhow::Result<()> {
             opts.n_consumers,
         );
 
+        let started = Instant::now();
         for machine in &mut network.machines_mut()[consumers] {
             // check that data is indeed synced
             for block in &blocks {
                 machine.send(Command::Get(*block.cid()));
-                loop {
-                    if let Some(Event::Block(data)) = machine.recv().await {
-                        assert_eq!(&data, block);
-                        break;
-                    }
-                }
+                let data = machine
+                    .select_draining(|e| match e {
+                        Event::Block(data) => Some(data),
+                        _ => None,
+                    })
+                    .deadline(started, 5)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(&data, block);
             }
         }
         Ok(())
     })
+    .context("netsim")
 }
 
 #[cfg(not(target_os = "linux"))]

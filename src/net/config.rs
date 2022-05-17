@@ -1,17 +1,5 @@
-use crate::generate_keypair;
-use libipld::store::{DefaultParams, StoreParams};
-pub use libp2p::dns::{ResolverConfig, ResolverOpts};
-pub use libp2p::gossipsub::GossipsubConfig;
-pub use libp2p::identify::IdentifyConfig;
-pub use libp2p::kad::record::store::MemoryStoreConfig as KadConfig;
-pub use libp2p::mdns::MdnsConfig;
-pub use libp2p::ping::PingConfig;
-pub use libp2p_bitswap::BitswapConfig;
-pub use libp2p_blake_streams::StreamSyncConfig;
-pub use libp2p_broadcast::BroadcastConfig;
-pub use libp2p_quic::{Keypair, ToLibp2p, TransportConfig};
-use std::path::PathBuf;
-use std::time::Duration;
+use crate::config::*;
+use libp2p::identity::ed25519::Keypair;
 
 /// Network configuration.
 #[derive(Debug)]
@@ -19,18 +7,18 @@ pub struct NetworkConfig {
     /// Enable adding loopback addresses to the address book. Should be
     /// enabled during testing and disabled in production.
     pub enable_loopback: bool,
-    /// Manage addresses in the address book automatically. This removes
-    /// them when an address is unreachable and removes the peer when there
-    /// is a dial failure.
-    pub prune_addresses: bool,
+    /// Enable binding to the listen port number when dialling peers
+    /// instead of using a random outgoing port. While this may allow
+    /// stricter firewall confiuration or shorter peer lists when interacting
+    /// with other IPFS implementations, it also opens up the possibility of
+    /// TCP simultaneous open, which leads to spurious dial errors.
+    pub port_reuse: bool,
     /// Node name.
     pub node_name: String,
     /// Node key.
     pub node_key: Keypair,
     /// Pre shared key.
     pub psk: Option<[u8; 32]>,
-    /// Quic config.
-    pub quic: TransportConfig,
     /// Dns config. If no dns config is provided the system
     /// defaults will be used.
     pub dns: Option<DnsConfig>,
@@ -50,43 +38,41 @@ pub struct NetworkConfig {
     pub broadcast: Option<BroadcastConfig>,
     /// Bitswap config.
     pub bitswap: Option<BitswapConfig>,
-    /// Streams config.
-    pub streams: Option<StreamSyncConfig>,
 }
 
 /// `DNS` configuration.
 #[derive(Debug)]
-pub struct DnsConfig {
-    /// Configures the nameservers to use.
-    pub config: ResolverConfig,
-    /// Configuration for the resolver.
-    pub opts: ResolverOpts,
+pub enum DnsConfig {
+    Custom {
+        /// Configures the nameservers to use.
+        config: ResolverConfig,
+        /// Configuration for the resolver.
+        opts: ResolverOpts,
+    },
+    SystemWithFallback {
+        /// Configures the nameservers to use.
+        config: ResolverConfig,
+        /// Configuration for the resolver.
+        opts: ResolverOpts,
+    },
 }
 
 impl NetworkConfig {
     /// Creates a new network configuration.
-    pub fn new(path: PathBuf, node_key: Keypair) -> Self {
+    pub fn new(node_key: Keypair) -> Self {
         let node_name = names::Generator::with_naming(names::Name::Numbered)
             .next()
             .unwrap();
-        let identify = IdentifyConfig::new("/ipfs-embed/1.0".into(), node_key.to_public());
-        let mut quic = TransportConfig::default();
-        quic.keep_alive_interval(Some(Duration::from_millis(100)));
-        quic.max_concurrent_bidi_streams(1024).unwrap();
-        quic.max_idle_timeout(Some(Duration::from_secs(10)))
-            .unwrap();
-        quic.stream_receive_window(DefaultParams::MAX_BLOCK_SIZE as _)
-            .unwrap();
-        quic.receive_window(4_000_000).unwrap();
-        quic.send_window(4_000_000);
-        let node_key2 = Keypair::from_bytes(&node_key.to_bytes()).unwrap();
+        let identify = IdentifyConfig::new(
+            "/ipfs-embed/1.0".into(),
+            libp2p::identity::PublicKey::Ed25519(node_key.public()),
+        );
         Self {
             enable_loopback: true,
-            prune_addresses: true,
+            port_reuse: true,
             node_name,
             node_key,
             psk: None,
-            quic,
             dns: None,
             mdns: Some(MdnsConfig::default()),
             kad: Some(KadConfig::default()),
@@ -95,15 +81,12 @@ impl NetworkConfig {
             gossipsub: Some(GossipsubConfig::default()),
             broadcast: Some(BroadcastConfig::default()),
             bitswap: Some(BitswapConfig::default()),
-            streams: Some(StreamSyncConfig::new(path, node_key2)),
         }
     }
 }
 
 impl Default for NetworkConfig {
     fn default() -> Self {
-        let mut config = Self::new(Default::default(), generate_keypair());
-        config.streams = None;
-        config
+        Self::new(Keypair::generate())
     }
 }

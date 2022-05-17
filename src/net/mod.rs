@@ -1,57 +1,62 @@
-use crate::{
-    executor::{Executor, JoinHandle},
-    net::behaviour::{GetChannel, NetworkBackendBehaviour, SyncChannel},
+mod address_handler;
+mod behaviour;
+mod config;
+mod peer_info;
+mod peers;
+#[cfg(test)]
+mod tests;
+
+pub use self::{
+    behaviour::{GossipEvent, QueryId, SyncEvent},
+    config::{DnsConfig, NetworkConfig},
+    peer_info::{AddressSource, ConnectionFailure, Direction, PeerInfo, Rtt},
+    peers::{Event, SwarmEvents},
 };
-use futures::stream::{Stream, StreamExt};
-use futures::task::AtomicWaker;
-use futures::{channel::mpsc, future, pin_mut};
-use libipld::error::BlockNotFound;
-use libipld::store::StoreParams;
-use libipld::{Cid, Result};
-use libp2p::core::either::EitherTransport;
-use libp2p::core::transport::Transport;
-use libp2p::core::upgrade::SelectUpgrade;
+
+use self::behaviour::{GetChannel, NetworkBackendBehaviour, SyncChannel};
+use crate::executor::{Executor, JoinHandle};
+use chrono::{DateTime, Utc};
+use futures::{
+    channel::mpsc,
+    future,
+    stream::{Stream, StreamExt},
+    task::AtomicWaker,
+};
+use libipld::{error::BlockNotFound, store::StoreParams, Cid, Result};
 #[cfg(feature = "async_global")]
 use libp2p::dns::DnsConfig as Dns;
 #[cfg(all(feature = "tokio", not(feature = "async_global")))]
 use libp2p::dns::TokioDnsConfig as Dns;
-use libp2p::kad::kbucket::Key as BucketKey;
-use libp2p::mplex::MplexConfig;
-use libp2p::noise::{self, NoiseConfig, X25519Spec};
-use libp2p::pnet::{PnetConfig, PreSharedKey};
-use libp2p::swarm::{AddressScore, Swarm, SwarmBuilder};
 #[cfg(feature = "async_global")]
 use libp2p::tcp::TcpConfig;
 #[cfg(all(feature = "tokio", not(feature = "async_global")))]
 use libp2p::tcp::TokioTcpConfig as TcpConfig;
-use libp2p::yamux::YamuxConfig;
+use libp2p::{
+    core::{
+        either::EitherTransport,
+        transport::Transport,
+        upgrade::{SelectUpgrade, Version},
+    },
+    identity::ed25519::PublicKey,
+    kad::{kbucket::Key as BucketKey, record::Key, PeerRecord, Quorum, Record},
+    mplex::MplexConfig,
+    noise::{self, NoiseConfig, X25519Spec},
+    pnet::{PnetConfig, PreSharedKey},
+    swarm::{AddressRecord, AddressScore, Swarm, SwarmBuilder, SwarmEvent},
+    yamux::YamuxConfig,
+    Multiaddr, PeerId,
+};
+use libp2p_bitswap::BitswapStore;
 use parking_lot::Mutex;
 use prometheus::Registry;
-use std::collections::HashSet;
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use std::time::Duration;
-
-mod behaviour;
-mod config;
-mod p2p_wrapper;
-mod peers;
-
-pub use crate::net::behaviour::{GossipEvent, QueryId, SyncEvent};
-pub use crate::net::config::*;
-pub use crate::net::peers::{AddressSource, Event, PeerInfo, SwarmEvents};
-pub use libp2p::core::connection::ListenerId;
-pub use libp2p::kad::record::{Key, Record};
-pub use libp2p::kad::{PeerRecord, Quorum};
-pub use libp2p::swarm::AddressRecord;
-pub use libp2p::{Multiaddr, PeerId, TransportError};
-pub use libp2p_bitswap::BitswapStore;
-pub use libp2p_blake_streams::{
-    DocId, Head, LocalStreamWriter, SignedHead, StreamId, StreamReader,
+use std::{
+    collections::HashSet,
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
 };
-pub use libp2p_quic::{generate_keypair, PublicKey, SecretKey, ToLibp2p};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ListenerEvent {
@@ -61,7 +66,6 @@ pub enum ListenerEvent {
 
 #[derive(Clone)]
 pub struct NetworkService<P: StoreParams> {
-    executor: Executor,
     swarm: Arc<Mutex<Swarm<NetworkBackendBehaviour<P>>>>,
     waker: Arc<AtomicWaker>,
     _swarm_task: Arc<JoinHandle<()>>,
@@ -73,11 +77,12 @@ impl<P: StoreParams> NetworkService<P> {
         store: S,
         executor: Executor,
     ) -> Result<Self> {
-        let peer_id = config.node_key.to_peer_id();
+        let peer_id =
+            PeerId::from_public_key(&libp2p::core::PublicKey::Ed25519(config.node_key.public()));
         let behaviour = NetworkBackendBehaviour::<P>::new(&mut config, store).await?;
 
         let tcp = {
-            let transport = TcpConfig::new().nodelay(true).port_reuse(true);
+            let transport = TcpConfig::new().nodelay(true).port_reuse(config.port_reuse);
             let transport = if let Some(psk) = config.psk {
                 let psk = PreSharedKey::new(psk);
                 EitherTransport::Left(
@@ -87,22 +92,19 @@ impl<P: StoreParams> NetworkService<P> {
                 EitherTransport::Right(transport)
             };
             let dh_key = noise::Keypair::<X25519Spec>::new()
-                .into_authentic(&config.node_key.to_keypair())
+                .into_authentic(&libp2p::core::identity::Keypair::Ed25519(
+                    config.node_key.clone(),
+                ))
                 .unwrap();
-            let transport = transport
-                .upgrade(libp2p::core::upgrade::Version::V1)
-                /*.authenticate_with_version(
-                    NoiseConfig::xx(dh_key).into_authenticated(),
-                    AuthenticationVersion::V1SimultaneousOpen,
-                )*/
+            transport
+                .upgrade(Version::V1)
                 .authenticate(NoiseConfig::xx(dh_key).into_authenticated())
                 .multiplex(SelectUpgrade::new(
                     YamuxConfig::default(),
                     MplexConfig::new(),
                 ))
                 .timeout(Duration::from_secs(5))
-                .boxed();
-            p2p_wrapper::P2pWrapper(transport)
+                .boxed()
         };
         /*let quic = {
             QuicConfig {
@@ -121,15 +123,39 @@ impl<P: StoreParams> NetworkService<P> {
         let quic_or_tcp = tcp;
         #[cfg(feature = "async_global")]
         let transport = if let Some(config) = config.dns {
-            Dns::custom(quic_or_tcp, config.config, config.opts)
-                .await?
-                .boxed()
+            match config {
+                DnsConfig::Custom { config, opts } => {
+                    Dns::custom(quic_or_tcp, config, opts).await?.boxed()
+                }
+                DnsConfig::SystemWithFallback { config, opts } => {
+                    match trust_dns_resolver::system_conf::read_system_conf() {
+                        Ok((config, opts)) => Dns::custom(quic_or_tcp, config, opts).await?.boxed(),
+                        Err(e) => {
+                            tracing::warn!("falling back to custom DNS config, system default yielded error `${:#}`", e);
+                            Dns::custom(quic_or_tcp, config, opts).await?.boxed()
+                        }
+                    }
+                }
+            }
         } else {
             Dns::system(quic_or_tcp).await?.boxed()
         };
         #[cfg(all(feature = "tokio", not(feature = "async_global")))]
         let transport = if let Some(config) = config.dns {
-            Dns::custom(quic_or_tcp, config.config, config.opts)?.boxed()
+            match config {
+                DnsConfig::Custom { config, opts } => {
+                    Dns::custom(quic_or_tcp, config, opts)?.boxed()
+                }
+                DnsConfig::SystemWithFallback { config, opts } => {
+                    match trust_dns_resolver::system_conf::read_system_conf() {
+                        Ok((config, opts)) => Dns::custom(quic_or_tcp, config, opts)?.boxed(),
+                        Err(e) => {
+                            tracing::warn!("falling back to custom DNS config, system default yielded error `${:#}`", e);
+                            Dns::custom(quic_or_tcp, config, opts)?.boxed()
+                        }
+                    }
+                }
+            }
         } else {
             Dns::system(quic_or_tcp)?.boxed()
         };
@@ -153,17 +179,39 @@ impl<P: StoreParams> NetworkService<P> {
         let waker2 = waker.clone();
         let swarm_task = executor.spawn(future::poll_fn(move |cx| {
             waker.register(cx.waker());
-            let mut guard = swarm.lock();
-            while {
-                let swarm = &mut *guard;
-                pin_mut!(swarm);
-                swarm.poll_next(cx).is_ready()
-            } {}
-            Poll::Pending
+            let mut swarm = swarm.lock();
+            let mut count = 0;
+            loop {
+                count += 1;
+                if count > 20 {
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
+                }
+
+                let event = match swarm.poll_next_unpin(cx) {
+                    Poll::Ready(Some(e)) => e,
+                    Poll::Ready(None) => return Poll::Ready(()),
+                    Poll::Pending => return Poll::Pending,
+                };
+
+                if let SwarmEvent::ConnectionClosed {
+                    peer_id,
+                    endpoint,
+                    num_established,
+                    cause,
+                } = event
+                {
+                    swarm.behaviour_mut().connection_closed(
+                        peer_id,
+                        endpoint,
+                        num_established,
+                        cause,
+                    );
+                };
+            }
         }));
 
         Ok(Self {
-            executor,
             swarm: swarm2,
             waker: waker2,
             _swarm_task: Arc::new(swarm_task),
@@ -172,7 +220,7 @@ impl<P: StoreParams> NetworkService<P> {
 
     pub fn local_public_key(&self) -> PublicKey {
         let swarm = self.swarm.lock();
-        *swarm.behaviour().local_public_key()
+        swarm.behaviour().local_public_key().clone()
     }
 
     pub fn local_peer_id(&self) -> PeerId {
@@ -237,9 +285,20 @@ impl<P: StoreParams> NetworkService<P> {
         self.waker.wake();
     }
 
+    pub fn prune_peers(&self, min_age: Duration) {
+        let mut swarm = self.swarm.lock();
+        swarm.behaviour_mut().prune_peers(min_age);
+    }
+
     pub fn dial(&self, peer: &PeerId) {
         let mut swarm = self.swarm.lock();
         swarm.behaviour_mut().dial(peer);
+        self.waker.wake();
+    }
+
+    pub fn dial_address(&self, peer: &PeerId, addr: Multiaddr) {
+        let mut swarm = self.swarm.lock();
+        swarm.behaviour_mut().dial_address(peer, addr);
         self.waker.wake();
     }
 
@@ -260,12 +319,12 @@ impl<P: StoreParams> NetworkService<P> {
         swarm.behaviour().peers().copied().collect()
     }
 
-    pub fn connections(&self) -> Vec<(PeerId, Multiaddr)> {
+    pub fn connections(&self) -> Vec<(PeerId, Multiaddr, DateTime<Utc>, Direction)> {
         let swarm = self.swarm.lock();
         swarm
             .behaviour()
             .connections()
-            .map(|(peer_id, addr)| (*peer_id, addr.clone()))
+            .map(|(peer_id, addr, dt, dir)| (peer_id, addr.clone(), dt, dir))
             .collect()
     }
 
@@ -332,7 +391,7 @@ impl<P: StoreParams> NetworkService<P> {
         self.waker.wake();
     }
 
-    pub async fn get_record(&self, key: &Key, quorum: Quorum) -> Result<Vec<PeerRecord>> {
+    pub async fn get_record(&self, key: Key, quorum: Quorum) -> Result<Vec<PeerRecord>> {
         let rx = {
             let mut swarm = self.swarm.lock();
             swarm.behaviour_mut().get_record(key, quorum)
@@ -399,6 +458,7 @@ impl<P: StoreParams> NetworkService<P> {
             .behaviour_mut()
             .sync(cid, providers, missing.into_iter());
         self.waker.wake();
+        drop(swarm);
         SyncQuery {
             swarm: Some(self.swarm.clone()),
             id: Some(id),
@@ -414,56 +474,6 @@ impl<P: StoreParams> NetworkService<P> {
     pub fn swarm_events(&self) -> SwarmEvents {
         let mut swarm = self.swarm.lock();
         swarm.behaviour_mut().swarm_events()
-    }
-
-    pub fn docs(&self) -> Result<Vec<DocId>> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().docs()
-    }
-
-    pub fn streams(&self) -> Result<Vec<StreamId>> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().streams()
-    }
-
-    pub fn substreams(&self, doc: DocId) -> Result<Vec<StreamId>> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().substreams(doc)
-    }
-
-    pub fn stream_add_peers(&self, doc: DocId, peers: impl Iterator<Item = PeerId>) {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().add_peers(doc, peers)
-    }
-
-    pub fn stream_head(&self, id: &StreamId) -> Result<Option<SignedHead>> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().head(id)
-    }
-
-    pub fn stream_slice(&self, id: &StreamId, start: u64, len: u64) -> Result<StreamReader> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().slice(id, start, len)
-    }
-
-    pub fn stream_remove(&self, id: &StreamId) -> Result<()> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().remove(id)
-    }
-
-    pub fn stream_append(&self, id: DocId) -> Result<LocalStreamWriter> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().append(id)
-    }
-
-    pub fn stream_subscribe(&self, id: &StreamId) -> Result<()> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().subscribe(id)
-    }
-
-    pub fn stream_update_head(&self, head: SignedHead) {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().streams().update_head(head)
     }
 }
 
@@ -517,7 +527,9 @@ impl<P: StoreParams> Future for SyncQuery<P> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         loop {
-            match Pin::new(&mut self.rx).poll_next(cx) {
+            let poll = Pin::new(&mut self.rx).poll_next(cx);
+            tracing::trace!("sync progress: {:?}", poll);
+            match poll {
                 Poll::Ready(Some(SyncEvent::Complete(result))) => return Poll::Ready(result),
                 Poll::Ready(_) => continue,
                 Poll::Pending => return Poll::Pending,
@@ -530,7 +542,9 @@ impl<P: StoreParams> Stream for SyncQuery<P> {
     type Item = SyncEvent;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.rx).poll_next(cx)
+        let poll = Pin::new(&mut self.rx).poll_next(cx);
+        tracing::trace!("sync progress: {:?}", poll);
+        poll
     }
 }
 

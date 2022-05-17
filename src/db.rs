@@ -1,68 +1,70 @@
-use ipfs_sqlite_block_store::cache::{CacheTracker, InMemCacheTracker};
 pub use ipfs_sqlite_block_store::TempPin;
 use ipfs_sqlite_block_store::{
-    cache::SqliteCacheTracker, BlockStore, Config, SizeTargets, Synchronous,
+    cache::{CacheTracker, InMemCacheTracker, SqliteCacheTracker},
+    BlockStore, Config, Synchronous,
 };
 use lazy_static::lazy_static;
-use libipld::codec::References;
-use libipld::store::StoreParams;
-use libipld::{Block, Cid, Ipld, Result};
+use libipld::{codec::References, store::StoreParams, Block, Cid, Ipld, Result};
 use parking_lot::Mutex;
-use prometheus::core::{Collector, Desc};
-use prometheus::proto::MetricFamily;
-use prometheus::{HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry};
-use std::future::Future;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use prometheus::{
+    core::{Collector, Desc},
+    proto::MetricFamily,
+    HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry,
+};
+use std::{future::Future, path::PathBuf, sync::Arc, time::Duration};
 use tracing::info;
 
 use crate::executor::{Executor, JoinHandle};
+use std::collections::HashSet;
 
 /// Storage configuration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StorageConfig {
-    /// The path to use for the block store. If it is `None` an in-memory block store
-    /// will be used.
+    /// The path to use for the block store. If it is `None` an in-memory block
+    /// store will be used.
     pub path: Option<PathBuf>,
-    /// The path to use for the database that persists block accesses times for the LRU
-    /// cache. If this is set to 'None', access times will not be persisted but just
-    /// tracked in memory.
+    /// The path to use for the database that persists block accesses times for
+    /// the LRU cache. If this is set to 'None', access times will not be
+    /// persisted but just tracked in memory.
     ///
-    /// You can point this to the same file as the main block store, but this is not
-    /// recommended.
+    /// You can point this to the same file as the main block store, but this is
+    /// not recommended.
     pub access_db_path: Option<PathBuf>,
     /// The target number of blocks.
     ///
     /// Up to this number, the store will retain everything even if
-    /// not pinned. Once this number is exceeded, the store will run garbage collection
-    /// of all unpinned blocks until the block criterion is met again.
+    /// not pinned. Once this number is exceeded, the store will run garbage
+    /// collection of all unpinned blocks until the block criterion is met
+    /// again.
     ///
-    /// To completely disable storing of non-pinned blocks, set this to 0. Even then,
-    /// the store will never delete pinned blocks.
+    /// To completely disable storing of non-pinned blocks, set this to 0. Even
+    /// then, the store will never delete pinned blocks.
     pub cache_size_blocks: u64,
     /// The target store size.
     ///
-    /// Up to this size, the store will retain everything even if not pinned. Once this
-    /// size is exceeded, the store will run garbage collection of all unpinned blocks
-    /// until the size criterion is met again.
+    /// Up to this size, the store will retain everything even if not pinned.
+    /// Once this size is exceeded, the store will run garbage collection of
+    /// all unpinned blocks until the size criterion is met again.
     ///
     /// The store will never delete pinned blocks.
     pub cache_size_bytes: u64,
     /// The interval at which the garbage collector is run.
     ///
-    /// Note that this is implemented as delays between gcs, so it will not run exactly at this
-    /// interval, but there will be some drift if gc takes long.
+    /// Note that this is implemented as delays between gcs, so it will not run
+    /// exactly at this interval, but there will be some drift if gc takes
+    /// long.
     pub gc_interval: Duration,
     /// The minimum number of blocks to collect in any case.
     ///
-    /// Using this parameter, it is possible to guarantee a minimum rate with which the gc will
-    /// be able to keep up. It is `gc_min_blocks` / `gc_interval`.
+    /// Using this parameter, it is possible to guarantee a minimum rate with
+    /// which the gc will be able to keep up. It is `gc_min_blocks` /
+    /// `gc_interval`.
     pub gc_min_blocks: usize,
     /// The target maximum gc duration of a single garbage collector run.
     ///
-    /// This can not be guaranteed, since we guarantee to collect at least `gc_min_blocks`. But
-    /// as soon as this duration is exceeded, the incremental gc will stop doing additional work.
+    /// This can not be guaranteed, since we guarantee to collect at least
+    /// `gc_min_blocks`. But as soon as this duration is exceeded, the
+    /// incremental gc will stop doing additional work.
     pub gc_target_duration: Duration,
 }
 
@@ -124,9 +126,8 @@ where
     Ipld: References<S::Codecs>,
 {
     pub fn open(config: StorageConfig, executor: Executor) -> Result<Self> {
-        let size = SizeTargets::new(config.cache_size_blocks, config.cache_size_bytes);
         let store_config = Config::default()
-            .with_size_targets(size)
+            .with_size_targets(config.cache_size_blocks, config.cache_size_bytes)
             .with_pragma_synchronous(Synchronous::Normal);
         let tracker: Arc<dyn CacheTracker> = if let Some(path) = config.access_db_path {
             let path = if path.is_file() {
@@ -139,6 +140,9 @@ where
         } else {
             Arc::new(InMemCacheTracker::new(|access, _| Some(access)))
         };
+
+        let is_memory = config.path.is_none();
+        // create DB connection
         let store = if let Some(path) = config.path {
             let path = if path.is_file() {
                 path
@@ -151,37 +155,41 @@ where
             BlockStore::memory(store_config.with_cache_tracker(tracker))?
         };
         let store = Arc::new(Mutex::new(store));
-        let gc = store.clone();
+
+        // spawn GC task
         let gc_interval = config.gc_interval;
         let gc_min_blocks = config.gc_min_blocks;
         let gc_target_duration = config.gc_target_duration;
-        let gc_task = executor.spawn(async move {
-            enum Phase {
-                Gc,
-                Delete,
-            }
-            let mut phase = Phase::Gc;
-            loop {
-                futures_timer::Delay::new(gc_interval / 2).await;
-                info!("going for gc!");
-                match phase {
-                    Phase::Gc => {
-                        tracing::trace!("gc_loop running incremental gc");
-                        gc.lock()
-                            .incremental_gc(gc_min_blocks, gc_target_duration)
-                            .ok();
-                        phase = Phase::Delete;
-                    }
-                    Phase::Delete => {
-                        tracing::trace!("gc_loop running incremental delete orphaned");
-                        gc.lock()
-                            .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)
-                            .ok();
-                        phase = Phase::Gc;
-                    }
+        let gc_task = if is_memory {
+            let gc = store.clone();
+            executor.spawn(async move {
+                loop {
+                    futures_timer::Delay::new(gc_interval).await;
+                    info!("going for gc!");
+                    gc.lock()
+                        .incremental_gc(gc_min_blocks, gc_target_duration)
+                        .map_err(|e| {
+                            tracing::warn!("failure during incremental gc: {:#}", e);
+                            e
+                        })
+                        .ok();
                 }
-            }
-        });
+            })
+        } else {
+            let mut gc = store.lock().additional_connection()?;
+            executor.spawn(async move {
+                loop {
+                    futures_timer::Delay::new(gc_interval).await;
+                    info!("going for gc!");
+                    gc.incremental_gc(gc_min_blocks, gc_target_duration)
+                        .map_err(|e| {
+                            tracing::warn!("failure during incremental gc: {:#}", e);
+                            e
+                        })
+                        .ok();
+                }
+            })
+        };
         Ok(Self {
             executor,
             gc_target_duration: config.gc_target_duration,
@@ -196,32 +204,27 @@ impl<S: StoreParams> StorageService<S>
 where
     Ipld: References<S::Codecs>,
 {
-    pub fn ro<F: FnOnce(&mut Batch<'_, S>) -> Result<R>, R>(
-        &self,
-        op: &'static str,
-        f: F,
-    ) -> Result<R> {
-        observe_query(op, || {
-            let mut lock = self.inner.store.lock();
-            let mut txn = Batch(lock.transaction()?);
-            f(&mut txn)
-        })
-    }
-
     pub fn rw<F: FnOnce(&mut Batch<'_, S>) -> Result<R>, R>(
         &self,
         op: &'static str,
         f: F,
     ) -> Result<R> {
-        observe_query(op, || {
-            let mut lock = self.inner.store.lock();
-            let mut txn = Batch(lock.transaction()?);
-            let res = f(&mut txn);
-            if res.is_ok() {
-                txn.0.commit()?;
-            }
-            res
-        })
+        QUERIES_TOTAL.with_label_values(&[op]).inc();
+        let timer = QUERY_DURATION
+            .with_label_values(&["lock_wait"])
+            .start_timer();
+        let mut lock = self.inner.store.lock();
+        let t = timer.stop_and_record();
+        if t > 1.0 {
+            tracing::warn!(op, "very long storage lock wait time of {:.1}s", t);
+        }
+        let _timer = QUERY_DURATION.with_label_values(&[op]).start_timer();
+        let mut txn = Batch(lock.transaction());
+        let res = f(&mut txn);
+        if res.is_ok() {
+            txn.0.commit()?;
+        }
+        res
     }
 
     pub fn create_temp_pin(&self) -> Result<TempPin> {
@@ -230,25 +233,25 @@ where
 
     pub fn temp_pin(
         &self,
-        temp: &TempPin,
+        temp: &mut TempPin,
         iter: impl IntoIterator<Item = Cid> + Send + 'static,
     ) -> Result<()> {
         self.rw("temp_pin", |x| x.temp_pin(temp, iter))
     }
 
     pub fn iter(&self) -> Result<impl Iterator<Item = Cid>> {
-        self.ro("iter", |x| x.iter())
+        self.rw("iter", |x| x.iter())
     }
 
     pub fn contains(&self, cid: &Cid) -> Result<bool> {
-        self.ro("contains", |x| x.contains(cid))
+        self.rw("contains", |x| x.contains(cid))
     }
 
     pub fn get(&self, cid: &Cid) -> Result<Option<Vec<u8>>> {
-        self.ro("get", |x| x.get(cid))
+        self.rw("get", |x| x.get(cid))
     }
 
-    pub fn insert(&self, block: &Block<S>) -> Result<()> {
+    pub fn insert(&self, block: Block<S>) -> Result<()> {
         self.rw("insert", |x| x.insert(block))
     }
 
@@ -256,16 +259,20 @@ where
         self.rw("alias", |x| x.alias(alias, cid))
     }
 
-    pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>> {
-        self.ro("resolve", |x| x.resolve(alias))
+    pub fn aliases(&self) -> Result<Vec<(Vec<u8>, Cid)>> {
+        self.rw("aliases", |x| x.aliases())
     }
 
-    pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
-        self.ro("reverse_alias", |x| x.reverse_alias(cid))
+    pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>> {
+        self.rw("resolve", |x| x.resolve(alias))
+    }
+
+    pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<HashSet<Vec<u8>>>> {
+        self.rw("reverse_alias", |x| x.reverse_alias(cid))
     }
 
     pub fn missing_blocks(&self, cid: &Cid) -> Result<Vec<Cid>> {
-        self.ro("missing_blocks", |x| x.missing_blocks(cid))
+        self.rw("missing_blocks", |x| x.missing_blocks(cid))
     }
 
     pub async fn evict(&self) -> Result<()> {
@@ -278,11 +285,8 @@ where
                 while !store
                     .lock()
                     .incremental_gc(gc_min_blocks, gc_target_duration)?
-                {}
-                while !store
-                    .lock()
-                    .incremental_delete_orphaned(gc_min_blocks, gc_target_duration)?
                 {
+                    tracing::trace!("x");
                 }
                 Ok(())
             })
@@ -321,25 +325,14 @@ lazy_static! {
         HistogramOpts::new(
             "block_store_query_duration",
             "Duration of store queries labelled by type.",
-        ),
+        )
+        .buckets(vec![
+            0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0,
+            5.0, 10.0
+        ]),
         &["type"],
     )
     .unwrap();
-}
-
-fn observe_query<T, F>(name: &'static str, query: F) -> Result<T>
-where
-    F: FnOnce() -> Result<T>,
-{
-    QUERIES_TOTAL.with_label_values(&[name]).inc();
-    let timer = QUERY_DURATION.with_label_values(&[name]).start_timer();
-    let res = query();
-    if res.is_ok() {
-        timer.observe_duration();
-    } else {
-        timer.stop_and_discard();
-    }
-    res
 }
 
 async fn observe_future<T, F>(name: &'static str, query: F) -> Result<T>
@@ -410,13 +403,13 @@ where
     S: StoreParams,
     Ipld: References<S::Codecs>,
 {
-    pub fn create_temp_pin(&self) -> Result<TempPin> {
+    pub fn create_temp_pin(&mut self) -> Result<TempPin> {
         Ok(self.0.temp_pin())
     }
 
     pub fn temp_pin(
-        &self,
-        temp: &TempPin,
+        &mut self,
+        temp: &mut TempPin,
         iter: impl IntoIterator<Item = Cid> + Send + 'static,
     ) -> Result<()> {
         for link in iter {
@@ -425,12 +418,12 @@ where
         Ok(())
     }
 
-    pub fn iter(&self) -> Result<impl Iterator<Item = Cid>> {
+    pub fn iter(&mut self) -> Result<impl Iterator<Item = Cid>> {
         let cids = self.0.get_block_cids::<Vec<Cid>>()?;
         Ok(cids.into_iter())
     }
 
-    pub fn contains(&self, cid: &Cid) -> Result<bool> {
+    pub fn contains(&mut self, cid: &Cid) -> Result<bool> {
         Ok(self.0.has_block(cid)?)
     }
 
@@ -438,11 +431,11 @@ where
         Ok(self.0.get_block(cid)?)
     }
 
-    pub fn insert(&mut self, block: &Block<S>) -> Result<()> {
+    pub fn insert(&mut self, block: Block<S>) -> Result<()> {
         Ok(self.0.put_block(block, None)?)
     }
 
-    pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>> {
+    pub fn resolve(&mut self, alias: &[u8]) -> Result<Option<Cid>> {
         Ok(self.0.resolve(alias)?)
     }
 
@@ -450,11 +443,15 @@ where
         Ok(self.0.alias(alias, cid)?)
     }
 
-    pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<Vec<Vec<u8>>>> {
+    pub fn aliases(&mut self) -> Result<Vec<(Vec<u8>, Cid)>> {
+        Ok(self.0.aliases()?)
+    }
+
+    pub fn reverse_alias(&mut self, cid: &Cid) -> Result<Option<HashSet<Vec<u8>>>> {
         Ok(self.0.reverse_alias(cid)?)
     }
 
-    pub fn missing_blocks(&self, cid: &Cid) -> Result<Vec<Cid>> {
+    pub fn missing_blocks(&mut self, cid: &Cid) -> Result<Vec<Cid>> {
         Ok(self.0.get_missing_blocks(cid)?)
     }
 }
@@ -464,10 +461,7 @@ mod tests {
     use crate::executor::Executor;
 
     use super::*;
-    use libipld::cbor::DagCborCodec;
-    use libipld::multihash::Code;
-    use libipld::store::DefaultParams;
-    use libipld::{alias, ipld};
+    use libipld::{alias, cbor::DagCborCodec, ipld, multihash::Code, store::DefaultParams};
 
     fn create_block(ipld: &Ipld) -> Block<DefaultParams> {
         Block::encode(DagCborCodec, Code::Blake3_256, ipld).unwrap()
@@ -519,31 +513,29 @@ mod tests {
     async fn test_store_evict() {
         tracing_try_init();
         let store = create_store();
-        let blocks = [
-            create_block(&ipld!(0)),
-            create_block(&ipld!(1)),
-            create_block(&ipld!(2)),
-            create_block(&ipld!(3)),
-        ];
-        store.insert(&blocks[0]).unwrap();
-        store.insert(&blocks[1]).unwrap();
+        let a = create_block(&ipld!(0));
+        let b = create_block(&ipld!(1));
+        let c = create_block(&ipld!(2));
+        let d = create_block(&ipld!(3));
+        store.insert(a.clone()).unwrap();
+        store.insert(b.clone()).unwrap();
         store.flush().await.unwrap();
         store.evict().await.unwrap();
-        assert_unpinned!(&store, &blocks[0]);
-        assert_unpinned!(&store, &blocks[1]);
-        store.insert(&blocks[2]).unwrap();
+        assert_unpinned!(&store, &a);
+        assert_unpinned!(&store, &b);
+        store.insert(c.clone()).unwrap();
         store.flush().await.unwrap();
         store.evict().await.unwrap();
-        assert_evicted!(&store, &blocks[0]);
-        assert_unpinned!(&store, &blocks[1]);
-        assert_unpinned!(&store, &blocks[2]);
-        store.get(blocks[1].cid()).unwrap();
-        store.insert(&blocks[3]).unwrap();
+        assert_evicted!(&store, &a);
+        assert_unpinned!(&store, &b);
+        assert_unpinned!(&store, &c);
+        store.get(b.cid()).unwrap();
+        store.insert(d.clone()).unwrap();
         store.flush().await.unwrap();
         store.evict().await.unwrap();
-        assert_unpinned!(&store, &blocks[1]);
-        assert_evicted!(&store, &blocks[2]);
-        assert_unpinned!(&store, &blocks[3]);
+        assert_unpinned!(&store, &b);
+        assert_evicted!(&store, &c);
+        assert_unpinned!(&store, &d);
     }
 
     #[async_std::test]
@@ -556,9 +548,9 @@ mod tests {
         let c = create_block(&ipld!({ "c": [a.cid()] }));
         let x = alias!(x).as_bytes().to_vec();
         let y = alias!(y).as_bytes().to_vec();
-        store.insert(&a).unwrap();
-        store.insert(&b).unwrap();
-        store.insert(&c).unwrap();
+        store.insert(a.clone()).unwrap();
+        store.insert(b.clone()).unwrap();
+        store.insert(c.clone()).unwrap();
         store.alias(&x, Some(b.cid())).unwrap();
         store.alias(&y, Some(c.cid())).unwrap();
         store.flush().await.unwrap();
@@ -586,8 +578,8 @@ mod tests {
         let b = create_block(&ipld!({ "b": [a.cid()] }));
         let x = alias!(x).as_bytes().to_vec();
         let y = alias!(y).as_bytes().to_vec();
-        store.insert(&a).unwrap();
-        store.insert(&b).unwrap();
+        store.insert(a.clone()).unwrap();
+        store.insert(b.clone()).unwrap();
         store.alias(&x, Some(b.cid())).unwrap();
         store.alias(&y, Some(b.cid())).unwrap();
         store.flush().await.unwrap();

@@ -1,7 +1,10 @@
 use anyhow::Result;
-use ed25519_dalek::{PublicKey, SecretKey};
-use ipfs_embed::{Block, Cid, DefaultParams, Keypair, Multiaddr, PeerId, StreamId, ToLibp2p};
-use std::path::PathBuf;
+use ipfs_embed::{
+    identity::ed25519::{Keypair, SecretKey},
+    Block, Cid, DefaultParams, Multiaddr, PeerId, PeerInfo,
+};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, path::PathBuf};
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
@@ -21,6 +24,8 @@ pub struct Config {
     pub bootstrap: Vec<Multiaddr>,
     #[structopt(long)]
     pub external: Vec<Multiaddr>,
+    #[structopt(long)]
+    pub disable_port_reuse: bool,
 }
 
 impl Config {
@@ -33,6 +38,7 @@ impl Config {
             bootstrap: vec![],
             external: vec![],
             enable_mdns: false,
+            disable_port_reuse: false,
         }
     }
 }
@@ -70,26 +76,30 @@ impl From<Config> for async_process::Command {
         if config.enable_mdns {
             cmd.arg("--enable-mdns");
         }
+        if config.disable_port_reuse {
+            cmd.arg("--disable-port-reuse");
+        }
         cmd
     }
 }
 
 pub fn keypair(i: u64) -> Keypair {
-    let mut keypair = [0; 32];
-    keypair[..8].copy_from_slice(&i.to_be_bytes());
-    let secret = SecretKey::from_bytes(&keypair).unwrap();
-    let public = PublicKey::from(&secret);
-    Keypair { secret, public }
+    let mut secret = [0; 32];
+    secret[..8].copy_from_slice(&i.to_be_bytes());
+    Keypair::from(SecretKey::from_bytes(secret).unwrap())
 }
 
 pub fn peer_id(i: u64) -> PeerId {
-    keypair(i).to_peer_id()
+    ipfs_embed::identity::Keypair::Ed25519(keypair(i))
+        .public()
+        .into()
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum Command {
     AddAddress(PeerId, Multiaddr),
     Dial(PeerId),
+    PrunePeers,
     Get(Cid),
     Insert(Block<DefaultParams>),
     Alias(String, Option<Cid>),
@@ -102,6 +112,7 @@ impl std::fmt::Display for Command {
         match self {
             Self::AddAddress(peer, addr) => write!(f, ">add-address {} {}", peer, addr)?,
             Self::Dial(peer) => write!(f, ">dial {}", peer)?,
+            Self::PrunePeers => write!(f, ">prune-peers")?,
             Self::Get(cid) => write!(f, ">get {}", cid)?,
             Self::Insert(block) => {
                 write!(f, ">insert {} ", block.cid())?;
@@ -137,6 +148,7 @@ impl std::str::FromStr for Command {
                 let peer = parts.next().unwrap().parse()?;
                 Self::Dial(peer)
             }
+            Some(">prune-peers") => Self::PrunePeers,
             Some(">get") => {
                 let cid = parts.next().unwrap().parse()?;
                 Self::Get(cid)
@@ -185,7 +197,39 @@ pub enum Event {
     Flushed,
     Synced,
     Bootstrapped,
-    NewHead(StreamId, u64),
+    PeerInfo(PeerId, PeerInfoIo),
+    PeerRemoved(PeerId),
+    DialFailure(PeerId, Multiaddr, String),
+    ConnectionEstablished(PeerId, Multiaddr),
+    ConnectionClosed(PeerId, Multiaddr),
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerInfoIo {
+    pub protocol_version: Option<String>,
+    pub agent_version: Option<String>,
+    pub protocols: Vec<String>,
+    pub listeners: Vec<Multiaddr>,
+    pub addresses: HashMap<Multiaddr, String>,
+    pub connections: Vec<Multiaddr>,
+    pub failures: Vec<String>,
+}
+
+impl From<PeerInfo> for PeerInfoIo {
+    fn from(info: PeerInfo) -> Self {
+        Self {
+            protocol_version: info.protocol_version().map(ToOwned::to_owned),
+            agent_version: info.agent_version().map(ToOwned::to_owned),
+            protocols: info.protocols().map(ToOwned::to_owned).collect(),
+            listeners: info.listen_addresses().cloned().collect(),
+            addresses: info
+                .addresses()
+                .map(|(a, s, _dt)| (a.clone(), format!("{:?}", s)))
+                .collect(),
+            connections: info.connections().map(|(a, ..)| a.clone()).collect(),
+            failures: info.recent_failures().map(|f| format!("{:?}", f)).collect(),
+        }
+    }
 }
 
 impl std::fmt::Display for Event {
@@ -212,7 +256,13 @@ impl std::fmt::Display for Event {
             Self::Flushed => write!(f, "<flushed")?,
             Self::Synced => write!(f, "<synced")?,
             Self::Bootstrapped => write!(f, "<bootstrapped")?,
-            Self::NewHead(id, offset) => write!(f, "<newhead {} {}", id, offset)?,
+            Self::PeerInfo(p, i) => {
+                write!(f, "<peer-info {} {}", p, serde_json::to_string(i).unwrap())?
+            }
+            Self::PeerRemoved(id) => write!(f, "<peer-removed {}", id)?,
+            Self::DialFailure(p, a, e) => write!(f, "<dial-failure {} {} {}", p, a, e)?,
+            Self::ConnectionEstablished(p, a) => write!(f, "<connection-established {} {}", p, a)?,
+            Self::ConnectionClosed(p, a) => write!(f, "<connection-closed {} {}", p, a)?,
         }
         Ok(())
     }
@@ -282,12 +332,33 @@ impl std::str::FromStr for Event {
             Some("<flushed") => Self::Flushed,
             Some("<synced") => Self::Synced,
             Some("<bootstrapped") => Self::Bootstrapped,
-            Some("<newhead") => {
+            Some("<peer-info") => {
                 let id = parts.next().unwrap().parse()?;
-                let offset = parts.next().unwrap().parse()?;
-                Self::NewHead(id, offset)
+                let s = parts.collect::<Vec<_>>().join(" ");
+                let info = serde_json::from_str(s.as_str())?;
+                Self::PeerInfo(id, info)
             }
-            _ => return Err(anyhow::anyhow!("invalid event `{}`", s)),
+            Some("<peer-removed") => {
+                let id = parts.next().unwrap().parse()?;
+                Self::PeerRemoved(id)
+            }
+            Some("<dial-failure") => {
+                let id = parts.next().unwrap().parse()?;
+                let addr = parts.next().unwrap().parse()?;
+                let error = parts.collect::<Vec<_>>().join(" ");
+                Self::DialFailure(id, addr, error)
+            }
+            Some("<connection-established") => {
+                let id = parts.next().unwrap().parse()?;
+                let addr = parts.next().unwrap().parse()?;
+                Self::ConnectionEstablished(id, addr)
+            }
+            Some("<connection-closed") => {
+                let id = parts.next().unwrap().parse()?;
+                let addr = parts.next().unwrap().parse()?;
+                Self::ConnectionClosed(id, addr)
+            }
+            _ => anyhow::bail!("invalid event `{}`", s),
         })
     }
 }

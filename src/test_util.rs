@@ -1,7 +1,5 @@
 use anyhow::Result;
-use libipld::cbor::DagCborCodec;
-use libipld::multihash::Code;
-use libipld::{Block, Cid, DagCbor, DefaultParams};
+use libipld::{cbor::DagCborCodec, multihash::Code, Block, Cid, DagCbor, DefaultParams};
 use rand::RngCore;
 
 #[derive(Debug, DagCbor)]
