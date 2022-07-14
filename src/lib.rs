@@ -398,7 +398,7 @@ where
 
     /// Returns a list of aliases preventing a `Cid` from being garbage
     /// collected.
-    pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<HashSet<Vec<u8>>>> {
+    pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<fnv::FnvHashSet<Vec<u8>>>> {
         self.storage.reverse_alias(cid)
     }
 

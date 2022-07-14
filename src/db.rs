@@ -1,8 +1,10 @@
-pub use ipfs_sqlite_block_store::TempPin;
-use ipfs_sqlite_block_store::{
-    cache::{CacheTracker, InMemCacheTracker, SqliteCacheTracker},
-    BlockStore, Config, Synchronous,
-};
+// pub use ipfs_sqlite_block_store::TempPin;
+// use ipfs_sqlite_block_store::{
+//     cache::{CacheTracker, InMemCacheTracker, SqliteCacheTracker},
+//     BlockStore, Config, Synchronous,
+// };
+pub use ipfs_radixdb_block_store::TempPin;
+use ipfs_radixdb_block_store::BlockStore as BlockStore;
 use lazy_static::lazy_static;
 use libipld::{codec::References, store::StoreParams, Block, Cid, Ipld, Result};
 use parking_lot::Mutex;
@@ -15,7 +17,6 @@ use std::{future::Future, path::PathBuf, sync::Arc, time::Duration};
 use tracing::info;
 
 use crate::executor::{Executor, JoinHandle};
-use std::collections::HashSet;
 
 /// Storage configuration.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -126,33 +127,19 @@ where
     Ipld: References<S::Codecs>,
 {
     pub fn open(config: StorageConfig, executor: Executor) -> Result<Self> {
-        let store_config = Config::default()
-            .with_size_targets(config.cache_size_blocks, config.cache_size_bytes)
-            .with_pragma_synchronous(Synchronous::Normal);
-        let tracker: Arc<dyn CacheTracker> = if let Some(path) = config.access_db_path {
-            let path = if path.is_file() {
-                path
-            } else {
-                std::fs::create_dir_all(&path)?;
-                path.join("access")
-            };
-            Arc::new(SqliteCacheTracker::open(&path, |access, _| Some(access))?)
-        } else {
-            Arc::new(InMemCacheTracker::new(|access, _| Some(access)))
-        };
 
         let is_memory = config.path.is_none();
         // create DB connection
-        let store = if let Some(path) = config.path {
+        let store: BlockStore<S> = if let Some(path) = config.path {
             let path = if path.is_file() {
                 path
             } else {
                 std::fs::create_dir_all(&path)?;
                 path.join("db")
             };
-            BlockStore::open(path, store_config.with_cache_tracker(tracker))?
+            todo!()
         } else {
-            BlockStore::memory(store_config.with_cache_tracker(tracker))?
+            todo!()
         };
         let store = Arc::new(Mutex::new(store));
 
@@ -160,7 +147,7 @@ where
         let gc_interval = config.gc_interval;
         let gc_min_blocks = config.gc_min_blocks;
         let gc_target_duration = config.gc_target_duration;
-        let gc_task = if is_memory {
+        let gc_task = {
             let gc = store.clone();
             executor.spawn(async move {
                 loop {
@@ -168,20 +155,6 @@ where
                     info!("going for gc!");
                     gc.lock()
                         .incremental_gc(gc_min_blocks, gc_target_duration)
-                        .map_err(|e| {
-                            tracing::warn!("failure during incremental gc: {:#}", e);
-                            e
-                        })
-                        .ok();
-                }
-            })
-        } else {
-            let mut gc = store.lock().additional_connection()?;
-            executor.spawn(async move {
-                loop {
-                    futures_timer::Delay::new(gc_interval).await;
-                    info!("going for gc!");
-                    gc.incremental_gc(gc_min_blocks, gc_target_duration)
                         .map_err(|e| {
                             tracing::warn!("failure during incremental gc: {:#}", e);
                             e
@@ -267,7 +240,7 @@ where
         self.rw("resolve", |x| x.resolve(alias))
     }
 
-    pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<HashSet<Vec<u8>>>> {
+    pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<fnv::FnvHashSet<Vec<u8>>>> {
         self.rw("reverse_alias", |x| x.reverse_alias(cid))
     }
 
@@ -396,7 +369,7 @@ impl<S: StoreParams> SqliteStoreCollector<S> {
 }
 
 /// A handle for performing batch operations on an ipfs storage
-pub struct Batch<'a, S>(ipfs_sqlite_block_store::Transaction<'a, S>);
+pub struct Batch<'a, S>(ipfs_radixdb_block_store::Transaction<'a, S>);
 
 impl<'a, S: StoreParams> Batch<'a, S>
 where
@@ -447,7 +420,7 @@ where
         Ok(self.0.aliases()?)
     }
 
-    pub fn reverse_alias(&mut self, cid: &Cid) -> Result<Option<HashSet<Vec<u8>>>> {
+    pub fn reverse_alias(&mut self, cid: &Cid) -> Result<Option<fnv::FnvHashSet<Vec<u8>>>> {
         Ok(self.0.reverse_alias(cid)?)
     }
 

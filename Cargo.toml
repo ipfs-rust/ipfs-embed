@@ -28,7 +28,6 @@ chrono = "0.4.19"
 fnv = "1.0.7"
 futures = "0.3.21"
 futures-timer = "3.0.2"
-ipfs-sqlite-block-store = "0.12.0"
 lazy_static = "1.4.0"
 libipld = { version = "0.12.0", default-features = false }
 libp2p-bitswap = "0.22.0"
@@ -44,6 +43,7 @@ tokio-crate = { package = "tokio", version = "1.17.0", features = ["rt"], option
 tracing = "0.1.32"
 trust-dns-resolver = "0.20"
 void = "1.0.2"
+ipfs-radixdb-block-store = { path = "../ipfs-radixdb-block-store" }
 
 [dependencies.libp2p]
 version = "0.43.0"
