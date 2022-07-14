@@ -3,8 +3,8 @@
 //     cache::{CacheTracker, InMemCacheTracker, SqliteCacheTracker},
 //     BlockStore, Config, Synchronous,
 // };
+use ipfs_radixdb_block_store::BlockStore;
 pub use ipfs_radixdb_block_store::TempPin;
-use ipfs_radixdb_block_store::BlockStore as BlockStore;
 use lazy_static::lazy_static;
 use libipld::{codec::References, store::StoreParams, Block, Cid, Ipld, Result};
 use parking_lot::Mutex;
@@ -13,6 +13,7 @@ use prometheus::{
     proto::MetricFamily,
     HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry,
 };
+use radixdb::store::{DynBlobStore, MemStore};
 use std::{future::Future, path::PathBuf, sync::Arc, time::Duration};
 use tracing::info;
 
@@ -127,20 +128,20 @@ where
     Ipld: References<S::Codecs>,
 {
     pub fn open(config: StorageConfig, executor: Executor) -> Result<Self> {
-
         let is_memory = config.path.is_none();
         // create DB connection
-        let store: BlockStore<S> = if let Some(path) = config.path {
+        let blob_store: DynBlobStore = if let Some(path) = config.path {
             let path = if path.is_file() {
                 path
             } else {
                 std::fs::create_dir_all(&path)?;
                 path.join("db")
             };
-            todo!()
+            todo!();
         } else {
-            todo!()
+            Arc::new(MemStore::default())
         };
+        let store = BlockStore::new(blob_store)?;
         let store = Arc::new(Mutex::new(store));
 
         // spawn GC task

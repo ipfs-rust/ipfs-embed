@@ -44,6 +44,7 @@ tracing = "0.1.32"
 trust-dns-resolver = "0.20"
 void = "1.0.2"
 ipfs-radixdb-block-store = { path = "../ipfs-radixdb-block-store" }
+radixdb = { path = "../radixdb" }
 
 [dependencies.libp2p]
 version = "0.43.0"

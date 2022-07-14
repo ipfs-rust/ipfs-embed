@@ -1589,6 +1589,7 @@ dependencies = [
  "parking_lot 0.11.2",
  "pin-project 1.0.10",
  "prometheus",
+ "radixdb",
  "rand 0.8.5",
  "regex",
  "tempdir",
