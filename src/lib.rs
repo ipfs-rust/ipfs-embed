@@ -611,25 +611,13 @@ mod tests {
 
     macro_rules! assert_pinned {
         ($store:expr, $block:expr) => {
-            assert_eq!(
-                $store
-                    .reverse_alias($block.cid())
-                    .unwrap()
-                    .map(|a| !a.is_empty()),
-                Some(true)
-            );
+            assert_eq!($store.is_pinned($block.cid()).unwrap(), true);
         };
     }
 
     macro_rules! assert_unpinned {
         ($store:expr, $block:expr) => {
-            assert_eq!(
-                $store
-                    .reverse_alias($block.cid())
-                    .unwrap()
-                    .map(|a| !a.is_empty()),
-                Some(false)
-            );
+            assert_eq!($store.is_pinned($block.cid()).unwrap(), false);
         };
     }
 
@@ -657,51 +645,51 @@ mod tests {
         let _ = local1.insert(c1.clone())?;
         local1.alias(x, Some(c1.cid()))?;
         local1.flush().await?;
-        assert_pinned!(&local1, &a1);
-        assert_pinned!(&local1, &b1);
-        assert_pinned!(&local1, &c1);
+        assert_pinned!(&local1.storage, &a1);
+        assert_pinned!(&local1.storage, &b1);
+        assert_pinned!(&local1.storage, &c1);
 
         local2.alias(&x, Some(c1.cid()))?;
         local2.sync(c1.cid(), vec![local1.local_peer_id()]).await?;
         local2.flush().await?;
-        assert_pinned!(&local2, &a1);
-        assert_pinned!(&local2, &b1);
-        assert_pinned!(&local2, &c1);
+        assert_pinned!(&local2.storage, &a1);
+        assert_pinned!(&local2.storage, &b1);
+        assert_pinned!(&local2.storage, &c1);
 
         let _ = local2.insert(b2.clone())?;
         let _ = local2.insert(c2.clone())?;
         local2.alias(x, Some(c2.cid()))?;
         local2.flush().await?;
-        assert_pinned!(&local2, &a1);
-        assert_unpinned!(&local2, &b1);
-        assert_unpinned!(&local2, &c1);
-        assert_pinned!(&local2, &b2);
-        assert_pinned!(&local2, &c2);
+        assert_pinned!(&local2.storage, &a1);
+        assert_unpinned!(&local2.storage, &b1);
+        assert_unpinned!(&local2.storage, &c1);
+        assert_pinned!(&local2.storage, &b2);
+        assert_pinned!(&local2.storage, &c2);
 
         local1.alias(x, Some(c2.cid()))?;
         local1.sync(c2.cid(), vec![local2.local_peer_id()]).await?;
         local1.flush().await?;
-        assert_pinned!(&local1, &a1);
-        assert_unpinned!(&local1, &b1);
-        assert_unpinned!(&local1, &c1);
-        assert_pinned!(&local1, &b2);
-        assert_pinned!(&local1, &c2);
+        assert_pinned!(&local1.storage, &a1);
+        assert_unpinned!(&local1.storage, &b1);
+        assert_unpinned!(&local1.storage, &c1);
+        assert_pinned!(&local1.storage, &b2);
+        assert_pinned!(&local1.storage, &c2);
 
         local2.alias(x, None)?;
         local2.flush().await?;
-        assert_unpinned!(&local2, &a1);
-        assert_unpinned!(&local2, &b1);
-        assert_unpinned!(&local2, &c1);
-        assert_unpinned!(&local2, &b2);
-        assert_unpinned!(&local2, &c2);
+        assert_unpinned!(&local2.storage, &a1);
+        assert_unpinned!(&local2.storage, &b1);
+        assert_unpinned!(&local2.storage, &c1);
+        assert_unpinned!(&local2.storage, &b2);
+        assert_unpinned!(&local2.storage, &c2);
 
         local1.alias(x, None)?;
         local2.flush().await?;
-        assert_unpinned!(&local1, &a1);
-        assert_unpinned!(&local1, &b1);
-        assert_unpinned!(&local1, &c1);
-        assert_unpinned!(&local1, &b2);
-        assert_unpinned!(&local1, &c2);
+        assert_unpinned!(&local1.storage, &a1);
+        assert_unpinned!(&local1.storage, &b1);
+        assert_unpinned!(&local1.storage, &c1);
+        assert_unpinned!(&local1.storage, &b2);
+        assert_unpinned!(&local1.storage, &c2);
         Ok(())
     }
 

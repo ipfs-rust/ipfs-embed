@@ -13,8 +13,14 @@ use prometheus::{
     proto::MetricFamily,
     HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry,
 };
-use radixdb::store::{DynBlobStore, MemStore};
-use std::{future::Future, path::PathBuf, sync::Arc, time::Duration};
+use radixdb::store::{DynBlobStore, MemStore, PagedFileStore};
+use std::{
+    fs::{File, OpenOptions},
+    future::Future,
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 use tracing::info;
 
 use crate::executor::{Executor, JoinHandle};
@@ -137,7 +143,12 @@ where
                 std::fs::create_dir_all(&path)?;
                 path.join("db")
             };
-            todo!();
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open(path)?;
+            Arc::new(PagedFileStore::<16777216>::new(file)?)
         } else {
             Arc::new(MemStore::default())
         };
@@ -239,6 +250,10 @@ where
 
     pub fn resolve(&self, alias: &[u8]) -> Result<Option<Cid>> {
         self.rw("resolve", |x| x.resolve(alias))
+    }
+
+    pub fn is_pinned(&self, cid: &Cid) -> Result<bool> {
+        self.rw("is_pinned", |x| x.is_pinned(cid))
     }
 
     pub fn reverse_alias(&self, cid: &Cid) -> Result<Option<fnv::FnvHashSet<Vec<u8>>>> {
@@ -425,6 +440,10 @@ where
         Ok(self.0.reverse_alias(cid)?)
     }
 
+    pub fn is_pinned(&mut self, cid: &Cid) -> Result<bool> {
+        Ok(self.0.is_pinned(cid)?)
+    }
+
     pub fn missing_blocks(&mut self, cid: &Cid) -> Result<Vec<Cid>> {
         Ok(self.0.get_missing_blocks(cid)?)
     }
@@ -443,31 +462,19 @@ mod tests {
 
     macro_rules! assert_evicted {
         ($store:expr, $block:expr) => {
-            assert_eq!($store.reverse_alias($block.cid()).unwrap(), None);
+            assert_eq!($store.is_pinned($block.cid()).unwrap(), false);
         };
     }
 
     macro_rules! assert_pinned {
         ($store:expr, $block:expr) => {
-            assert_eq!(
-                $store
-                    .reverse_alias($block.cid())
-                    .unwrap()
-                    .map(|a| !a.is_empty()),
-                Some(true)
-            );
+            assert_eq!($store.is_pinned($block.cid()).unwrap(), true);
         };
     }
 
     macro_rules! assert_unpinned {
         ($store:expr, $block:expr) => {
-            assert_eq!(
-                $store
-                    .reverse_alias($block.cid())
-                    .unwrap()
-                    .map(|a| !a.is_empty()),
-                Some(false)
-            );
+            assert_eq!($store.is_pinned($block.cid()).unwrap(), false);
         };
     }
 
