@@ -10,17 +10,25 @@ pub use self::{
     behaviour::{GossipEvent, QueryId, SyncEvent},
     config::{DnsConfig, NetworkConfig},
     peer_info::{AddressSource, ConnectionFailure, Direction, PeerInfo, Rtt},
-    peers::{Event, SwarmEvents},
+    peers::{register_metrics, Event, SwarmEvents},
 };
 
-use self::behaviour::{GetChannel, NetworkBackendBehaviour, SyncChannel};
-use crate::executor::{Executor, JoinHandle};
+use self::behaviour::{GetChannel, NetworkBackendBehaviour, QueryChannel, SyncChannel};
+use crate::{
+    executor::{Executor, JoinHandle},
+    variable::{Reader, Writer},
+};
+use anyhow::anyhow;
 use chrono::{DateTime, Utc};
+use fnv::{FnvHashMap, FnvHashSet};
 use futures::{
-    channel::mpsc,
-    future,
+    channel::{
+        mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender},
+        oneshot,
+    },
+    future::{self, Either},
     stream::{Stream, StreamExt},
-    task::AtomicWaker,
+    FutureExt,
 };
 use libipld::{error::BlockNotFound, store::StoreParams, Cid, Result};
 #[cfg(feature = "async_global")]
@@ -28,7 +36,7 @@ use libp2p::dns::DnsConfig as Dns;
 #[cfg(all(feature = "tokio", not(feature = "async_global")))]
 use libp2p::dns::TokioDnsConfig as Dns;
 #[cfg(feature = "async_global")]
-use libp2p::tcp::TcpConfig;
+use libp2p::tcp::GenTcpConfig as TcpConfig;
 #[cfg(all(feature = "tokio", not(feature = "async_global")))]
 use libp2p::tcp::TokioTcpConfig as TcpConfig;
 use libp2p::{
@@ -38,17 +46,16 @@ use libp2p::{
         upgrade::{SelectUpgrade, Version},
     },
     identity::ed25519::PublicKey,
-    kad::{kbucket::Key as BucketKey, record::Key, PeerRecord, Quorum, Record},
+    kad::{record::Key, PeerRecord, Quorum, Record},
     mplex::MplexConfig,
     noise::{self, NoiseConfig, X25519Spec},
     pnet::{PnetConfig, PreSharedKey},
     swarm::{AddressRecord, AddressScore, Swarm, SwarmBuilder, SwarmEvent},
+    tcp::TcpTransport,
     yamux::YamuxConfig,
     Multiaddr, PeerId,
 };
 use libp2p_bitswap::BitswapStore;
-use parking_lot::Mutex;
-use prometheus::Registry;
 use std::{
     collections::HashSet,
     future::Future,
@@ -57,32 +64,88 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
+use void::unreachable;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ListenerEvent {
     NewListenAddr(Multiaddr),
     ExpiredListenAddr(Multiaddr),
+    ListenFailed(Multiaddr, String),
+}
+
+#[derive(Debug)]
+pub enum NetworkCommand {
+    ListenOn(Multiaddr, UnboundedSender<ListenerEvent>),
+    AddExternalAddress(Multiaddr),
+    AddAddress(PeerId, Multiaddr),
+    RemoveAddress(PeerId, Multiaddr),
+    PrunePeers(Duration),
+    Dial(PeerId),
+    DialAddress(PeerId, Multiaddr),
+    Ban(PeerId),
+    Unban(PeerId),
+    Bootstrap(
+        Vec<(PeerId, Multiaddr)>,
+        oneshot::Sender<anyhow::Result<()>>,
+    ),
+    Providers(Key, oneshot::Sender<anyhow::Result<HashSet<PeerId>>>),
+    Provide(Key, oneshot::Sender<anyhow::Result<()>>),
+    Unprovide(Key),
+    GetRecord(
+        Key,
+        Quorum,
+        oneshot::Sender<anyhow::Result<Vec<PeerRecord>>>,
+    ),
+    PutRecord(Record, Quorum, oneshot::Sender<anyhow::Result<()>>),
+    RemoveRecord(Key),
+    Subscribe(
+        String,
+        oneshot::Sender<anyhow::Result<UnboundedReceiver<GossipEvent>>>,
+    ),
+    Publish(String, Vec<u8>, oneshot::Sender<anyhow::Result<()>>),
+    Broadcast(String, Vec<u8>, oneshot::Sender<anyhow::Result<()>>),
+    Get(Cid, Vec<PeerId>, oneshot::Sender<GetQuery>),
+    Sync(Cid, Vec<PeerId>, Vec<Cid>, oneshot::Sender<SyncQuery>),
+    SwarmEvents(oneshot::Sender<SwarmEvents>),
+    CancelQuery(QueryId),
 }
 
 #[derive(Clone)]
-pub struct NetworkService<P: StoreParams> {
-    swarm: Arc<Mutex<Swarm<NetworkBackendBehaviour<P>>>>,
-    waker: Arc<AtomicWaker>,
+pub struct NetworkService {
+    bootstrapped: Reader<bool>,
+    peers: Reader<FnvHashMap<PeerId, PeerInfo>>,
+    listeners: Reader<FnvHashSet<Multiaddr>>,
+    external: Reader<Vec<AddressRecord>>,
+    public_key: PublicKey,
+    peer_id: PeerId,
+    node_name: String,
+    cmd: Sender<NetworkCommand>,
     _swarm_task: Arc<JoinHandle<()>>,
 }
 
-impl<P: StoreParams> NetworkService<P> {
-    pub async fn new<S: BitswapStore<Params = P>>(
+impl NetworkService {
+    pub async fn new<S: BitswapStore>(
         mut config: NetworkConfig,
         store: S,
         executor: Executor,
     ) -> Result<Self> {
+        let public_key = config.node_key.public();
         let peer_id =
-            PeerId::from_public_key(&libp2p::core::PublicKey::Ed25519(config.node_key.public()));
-        let behaviour = NetworkBackendBehaviour::<P>::new(&mut config, store).await?;
+            PeerId::from_public_key(&libp2p::core::PublicKey::Ed25519(public_key.clone()));
+        let node_name = config.node_name.clone();
+
+        let peers = Writer::new(FnvHashMap::default());
+        let peers2 = peers.reader();
+        let listeners = Writer::new(FnvHashSet::default());
+        let listeners2 = listeners.reader();
+        let external = Writer::new(vec![]);
+        let external2 = external.reader();
+        let behaviour =
+            NetworkBackendBehaviour::new(&mut config, store, listeners, peers, external).await?;
 
         let tcp = {
-            let transport = TcpConfig::new().nodelay(true).port_reuse(config.port_reuse);
+            let transport =
+                TcpTransport::new(TcpConfig::new().nodelay(true).port_reuse(config.port_reuse));
             let transport = if let Some(psk) = config.psk {
                 let psk = PreSharedKey::new(psk);
                 EitherTransport::Left(
@@ -173,344 +236,583 @@ impl<P: StoreParams> NetworkService<P> {
             .unwrap();
         */
 
-        let swarm = Arc::new(Mutex::new(swarm));
-        let swarm2 = swarm.clone();
-        let waker = Arc::new(AtomicWaker::new());
-        let waker2 = waker.clone();
-        let swarm_task = executor.spawn(future::poll_fn(move |cx| {
-            waker.register(cx.waker());
-            let mut swarm = swarm.lock();
-            let mut count = 0;
-            loop {
-                count += 1;
-                if count > 20 {
-                    cx.waker().wake_by_ref();
-                    return Poll::Pending;
-                }
-
-                let event = match swarm.poll_next_unpin(cx) {
-                    Poll::Ready(Some(e)) => e,
-                    Poll::Ready(None) => return Poll::Ready(()),
-                    Poll::Pending => return Poll::Pending,
-                };
-
-                if let SwarmEvent::ConnectionClosed {
-                    peer_id,
-                    endpoint,
-                    num_established,
-                    cause,
-                } = event
-                {
-                    swarm.behaviour_mut().connection_closed(
-                        peer_id,
-                        endpoint,
-                        num_established,
-                        cause,
-                    );
-                };
-            }
-        }));
+        let bootstrapped = Writer::new(false);
+        let bootstrapped2 = bootstrapped.reader();
+        let (cmd_tx, cmd_rx) = mpsc::channel(100);
+        let swarm_task = executor.spawn(poll_swarm(
+            cmd_rx,
+            cmd_tx.clone(),
+            swarm,
+            executor.clone(),
+            bootstrapped,
+        ));
 
         Ok(Self {
-            swarm: swarm2,
-            waker: waker2,
+            bootstrapped: bootstrapped2,
+            peers: peers2,
+            listeners: listeners2,
+            external: external2,
+            public_key,
+            peer_id,
+            node_name,
+            cmd: cmd_tx,
             _swarm_task: Arc::new(swarm_task),
         })
     }
 
     pub fn local_public_key(&self) -> PublicKey {
-        let swarm = self.swarm.lock();
-        swarm.behaviour().local_public_key().clone()
+        self.public_key.clone()
     }
 
     pub fn local_peer_id(&self) -> PeerId {
-        let swarm = self.swarm.lock();
-        *swarm.local_peer_id()
+        self.peer_id
     }
 
     pub fn local_node_name(&self) -> String {
-        let swarm = self.swarm.lock();
-        swarm.behaviour().local_node_name().to_string()
+        self.node_name.clone()
     }
 
-    pub fn listen_on(&self, addr: Multiaddr) -> Result<impl Stream<Item = ListenerEvent>> {
-        let mut swarm = self.swarm.lock();
-        let stream = swarm.behaviour_mut().swarm_events();
-        let listener = swarm.listen_on(addr)?;
-        self.waker.wake();
-        Ok(stream
-            .take_while(move |event| match event {
-                Event::ListenerClosed(id) if *id == listener => future::ready(false),
-                _ => future::ready(true),
-            })
-            .filter_map(move |event| match event {
-                Event::NewListenAddr(id, addr) if id == listener => {
-                    future::ready(Some(ListenerEvent::NewListenAddr(addr)))
-                }
-                Event::ExpiredListenAddr(id, addr) if id == listener => {
-                    future::ready(Some(ListenerEvent::ExpiredListenAddr(addr)))
-                }
-                _ => future::ready(None),
-            }))
+    fn cmd(&mut self, msg: NetworkCommand) -> Option<(NetworkCommand, &'static str)> {
+        match self.cmd.try_send(msg) {
+            Ok(_) => None,
+            Err(err) => {
+                let reason = if err.is_disconnected() {
+                    "receiver went away"
+                } else {
+                    "channel is full"
+                };
+                let val = err.into_inner();
+                tracing::warn!("failed IPFS swarm command {:?}: {}", val, reason);
+                Some((val, reason))
+            }
+        }
+    }
+
+    fn cmd_shared(&self, msg: NetworkCommand) -> Option<(NetworkCommand, &'static str)> {
+        match self.cmd.clone().try_send(msg) {
+            Ok(_) => None,
+            Err(err) => {
+                let reason = if err.is_disconnected() {
+                    "receiver went away"
+                } else {
+                    "channel is full"
+                };
+                let val = err.into_inner();
+                tracing::warn!("failed IPFS swarm command {:?}: {}", val, reason);
+                Some((val, reason))
+            }
+        }
+    }
+
+    pub fn listen_on(&mut self, addr: Multiaddr) -> impl Stream<Item = ListenerEvent> {
+        let (tx, rx) = mpsc::unbounded();
+        if let Some((NetworkCommand::ListenOn(addr, tx), reason)) =
+            self.cmd(NetworkCommand::ListenOn(addr, tx))
+        {
+            tx.unbounded_send(ListenerEvent::ListenFailed(
+                addr,
+                format!("cannot send to Swarm: {}", reason),
+            ))
+            .ok();
+        }
+        rx
     }
 
     pub fn listeners(&self) -> Vec<Multiaddr> {
-        let swarm = self.swarm.lock();
-        swarm.listeners().cloned().collect()
+        self.listeners.project(|l| l.iter().cloned().collect())
     }
 
-    pub fn add_external_address(&self, mut addr: Multiaddr) {
-        crate::net::peers::normalize_addr(&mut addr, &self.local_peer_id());
-        let mut swarm = self.swarm.lock();
-        swarm.add_external_address(addr, AddressScore::Infinite);
-        self.waker.wake();
+    pub fn add_external_address(&mut self, mut addr: Multiaddr) {
+        peers::normalize_addr(&mut addr, &self.local_peer_id());
+        self.cmd(NetworkCommand::AddExternalAddress(addr));
     }
 
     pub fn external_addresses(&self) -> Vec<AddressRecord> {
-        let swarm = self.swarm.lock();
-        swarm.external_addresses().cloned().collect()
+        self.external.cloned()
     }
 
-    pub fn add_address(&self, peer: &PeerId, addr: Multiaddr) {
-        let mut swarm = self.swarm.lock();
-        swarm
-            .behaviour_mut()
-            .add_address(peer, addr, AddressSource::User);
-        self.waker.wake();
+    pub fn add_address(&mut self, peer: PeerId, addr: Multiaddr) {
+        self.cmd(NetworkCommand::AddAddress(peer, addr));
     }
 
-    pub fn remove_address(&self, peer: &PeerId, addr: &Multiaddr) {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().remove_address(peer, addr);
-        self.waker.wake();
+    pub fn remove_address(&mut self, peer: PeerId, addr: Multiaddr) {
+        self.cmd(NetworkCommand::RemoveAddress(peer, addr));
     }
 
-    pub fn prune_peers(&self, min_age: Duration) {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().prune_peers(min_age);
+    pub fn prune_peers(&mut self, min_age: Duration) {
+        self.cmd(NetworkCommand::PrunePeers(min_age));
     }
 
-    pub fn dial(&self, peer: &PeerId) {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().dial(peer);
-        self.waker.wake();
+    pub fn dial(&mut self, peer: PeerId) {
+        self.cmd(NetworkCommand::Dial(peer));
     }
 
-    pub fn dial_address(&self, peer: &PeerId, addr: Multiaddr) {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().dial_address(peer, addr);
-        self.waker.wake();
+    pub fn dial_address(&mut self, peer: PeerId, addr: Multiaddr) {
+        self.cmd(NetworkCommand::DialAddress(peer, addr));
     }
 
-    pub fn ban(&self, peer: PeerId) {
-        let mut swarm = self.swarm.lock();
-        swarm.ban_peer_id(peer);
-        self.waker.wake();
+    pub fn ban(&mut self, peer: PeerId) {
+        self.cmd(NetworkCommand::Ban(peer));
     }
 
-    pub fn unban(&self, peer: PeerId) {
-        let mut swarm = self.swarm.lock();
-        swarm.unban_peer_id(peer);
-        self.waker.wake();
+    pub fn unban(&mut self, peer: PeerId) {
+        self.cmd(NetworkCommand::Unban(peer));
     }
 
     pub fn peers(&self) -> Vec<PeerId> {
-        let swarm = self.swarm.lock();
-        swarm.behaviour().peers().copied().collect()
+        self.peers.project(|peers| peers.keys().copied().collect())
     }
 
     pub fn connections(&self) -> Vec<(PeerId, Multiaddr, DateTime<Utc>, Direction)> {
-        let swarm = self.swarm.lock();
-        swarm
-            .behaviour()
-            .connections()
-            .map(|(peer_id, addr, dt, dir)| (peer_id, addr.clone(), dt, dir))
-            .collect()
+        self.peers.project(|peers| {
+            peers
+                .iter()
+                .flat_map(|(peer, info)| {
+                    info.connections
+                        .iter()
+                        .map(move |(a, t)| (*peer, a.clone(), t.0, t.1))
+                })
+                .collect()
+        })
     }
 
     pub fn is_connected(&self, peer: &PeerId) -> bool {
-        let swarm = self.swarm.lock();
-        swarm.behaviour().is_connected(peer)
+        *peer == self.local_peer_id()
+            || self.peers.project(|peers| {
+                peers
+                    .get(peer)
+                    .map(|info| !info.connections.is_empty())
+                    .unwrap_or(false)
+            })
     }
 
     pub fn peer_info(&self, peer: &PeerId) -> Option<PeerInfo> {
-        let swarm = self.swarm.lock();
-        swarm.behaviour().info(peer).cloned()
+        self.peers.project(|peers| peers.get(peer).cloned())
     }
 
-    pub async fn bootstrap(&self, peers: &[(PeerId, Multiaddr)]) -> Result<()> {
-        for (peer, addr) in peers {
-            self.add_address(peer, addr.clone());
-            self.dial(peer);
+    pub fn bootstrap(
+        &mut self,
+        peers: Vec<(PeerId, Multiaddr)>,
+    ) -> impl Future<Output = Result<()>> {
+        let (tx, rx) = oneshot::channel();
+        if let Some((_, err)) = self.cmd(NetworkCommand::Bootstrap(peers, tx)) {
+            return future::ready(Err(anyhow!("{}", err))).left_future();
         }
-        let rx = {
-            let mut swarm = self.swarm.lock();
-            swarm.behaviour_mut().bootstrap()
-        };
-        tracing::trace!("started bootstrap");
-        rx.await??;
-        tracing::trace!("boostrap complete");
-        Ok(())
+        tracing::debug!("started bootstrap");
+        async {
+            rx.await??;
+            tracing::debug!("boostrap complete");
+            Ok(())
+        }
+        .right_future()
     }
 
     pub fn is_bootstrapped(&self) -> bool {
-        let swarm = self.swarm.lock();
-        swarm.behaviour().is_bootstrapped()
+        self.bootstrapped.get()
     }
 
-    pub async fn get_closest_peers<K>(&self, key: K) -> Result<Vec<PeerId>>
-    where
-        K: Into<BucketKey<K>> + Into<Vec<u8>> + Clone,
-    {
-        let rx = {
-            let mut swarm = self.swarm.lock();
-            swarm.behaviour_mut().get_closest_peers(key)
-        };
-        Ok(rx.await??)
-    }
+    // This weird function signature seems impossible to support. WTF.
+    // pub async fn get_closest_peers<K>(&self, key: K) -> Result<Vec<PeerId>>
+    // where
+    //     K: Into<BucketKey<K>> + Into<Vec<u8>> + Clone,
+    // {
+    //     let rx = {
+    //         let mut swarm = self.swarm.lock();
+    //         swarm.behaviour_mut().get_closest_peers(key)
+    //     };
+    //     Ok(rx.await??)
+    // }
 
-    pub async fn providers(&self, key: Key) -> Result<HashSet<PeerId>> {
-        let rx = {
-            let mut swarm = self.swarm.lock();
-            swarm.behaviour_mut().providers(key)
-        };
-        Ok(rx.await??)
-    }
-
-    pub async fn provide(&self, key: Key) -> Result<()> {
-        let rx = {
-            let mut swarm = self.swarm.lock();
-            swarm.behaviour_mut().provide(key)
-        };
-        Ok(rx.await??)
-    }
-
-    pub fn unprovide(&self, key: &Key) {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().unprovide(key);
-        self.waker.wake();
-    }
-
-    pub async fn get_record(&self, key: Key, quorum: Quorum) -> Result<Vec<PeerRecord>> {
-        let rx = {
-            let mut swarm = self.swarm.lock();
-            swarm.behaviour_mut().get_record(key, quorum)
-        };
-        Ok(rx.await??)
-    }
-
-    pub async fn put_record(&self, record: Record, quorum: Quorum) -> Result<()> {
-        let rx = {
-            let mut swarm = self.swarm.lock();
-            swarm.behaviour_mut().put_record(record, quorum)
-        };
-        rx.await??;
-        Ok(())
-    }
-
-    pub fn remove_record(&self, key: &Key) {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().remove_record(key);
-        self.waker.wake();
-    }
-
-    pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = GossipEvent>> {
-        let mut swarm = self.swarm.lock();
-        let stream = swarm.behaviour_mut().subscribe(topic)?;
-        self.waker.wake();
-        Ok(stream)
-    }
-
-    pub fn publish(&self, topic: &str, msg: Vec<u8>) -> Result<()> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().publish(topic, msg)?;
-        self.waker.wake();
-        Ok(())
-    }
-
-    pub fn broadcast(&self, topic: &str, msg: Vec<u8>) -> Result<()> {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().broadcast(topic, msg)?;
-        self.waker.wake();
-        Ok(())
-    }
-
-    pub fn get(&self, cid: Cid, providers: impl Iterator<Item = PeerId>) -> GetQuery<P> {
-        let mut swarm = self.swarm.lock();
-        let (rx, id) = swarm.behaviour_mut().get(cid, providers);
-        self.waker.wake();
-        GetQuery {
-            swarm: Some(self.swarm.clone()),
-            id,
-            rx,
+    pub fn providers(&mut self, key: Key) -> impl Future<Output = Result<HashSet<PeerId>>> {
+        let (tx, rx) = oneshot::channel();
+        if let Some((_, err)) = self.cmd(NetworkCommand::Providers(key, tx)) {
+            return future::ready(Err(anyhow!("{}", err))).left_future();
         }
+        async { rx.await? }.right_future()
     }
 
-    pub fn sync(&self, cid: Cid, providers: Vec<PeerId>, missing: Vec<Cid>) -> SyncQuery<P> {
+    pub fn provide(&mut self, key: Key) -> impl Future<Output = Result<()>> {
+        let (tx, rx) = oneshot::channel();
+        if let Some((_, err)) = self.cmd(NetworkCommand::Provide(key, tx)) {
+            return future::ready(Err(anyhow!("{}", err))).left_future();
+        }
+        async { rx.await? }.right_future()
+    }
+
+    pub fn unprovide(&mut self, key: Key) -> Result<()> {
+        if let Some((_, err)) = self.cmd(NetworkCommand::Unprovide(key)) {
+            return Err(anyhow!("{}", err));
+        }
+        Ok(())
+    }
+
+    pub fn get_record(
+        &mut self,
+        key: Key,
+        quorum: Quorum,
+    ) -> impl Future<Output = Result<Vec<PeerRecord>>> {
+        let (tx, rx) = oneshot::channel();
+        if let Some((_, err)) = self.cmd(NetworkCommand::GetRecord(key, quorum, tx)) {
+            return future::ready(Err(anyhow!("{}", err))).left_future();
+        }
+        async { rx.await? }.right_future()
+    }
+
+    pub fn put_record(
+        &mut self,
+        record: Record,
+        quorum: Quorum,
+    ) -> impl Future<Output = Result<()>> {
+        let (tx, rx) = oneshot::channel();
+        if let Some((_, err)) = self.cmd(NetworkCommand::PutRecord(record, quorum, tx)) {
+            return future::ready(Err(anyhow!("{}", err))).left_future();
+        }
+        async { rx.await? }.right_future()
+    }
+
+    pub fn remove_record(&mut self, key: Key) -> Result<()> {
+        if let Some((_, err)) = self.cmd(NetworkCommand::RemoveRecord(key)) {
+            return Err(anyhow!("{}", err));
+        }
+        Ok(())
+    }
+
+    pub fn subscribe(
+        &mut self,
+        topic: String,
+    ) -> impl Future<Output = Result<impl Stream<Item = GossipEvent>>> {
+        let (tx, rx) = oneshot::channel();
+        if let Some((_, err)) = self.cmd(NetworkCommand::Subscribe(topic, tx)) {
+            return future::ready(Err(anyhow!("{}", err))).left_future();
+        }
+        async { rx.await? }.right_future()
+    }
+
+    pub fn publish(&mut self, topic: String, msg: Vec<u8>) -> impl Future<Output = Result<()>> {
+        let (tx, rx) = oneshot::channel();
+        if let Some((_, err)) = self.cmd(NetworkCommand::Publish(topic, msg, tx)) {
+            return future::ready(Err(anyhow!("{}", err))).left_future();
+        }
+        async { rx.await? }.right_future()
+    }
+
+    pub fn broadcast(&mut self, topic: String, msg: Vec<u8>) -> impl Future<Output = Result<()>> {
+        let (tx, rx) = oneshot::channel();
+        if let Some((_, err)) = self.cmd(NetworkCommand::Broadcast(topic, msg, tx)) {
+            return future::ready(Err(anyhow!("{}", err))).left_future();
+        }
+        async { rx.await? }.right_future()
+    }
+
+    pub fn get(&self, cid: Cid, providers: Vec<PeerId>) -> impl Future<Output = Result<GetQuery>> {
+        let (tx, rx) = oneshot::channel();
+        if let Some((_, err)) = self.cmd_shared(NetworkCommand::Get(cid, providers, tx)) {
+            return future::ready(Err(anyhow!("{}", err))).left_future();
+        }
+        async { Ok(rx.await?) }.right_future()
+    }
+
+    pub fn sync(
+        &self,
+        cid: Cid,
+        providers: Vec<PeerId>,
+        missing: Vec<Cid>,
+    ) -> impl Future<Output = Result<SyncQuery>> {
         if missing.is_empty() {
-            return SyncQuery::ready(Ok(()));
+            return future::ready(Ok(SyncQuery::ready(Ok(())))).left_future();
         }
         if providers.is_empty() {
-            return SyncQuery::ready(Err(BlockNotFound(missing[0]).into()));
+            return future::ready(Ok(SyncQuery::ready(Err(BlockNotFound(missing[0]).into()))))
+                .left_future();
         }
-        let mut swarm = self.swarm.lock();
-        let (rx, id) = swarm
-            .behaviour_mut()
-            .sync(cid, providers, missing.into_iter());
-        self.waker.wake();
-        drop(swarm);
-        SyncQuery {
-            swarm: Some(self.swarm.clone()),
-            id: Some(id),
-            rx,
+        let (tx, rx) = oneshot::channel();
+        if let Some((_, err)) = self.cmd_shared(NetworkCommand::Sync(cid, providers, missing, tx)) {
+            return future::ready(Err(anyhow!("{}", err))).left_future();
         }
+        async { Ok(rx.await?) }.right_future()
     }
 
-    pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
-        let swarm = self.swarm.lock();
-        swarm.behaviour().register_metrics(registry)
-    }
-
-    pub fn swarm_events(&self) -> SwarmEvents {
-        let mut swarm = self.swarm.lock();
-        swarm.behaviour_mut().swarm_events()
+    pub fn swarm_events(&mut self) -> impl Future<Output = Result<SwarmEvents>> {
+        let (tx, rx) = oneshot::channel();
+        if let Some((_, err)) = self.cmd(NetworkCommand::SwarmEvents(tx)) {
+            return future::ready(Err(anyhow!("{}", err))).left_future();
+        }
+        async { Ok(rx.await?) }.right_future()
     }
 }
 
-pub struct GetQuery<P: StoreParams> {
-    swarm: Option<Arc<Mutex<Swarm<NetworkBackendBehaviour<P>>>>>,
+async fn poll_swarm<P: StoreParams>(
+    mut cmd_rx: Receiver<NetworkCommand>,
+    cmd_tx: Sender<NetworkCommand>,
+    mut swarm: Swarm<NetworkBackendBehaviour<P>>,
+    executor: Executor,
+    bootstrapped: Writer<bool>,
+) {
+    let mut subscriptions =
+        FnvHashMap::<String, Vec<mpsc::UnboundedSender<GossipEvent>>>::default();
+    let mut queries = FnvHashMap::<QueryId, QueryChannel>::default();
+    loop {
+        match future::select(
+            future::poll_fn(|cx| swarm.poll_next_unpin(cx)),
+            cmd_rx.next(),
+        )
+        .await
+        {
+            Either::Left((None, _)) => {
+                tracing::debug!("poll_swarm: swarm stream ended, terminating");
+                return;
+            }
+            Either::Left((Some(cmd), _)) => match cmd {
+                SwarmEvent::ConnectionClosed {
+                    peer_id,
+                    endpoint,
+                    num_established,
+                    cause,
+                } => swarm.behaviour_mut().connection_closed(
+                    peer_id,
+                    endpoint,
+                    num_established,
+                    cause,
+                ),
+                SwarmEvent::Behaviour(event) => {
+                    let swarm = swarm.behaviour_mut();
+                    match event {
+                        behaviour::NetworkBackendBehaviourEvent::Peers(e) => unreachable(e),
+                        behaviour::NetworkBackendBehaviourEvent::Kad(e) => {
+                            let mut bootstrap_complete = *bootstrapped.read();
+                            let bootstrap_old = bootstrap_complete;
+                            swarm.inject_kad_event(e, &mut bootstrap_complete, &mut queries);
+                            if bootstrap_complete != bootstrap_old {
+                                *bootstrapped.write() = bootstrap_complete;
+                            }
+                        }
+                        behaviour::NetworkBackendBehaviourEvent::Mdns(e) => {
+                            swarm.inject_mdns_event(e);
+                        }
+                        behaviour::NetworkBackendBehaviourEvent::Ping(e) => {
+                            swarm.inject_ping_event(e);
+                        }
+                        behaviour::NetworkBackendBehaviourEvent::Identify(e) => {
+                            swarm.inject_id_event(e);
+                        }
+                        behaviour::NetworkBackendBehaviourEvent::Bitswap(e) => {
+                            swarm.inject_bitswap_event(e, &mut queries);
+                        }
+                        behaviour::NetworkBackendBehaviourEvent::Gossipsub(e) => {
+                            swarm.inject_gossip_event(e, &mut subscriptions);
+                        }
+                        behaviour::NetworkBackendBehaviourEvent::Broadcast(e) => {
+                            swarm.inject_broadcast_event(e, &mut subscriptions);
+                        }
+                    }
+                }
+                _ => {}
+            },
+            Either::Right((None, _)) => {
+                tracing::debug!("poll_swarm: command sender dropped, terminating");
+                return;
+            }
+            Either::Right((Some(cmd), _)) => match cmd {
+                NetworkCommand::ListenOn(addr, response) => {
+                    let (tx, rx) = mpsc::unbounded();
+                    swarm.behaviour_mut().swarm_events(tx);
+                    match swarm.listen_on(addr.clone()) {
+                        Ok(listener) => executor
+                            .spawn(
+                                rx.take_while(move |event| match event {
+                                    Event::ListenerClosed(id) if *id == listener => {
+                                        future::ready(false)
+                                    }
+                                    Event::NewListenAddr(id, addr) if *id == listener => {
+                                        future::ready(
+                                            response
+                                                .unbounded_send(ListenerEvent::NewListenAddr(
+                                                    addr.clone(),
+                                                ))
+                                                .is_ok(),
+                                        )
+                                    }
+                                    Event::ExpiredListenAddr(id, addr) if *id == listener => {
+                                        future::ready(
+                                            response
+                                                .unbounded_send(ListenerEvent::ExpiredListenAddr(
+                                                    addr.clone(),
+                                                ))
+                                                .is_ok(),
+                                        )
+                                    }
+                                    _ => future::ready(true),
+                                })
+                                .for_each(|_| future::ready(())),
+                            )
+                            .detach(),
+                        Err(error) => {
+                            response
+                                .unbounded_send(ListenerEvent::ListenFailed(
+                                    addr,
+                                    error.to_string(),
+                                ))
+                                .ok();
+                        }
+                    };
+                }
+                NetworkCommand::AddExternalAddress(addr) => {
+                    swarm.add_external_address(addr, AddressScore::Infinite);
+                }
+                NetworkCommand::AddAddress(peer, addr) => {
+                    swarm
+                        .behaviour_mut()
+                        .add_address(&peer, addr, AddressSource::User);
+                }
+                NetworkCommand::RemoveAddress(peer, addr) => {
+                    swarm.behaviour_mut().remove_address(&peer, &addr);
+                }
+                NetworkCommand::PrunePeers(min_age) => {
+                    swarm.behaviour_mut().prune_peers(min_age);
+                }
+                NetworkCommand::Dial(peer) => {
+                    swarm.behaviour_mut().dial(&peer);
+                }
+                NetworkCommand::DialAddress(peer, addr) => {
+                    swarm.behaviour_mut().dial_address(&peer, addr);
+                }
+                NetworkCommand::Ban(peer) => {
+                    swarm.ban_peer_id(peer);
+                }
+                NetworkCommand::Unban(peer) => {
+                    swarm.unban_peer_id(peer);
+                }
+                NetworkCommand::Bootstrap(initial, tx) => {
+                    let swarm = swarm.behaviour_mut();
+                    for (peer, addr) in initial {
+                        swarm.add_address(&peer, addr.clone(), AddressSource::User);
+                        swarm.dial(&peer);
+                    }
+                    swarm.bootstrap(&mut queries, tx);
+                }
+                NetworkCommand::Providers(key, tx) => {
+                    let bootstrap_complete = *bootstrapped.read();
+                    swarm
+                        .behaviour_mut()
+                        .providers(key, bootstrap_complete, &mut queries, tx);
+                }
+                NetworkCommand::Provide(key, tx) => {
+                    let bootstrap_complete = *bootstrapped.read();
+                    swarm
+                        .behaviour_mut()
+                        .provide(key, bootstrap_complete, &mut queries, tx);
+                }
+                NetworkCommand::Unprovide(key) => {
+                    swarm.behaviour_mut().unprovide(&key);
+                }
+                NetworkCommand::GetRecord(key, quorum, tx) => {
+                    let bootstrap_complete = *bootstrapped.read();
+                    swarm.behaviour_mut().get_record(
+                        key,
+                        quorum,
+                        bootstrap_complete,
+                        &mut queries,
+                        tx,
+                    );
+                }
+                NetworkCommand::PutRecord(record, quorum, tx) => {
+                    let bootstrap_complete = *bootstrapped.read();
+                    swarm.behaviour_mut().put_record(
+                        record,
+                        quorum,
+                        bootstrap_complete,
+                        &mut queries,
+                        tx,
+                    );
+                }
+                NetworkCommand::RemoveRecord(key) => {
+                    swarm.behaviour_mut().remove_record(&key);
+                }
+                NetworkCommand::Subscribe(topic, tx) => {
+                    tx.send(swarm.behaviour_mut().subscribe(&*topic, &mut subscriptions))
+                        .ok();
+                }
+                NetworkCommand::Publish(topic, msg, tx) => {
+                    tx.send(swarm.behaviour_mut().publish(&*topic, msg)).ok();
+                }
+                NetworkCommand::Broadcast(topic, msg, tx) => {
+                    tx.send(swarm.behaviour_mut().broadcast(&*topic, msg)).ok();
+                }
+                NetworkCommand::Get(cid, providers, tx) => {
+                    let (rx, id) =
+                        swarm
+                            .behaviour_mut()
+                            .get(cid, providers.into_iter(), &mut queries);
+                    tx.send(GetQuery {
+                        swarm: cmd_tx.clone(),
+                        id,
+                        rx,
+                    })
+                    .ok();
+                }
+                NetworkCommand::Sync(cid, providers, missing, tx) => {
+                    let (rx, id) = swarm.behaviour_mut().sync(
+                        cid,
+                        providers,
+                        missing.into_iter(),
+                        &mut queries,
+                    );
+                    tx.send(SyncQuery {
+                        swarm: Some(cmd_tx.clone()),
+                        id: Some(id),
+                        rx,
+                    })
+                    .ok();
+                }
+                NetworkCommand::SwarmEvents(result) => {
+                    let (tx, rx) = mpsc::unbounded();
+                    swarm.behaviour_mut().swarm_events(tx);
+                    result.send(SwarmEvents::new(rx)).ok();
+                }
+                NetworkCommand::CancelQuery(id) => {
+                    swarm.behaviour_mut().cancel(id, &mut queries);
+                }
+            },
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct GetQuery {
+    swarm: Sender<NetworkCommand>,
     id: QueryId,
     rx: GetChannel,
 }
 
-impl<P: StoreParams> Future for GetQuery<P> {
+impl Future for GetQuery {
     type Output = Result<()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         match Pin::new(&mut self.rx).poll(cx) {
             Poll::Ready(Ok(result)) => Poll::Ready(result),
-            Poll::Ready(Err(err)) => Poll::Ready(Err(err.into())),
+            Poll::Ready(Err(err)) => Poll::Ready(Err(anyhow!("{}", err))),
             Poll::Pending => Poll::Pending,
         }
     }
 }
 
-impl<P: StoreParams> Drop for GetQuery<P> {
+impl Drop for GetQuery {
     fn drop(&mut self) {
-        let swarm = self.swarm.take().unwrap();
-        let mut swarm = swarm.lock();
-        swarm.behaviour_mut().cancel(self.id);
+        if let Err(err) = self.swarm.try_send(NetworkCommand::CancelQuery(self.id)) {
+            tracing::warn!("cannot cancel dropped GetQuery: {}", err.into_send_error());
+        }
     }
 }
 
 /// A `bitswap` sync query.
-pub struct SyncQuery<P: StoreParams> {
-    swarm: Option<Arc<Mutex<Swarm<NetworkBackendBehaviour<P>>>>>,
+#[derive(Debug)]
+pub struct SyncQuery {
+    swarm: Option<Sender<NetworkCommand>>,
     id: Option<QueryId>,
     rx: SyncChannel,
 }
 
-impl<P: StoreParams> SyncQuery<P> {
+impl SyncQuery {
     fn ready(res: Result<()>) -> Self {
         let (tx, rx) = mpsc::unbounded();
         tx.unbounded_send(SyncEvent::Complete(res)).unwrap();
@@ -522,7 +824,7 @@ impl<P: StoreParams> SyncQuery<P> {
     }
 }
 
-impl<P: StoreParams> Future for SyncQuery<P> {
+impl Future for SyncQuery {
     type Output = Result<()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
@@ -538,7 +840,7 @@ impl<P: StoreParams> Future for SyncQuery<P> {
     }
 }
 
-impl<P: StoreParams> Stream for SyncQuery<P> {
+impl Stream for SyncQuery {
     type Item = SyncEvent;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
@@ -548,12 +850,13 @@ impl<P: StoreParams> Stream for SyncQuery<P> {
     }
 }
 
-impl<P: StoreParams> Drop for SyncQuery<P> {
+impl Drop for SyncQuery {
     fn drop(&mut self) {
         if let Some(id) = self.id.take() {
-            let swarm = self.swarm.take().unwrap();
-            let mut swarm = swarm.lock();
-            swarm.behaviour_mut().cancel(id);
+            let swarm = self.swarm.as_mut().unwrap();
+            if let Err(err) = swarm.try_send(NetworkCommand::CancelQuery(id)) {
+                tracing::warn!("cannot cancel dropped SyncQuery: {}", err.into_send_error());
+            }
         }
     }
 }

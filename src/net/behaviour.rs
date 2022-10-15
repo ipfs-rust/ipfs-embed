@@ -1,25 +1,22 @@
-use super::peer_info::Direction;
 use crate::{
     net::{
         config::NetworkConfig,
-        peers::{AddressBook, Event, SwarmEvents},
+        peers::{AddressBook, Event},
     },
+    variable::Writer,
     AddressSource, PeerInfo,
 };
-use chrono::{DateTime, Utc};
-use fnv::FnvHashMap;
-use futures::{
-    channel::{mpsc, oneshot},
-    stream::Stream,
+use fnv::{FnvHashMap, FnvHashSet};
+use futures::channel::{
+    mpsc::{self, UnboundedSender},
+    oneshot,
 };
 use libipld::{store::StoreParams, Cid, DefaultParams, Result};
 use libp2p::{
     core::ConnectedPoint,
     gossipsub::{Gossipsub, GossipsubEvent, GossipsubMessage, IdentTopic, MessageAuthenticity},
     identify::{Identify, IdentifyEvent},
-    identity::ed25519::PublicKey,
     kad::{
-        kbucket::Key as BucketKey,
         record::{store::MemoryStore, Key, Record},
         AddProviderOk, BootstrapOk, GetClosestPeersOk, GetProvidersOk, GetRecordOk, Kademlia,
         KademliaEvent, PeerRecord, PutRecordOk, QueryResult, Quorum,
@@ -27,14 +24,13 @@ use libp2p::{
     mdns::{Mdns, MdnsEvent},
     ping::{Ping, PingEvent, PingFailure, PingSuccess},
     swarm::{
-        behaviour::toggle::Toggle, ConnectionError, ConnectionHandler, IntoConnectionHandler,
-        NetworkBehaviour, NetworkBehaviourEventProcess,
+        behaviour::toggle::Toggle, AddressRecord, ConnectionError, ConnectionHandler,
+        IntoConnectionHandler, NetworkBehaviour,
     },
     Multiaddr, NetworkBehaviour, PeerId,
 };
 use libp2p_bitswap::{Bitswap, BitswapEvent, BitswapStore};
 use libp2p_broadcast::{Broadcast, BroadcastEvent, Topic};
-use prometheus::Registry;
 use std::{collections::HashSet, sync::Arc, time::Duration};
 use thiserror::Error;
 
@@ -73,17 +69,12 @@ pub enum SyncEvent {
 
 pub type GetChannel = oneshot::Receiver<Result<()>>;
 pub type SyncChannel = mpsc::UnboundedReceiver<SyncEvent>;
-pub type BootstrapChannel = oneshot::Receiver<Result<()>>;
-pub type GetClosestPeersChannel = oneshot::Receiver<Result<Vec<PeerId>>>;
-pub type GetProvidersChannel = oneshot::Receiver<Result<HashSet<PeerId>>>;
-pub type StartProvidingChannel = oneshot::Receiver<Result<()>>;
-pub type GetRecordChannel = oneshot::Receiver<Result<Vec<PeerRecord>>>;
-pub type PutRecordChannel = oneshot::Receiver<Result<()>>;
 
-enum QueryChannel {
+pub enum QueryChannel {
     Get(oneshot::Sender<Result<()>>),
     Sync(mpsc::UnboundedSender<SyncEvent>),
     Bootstrap(oneshot::Sender<Result<()>>),
+    #[allow(dead_code)]
     GetClosestPeers(oneshot::Sender<Result<Vec<PeerId>>>),
     GetProviders(oneshot::Sender<Result<HashSet<PeerId>>>),
     StartProviding(oneshot::Sender<Result<()>>),
@@ -101,7 +92,6 @@ pub(crate) type MyHandlerError = <<<NetworkBackendBehaviour<DefaultParams> as Ne
     ::ConnectionHandler as IntoConnectionHandler>::Handler as ConnectionHandler>::Error;
 
 #[derive(NetworkBehaviour)]
-#[behaviour(event_process = true)]
 pub struct NetworkBackendBehaviour<P: StoreParams> {
     peers: AddressBook,
     kad: Toggle<Kademlia<MemoryStore>>,
@@ -111,17 +101,10 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     bitswap: Toggle<Bitswap<P>>,
     gossipsub: Toggle<Gossipsub>,
     broadcast: Toggle<Broadcast>,
-
-    #[behaviour(ignore)]
-    bootstrap_complete: bool,
-    #[behaviour(ignore)]
-    queries: FnvHashMap<QueryId, QueryChannel>,
-    #[behaviour(ignore)]
-    subscriptions: FnvHashMap<String, Vec<mpsc::UnboundedSender<GossipEvent>>>,
 }
 
-impl<P: StoreParams> NetworkBehaviourEventProcess<MdnsEvent> for NetworkBackendBehaviour<P> {
-    fn inject_event(&mut self, event: MdnsEvent) {
+impl<P: StoreParams> NetworkBackendBehaviour<P> {
+    pub fn inject_mdns_event(&mut self, event: MdnsEvent) {
         match event {
             MdnsEvent::Discovered(list) => {
                 for (peer_id, addr) in list {
@@ -171,16 +154,21 @@ pub struct KadGetRecordError(pub libp2p::kad::GetRecordError);
 #[error("{0:?}")]
 pub struct KadPutRecordError(pub libp2p::kad::PutRecordError);
 
-impl<P: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBackendBehaviour<P> {
-    fn inject_event(&mut self, event: KademliaEvent) {
+impl<P: StoreParams> NetworkBackendBehaviour<P> {
+    pub fn inject_kad_event(
+        &mut self,
+        event: KademliaEvent,
+        bootstrap_complete: &mut bool,
+        queries: &mut FnvHashMap<QueryId, QueryChannel>,
+    ) {
         tracing::trace!("kademlia event {:?}", event);
         if let KademliaEvent::OutboundQueryCompleted { id, result, .. } = event {
             match result {
                 QueryResult::Bootstrap(Ok(BootstrapOk { num_remaining, .. })) => {
                     tracing::trace!("remaining {}", num_remaining);
                     if num_remaining == 0 {
-                        self.bootstrap_complete = true;
-                        if let Some(QueryChannel::Bootstrap(ch)) = self.queries.remove(&id.into()) {
+                        *bootstrap_complete = true;
+                        if let Some(QueryChannel::Bootstrap(ch)) = queries.remove(&id.into()) {
                             ch.send(Ok(())).ok();
                         }
                         self.peers.notify(Event::Bootstrapped);
@@ -188,44 +176,40 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBack
                 }
                 QueryResult::Bootstrap(Err(err)) => {
                     tracing::trace!("{:?}", err);
-                    if let Some(QueryChannel::Bootstrap(ch)) = self.queries.remove(&id.into()) {
+                    if let Some(QueryChannel::Bootstrap(ch)) = queries.remove(&id.into()) {
                         ch.send(Err(KadBootstrapError(err).into())).ok();
                     }
                 }
                 QueryResult::GetClosestPeers(Ok(GetClosestPeersOk { peers, .. })) => {
-                    if let Some(QueryChannel::GetClosestPeers(ch)) = self.queries.remove(&id.into())
-                    {
+                    if let Some(QueryChannel::GetClosestPeers(ch)) = queries.remove(&id.into()) {
                         ch.send(Ok(peers)).ok();
                     }
                 }
                 QueryResult::GetClosestPeers(Err(err)) => {
                     tracing::trace!("{:?}", err);
-                    if let Some(QueryChannel::GetClosestPeers(ch)) = self.queries.remove(&id.into())
-                    {
+                    if let Some(QueryChannel::GetClosestPeers(ch)) = queries.remove(&id.into()) {
                         ch.send(Err(KadGetClosestPeersError(err).into())).ok();
                     }
                 }
                 QueryResult::GetProviders(Ok(GetProvidersOk { providers, .. })) => {
-                    if let Some(QueryChannel::GetProviders(ch)) = self.queries.remove(&id.into()) {
+                    if let Some(QueryChannel::GetProviders(ch)) = queries.remove(&id.into()) {
                         ch.send(Ok(providers)).ok();
                     }
                 }
                 QueryResult::GetProviders(Err(err)) => {
                     tracing::trace!("{:?}", err);
-                    if let Some(QueryChannel::GetProviders(ch)) = self.queries.remove(&id.into()) {
+                    if let Some(QueryChannel::GetProviders(ch)) = queries.remove(&id.into()) {
                         ch.send(Err(KadGetProvidersError(err).into())).ok();
                     }
                 }
                 QueryResult::StartProviding(Ok(AddProviderOk { .. })) => {
-                    if let Some(QueryChannel::StartProviding(ch)) = self.queries.remove(&id.into())
-                    {
+                    if let Some(QueryChannel::StartProviding(ch)) = queries.remove(&id.into()) {
                         ch.send(Ok(())).ok();
                     }
                 }
                 QueryResult::StartProviding(Err(err)) => {
                     tracing::trace!("{:?}", err);
-                    if let Some(QueryChannel::StartProviding(ch)) = self.queries.remove(&id.into())
-                    {
+                    if let Some(QueryChannel::StartProviding(ch)) = queries.remove(&id.into()) {
                         ch.send(Err(KadAddProviderError(err).into())).ok();
                     }
                 }
@@ -234,24 +218,24 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBack
                     tracing::trace!("{:?}", err);
                 }
                 QueryResult::GetRecord(Ok(GetRecordOk { records, .. })) => {
-                    if let Some(QueryChannel::GetRecord(ch)) = self.queries.remove(&id.into()) {
+                    if let Some(QueryChannel::GetRecord(ch)) = queries.remove(&id.into()) {
                         ch.send(Ok(records)).ok();
                     }
                 }
                 QueryResult::GetRecord(Err(err)) => {
                     tracing::trace!("{:?}", err);
-                    if let Some(QueryChannel::GetRecord(ch)) = self.queries.remove(&id.into()) {
+                    if let Some(QueryChannel::GetRecord(ch)) = queries.remove(&id.into()) {
                         ch.send(Err(KadGetRecordError(err).into())).ok();
                     }
                 }
                 QueryResult::PutRecord(Ok(PutRecordOk { .. })) => {
-                    if let Some(QueryChannel::PutRecord(ch)) = self.queries.remove(&id.into()) {
+                    if let Some(QueryChannel::PutRecord(ch)) = queries.remove(&id.into()) {
                         ch.send(Ok(())).ok();
                     }
                 }
                 QueryResult::PutRecord(Err(err)) => {
                     tracing::trace!("{:?}", err);
-                    if let Some(QueryChannel::PutRecord(ch)) = self.queries.remove(&id.into()) {
+                    if let Some(QueryChannel::PutRecord(ch)) = queries.remove(&id.into()) {
                         ch.send(Err(KadPutRecordError(err).into())).ok();
                     }
                 }
@@ -264,15 +248,19 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<KademliaEvent> for NetworkBack
     }
 }
 
-impl<P: StoreParams> NetworkBehaviourEventProcess<BitswapEvent> for NetworkBackendBehaviour<P> {
-    fn inject_event(&mut self, event: BitswapEvent) {
+impl<P: StoreParams> NetworkBackendBehaviour<P> {
+    pub fn inject_bitswap_event(
+        &mut self,
+        event: BitswapEvent,
+        queries: &mut FnvHashMap<QueryId, QueryChannel>,
+    ) {
         match event {
             BitswapEvent::Progress(id, missing) => {
-                if let Some(QueryChannel::Sync(ch)) = self.queries.get(&id.into()) {
+                if let Some(QueryChannel::Sync(ch)) = queries.get(&id.into()) {
                     ch.unbounded_send(SyncEvent::Progress { missing }).ok();
                 }
             }
-            BitswapEvent::Complete(id, result) => match self.queries.remove(&id.into()) {
+            BitswapEvent::Complete(id, result) => match queries.remove(&id.into()) {
                 Some(QueryChannel::Get(ch)) => {
                     ch.send(result).ok();
                 }
@@ -285,8 +273,8 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<BitswapEvent> for NetworkBacke
     }
 }
 
-impl<P: StoreParams> NetworkBehaviourEventProcess<PingEvent> for NetworkBackendBehaviour<P> {
-    fn inject_event(&mut self, event: PingEvent) {
+impl<P: StoreParams> NetworkBackendBehaviour<P> {
+    pub fn inject_ping_event(&mut self, event: PingEvent) {
         // Don't really need to do anything here as ping handles disconnecting
         // automatically.
         let peer = event.peer;
@@ -313,8 +301,8 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<PingEvent> for NetworkBackendB
     }
 }
 
-impl<P: StoreParams> NetworkBehaviourEventProcess<IdentifyEvent> for NetworkBackendBehaviour<P> {
-    fn inject_event(&mut self, event: IdentifyEvent) {
+impl<P: StoreParams> NetworkBackendBehaviour<P> {
+    pub fn inject_id_event(&mut self, event: IdentifyEvent) {
         // When a peer opens a connection we only have it's outgoing address. The
         // identify protocol sends the listening address which needs to be
         // registered with kademlia.
@@ -328,8 +316,12 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<IdentifyEvent> for NetworkBack
 #[error("{0:?}")]
 pub struct GossipsubPublishError(pub libp2p::gossipsub::error::PublishError);
 
-impl<P: StoreParams> NetworkBehaviourEventProcess<GossipsubEvent> for NetworkBackendBehaviour<P> {
-    fn inject_event(&mut self, event: GossipsubEvent) {
+impl<P: StoreParams> NetworkBackendBehaviour<P> {
+    pub fn inject_gossip_event(
+        &mut self,
+        event: GossipsubEvent,
+        subscriptions: &mut FnvHashMap<String, Vec<mpsc::UnboundedSender<GossipEvent>>>,
+    ) {
         match event {
             GossipsubEvent::Message {
                 message:
@@ -345,50 +337,63 @@ impl<P: StoreParams> NetworkBehaviourEventProcess<GossipsubEvent> for NetworkBac
                 self.notify_subscribers(
                     &*topic.to_string(),
                     GossipEvent::Message(source.unwrap_or(propagation_source), data.into()),
+                    subscriptions,
                 );
             }
             GossipsubEvent::Subscribed { peer_id, topic, .. } => {
                 self.peers
                     .notify(Event::Subscribed(peer_id, topic.to_string()));
 
-                self.notify_subscribers(&*topic.to_string(), GossipEvent::Subscribed(peer_id));
+                self.notify_subscribers(
+                    &*topic.to_string(),
+                    GossipEvent::Subscribed(peer_id),
+                    subscriptions,
+                );
             }
             GossipsubEvent::Unsubscribed { peer_id, topic, .. } => {
                 self.peers
                     .notify(Event::Unsubscribed(peer_id, topic.to_string()));
-                self.notify_subscribers(&*topic.to_string(), GossipEvent::Unsubscribed(peer_id));
+                self.notify_subscribers(
+                    &*topic.to_string(),
+                    GossipEvent::Unsubscribed(peer_id),
+                    subscriptions,
+                );
             }
             GossipsubEvent::GossipsubNotSupported { .. } => {}
         }
     }
 }
 
-impl<P: StoreParams> NetworkBehaviourEventProcess<BroadcastEvent> for NetworkBackendBehaviour<P> {
-    fn inject_event(&mut self, event: BroadcastEvent) {
+impl<P: StoreParams> NetworkBackendBehaviour<P> {
+    pub fn inject_broadcast_event(
+        &mut self,
+        event: BroadcastEvent,
+        subscriptions: &mut FnvHashMap<String, Vec<mpsc::UnboundedSender<GossipEvent>>>,
+    ) {
         match event {
             BroadcastEvent::Received(peer_id, topic, data) => {
                 let topic = std::str::from_utf8(&topic).unwrap();
-                self.notify_subscribers(topic, GossipEvent::Message(peer_id, data));
+                self.notify_subscribers(topic, GossipEvent::Message(peer_id, data), subscriptions);
             }
             BroadcastEvent::Subscribed(peer_id, topic) => {
                 if let Ok(topic) = std::str::from_utf8(&topic) {
                     self.peers.notify(Event::Subscribed(peer_id, topic.into()));
-                    self.notify_subscribers(topic, GossipEvent::Subscribed(peer_id));
+                    self.notify_subscribers(topic, GossipEvent::Subscribed(peer_id), subscriptions);
                 }
             }
             BroadcastEvent::Unsubscribed(peer_id, topic) => {
                 if let Ok(topic) = std::str::from_utf8(&topic) {
                     self.peers
                         .notify(Event::Unsubscribed(peer_id, topic.into()));
-                    self.notify_subscribers(topic, GossipEvent::Unsubscribed(peer_id));
+                    self.notify_subscribers(
+                        topic,
+                        GossipEvent::Unsubscribed(peer_id),
+                        subscriptions,
+                    );
                 }
             }
         }
     }
-}
-
-impl<P: StoreParams> NetworkBehaviourEventProcess<void::Void> for NetworkBackendBehaviour<P> {
-    fn inject_event(&mut self, _event: void::Void) {}
 }
 
 impl<P: StoreParams> NetworkBackendBehaviour<P> {
@@ -396,8 +401,10 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
     pub async fn new<S: BitswapStore<Params = P>>(
         config: &mut NetworkConfig,
         store: S,
+        listeners: Writer<FnvHashSet<Multiaddr>>,
+        peers: Writer<FnvHashMap<PeerId, PeerInfo>>,
+        external: Writer<Vec<AddressRecord>>,
     ) -> Result<Self> {
-        let public = config.node_key.public();
         let node_key = libp2p::identity::Keypair::Ed25519(config.node_key.clone());
         let node_name = config.node_name.clone();
         let peer_id = node_key.public().to_peer_id();
@@ -433,13 +440,13 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             .take()
             .map(|config| Bitswap::new(config, store));
         Ok(Self {
-            bootstrap_complete: false,
             peers: AddressBook::new(
                 peer_id,
-                node_name,
-                public,
                 config.port_reuse,
                 config.enable_loopback,
+                listeners,
+                peers,
+                external,
             ),
             mdns: mdns.into(),
             kad: kad.into(),
@@ -448,17 +455,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             bitswap: bitswap.into(),
             gossipsub: gossipsub.into(),
             broadcast: broadcast.into(),
-            queries: Default::default(),
-            subscriptions: Default::default(),
         })
-    }
-
-    pub fn local_public_key(&self) -> &PublicKey {
-        self.peers.local_public_key()
-    }
-
-    pub fn local_node_name(&self) -> &str {
-        self.peers.local_node_name()
     }
 
     pub fn add_address(&mut self, peer_id: &PeerId, addr: Multiaddr, source: AddressSource) {
@@ -498,30 +495,15 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             .connection_closed(peer, cp, num_established, error);
     }
 
-    pub fn peers(&self) -> impl Iterator<Item = &PeerId> + '_ {
-        self.peers.peers()
-    }
-
-    pub fn info(&self, peer_id: &PeerId) -> Option<&PeerInfo> {
-        self.peers.info(peer_id)
-    }
-
-    pub fn connections(
-        &self,
-    ) -> impl Iterator<Item = (PeerId, &Multiaddr, DateTime<Utc>, Direction)> {
-        self.peers.connections()
-    }
-
-    pub fn is_connected(&self, peer: &PeerId) -> bool {
-        self.peers.is_connected(peer)
-    }
-
-    pub fn bootstrap(&mut self) -> BootstrapChannel {
-        let (tx, rx) = oneshot::channel();
+    pub fn bootstrap(
+        &mut self,
+        queries: &mut FnvHashMap<QueryId, QueryChannel>,
+        tx: oneshot::Sender<Result<()>>,
+    ) {
         if let Some(kad) = self.kad.as_mut() {
             match kad.bootstrap() {
                 Ok(id) => {
-                    self.queries.insert(id.into(), QueryChannel::Bootstrap(tx));
+                    queries.insert(id.into(), QueryChannel::Bootstrap(tx));
                 }
                 Err(err) => {
                     tx.send(Err(err.into())).ok();
@@ -530,38 +512,41 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         } else {
             tx.send(Err(NotBootstrapped.into())).ok();
         }
-        rx
     }
 
-    pub fn is_bootstrapped(&self) -> bool {
-        self.bootstrap_complete
-    }
+    // pub fn get_closest_peers<K>(
+    //     &mut self,
+    //     key: K,
+    //     bootstrap_complete: bool,
+    //     queries: &mut FnvHashMap<QueryId, QueryChannel>,
+    // ) -> GetClosestPeersChannel
+    // where
+    //     K: Into<BucketKey<K>> + Into<Vec<u8>> + Clone,
+    // {
+    //     let (tx, rx) = oneshot::channel();
+    //     if bootstrap_complete {
+    //         if let Some(kad) = self.kad.as_mut() {
+    //             let id = kad.get_closest_peers(key);
+    //             queries.insert(id.into(), QueryChannel::GetClosestPeers(tx));
+    //         }
+    //     } else {
+    //         tx.send(Err(NotBootstrapped.into())).ok();
+    //     }
+    //     rx
+    // }
 
-    pub fn get_closest_peers<K>(&mut self, key: K) -> GetClosestPeersChannel
-    where
-        K: Into<BucketKey<K>> + Into<Vec<u8>> + Clone,
-    {
-        let (tx, rx) = oneshot::channel();
-        if self.bootstrap_complete {
-            if let Some(kad) = self.kad.as_mut() {
-                let id = kad.get_closest_peers(key);
-                self.queries
-                    .insert(id.into(), QueryChannel::GetClosestPeers(tx));
-            }
-        } else {
-            tx.send(Err(NotBootstrapped.into())).ok();
-        }
-        rx
-    }
-
-    pub fn provide(&mut self, key: Key) -> StartProvidingChannel {
-        let (tx, rx) = oneshot::channel();
-        if self.bootstrap_complete {
+    pub fn provide(
+        &mut self,
+        key: Key,
+        bootstrap_complete: bool,
+        queries: &mut FnvHashMap<QueryId, QueryChannel>,
+        tx: oneshot::Sender<Result<()>>,
+    ) {
+        if bootstrap_complete {
             if let Some(kad) = self.kad.as_mut() {
                 match kad.start_providing(key) {
                     Ok(id) => {
-                        self.queries
-                            .insert(id.into(), QueryChannel::StartProviding(tx));
+                        queries.insert(id.into(), QueryChannel::StartProviding(tx));
                     }
                     Err(err) => {
                         tx.send(Err(KadStoreError(err).into())).ok();
@@ -571,7 +556,6 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         } else {
             tx.send(Err(NotBootstrapped.into())).ok();
         }
-        rx
     }
 
     pub fn unprovide(&mut self, key: &Key) {
@@ -580,40 +564,54 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         }
     }
 
-    pub fn providers(&mut self, key: Key) -> GetProvidersChannel {
-        let (tx, rx) = oneshot::channel();
-        if self.bootstrap_complete {
+    pub fn providers(
+        &mut self,
+        key: Key,
+        bootstrap_complete: bool,
+        queries: &mut FnvHashMap<QueryId, QueryChannel>,
+        tx: oneshot::Sender<Result<HashSet<PeerId>>>,
+    ) {
+        if bootstrap_complete {
             if let Some(kad) = self.kad.as_mut() {
                 let id = kad.get_providers(key);
-                self.queries
-                    .insert(id.into(), QueryChannel::GetProviders(tx));
+                queries.insert(id.into(), QueryChannel::GetProviders(tx));
             }
         } else {
             tx.send(Err(NotBootstrapped.into())).ok();
         }
-        rx
     }
 
-    pub fn get_record(&mut self, key: Key, quorum: Quorum) -> GetRecordChannel {
-        let (tx, rx) = oneshot::channel();
-        if self.bootstrap_complete {
+    pub fn get_record(
+        &mut self,
+        key: Key,
+        quorum: Quorum,
+        bootstrap_complete: bool,
+        queries: &mut FnvHashMap<QueryId, QueryChannel>,
+        tx: oneshot::Sender<Result<Vec<PeerRecord>>>,
+    ) {
+        if bootstrap_complete {
             if let Some(kad) = self.kad.as_mut() {
                 let id = kad.get_record(key, quorum);
-                self.queries.insert(id.into(), QueryChannel::GetRecord(tx));
+                queries.insert(id.into(), QueryChannel::GetRecord(tx));
             }
         } else {
             tx.send(Err(NotBootstrapped.into())).ok();
         }
-        rx
     }
 
-    pub fn put_record(&mut self, record: Record, quorum: Quorum) -> PutRecordChannel {
-        let (tx, rx) = oneshot::channel();
-        if self.bootstrap_complete {
+    pub fn put_record(
+        &mut self,
+        record: Record,
+        quorum: Quorum,
+        bootstrap_complete: bool,
+        queries: &mut FnvHashMap<QueryId, QueryChannel>,
+        tx: oneshot::Sender<Result<()>>,
+    ) {
+        if bootstrap_complete {
             if let Some(kad) = self.kad.as_mut() {
                 match kad.put_record(record, quorum) {
                     Ok(id) => {
-                        self.queries.insert(id.into(), QueryChannel::PutRecord(tx));
+                        queries.insert(id.into(), QueryChannel::PutRecord(tx));
                     }
                     Err(err) => {
                         tx.send(Err(KadStoreError(err).into())).ok();
@@ -623,7 +621,6 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         } else {
             tx.send(Err(NotBootstrapped.into())).ok();
         }
-        rx
     }
 
     pub fn remove_record(&mut self, key: &Key) {
@@ -632,18 +629,21 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         }
     }
 
-    pub fn subscribe(&mut self, topic: &str) -> Result<impl Stream<Item = GossipEvent>> {
+    pub fn subscribe(
+        &mut self,
+        topic: &str,
+        subscriptions: &mut FnvHashMap<String, Vec<mpsc::UnboundedSender<GossipEvent>>>,
+    ) -> Result<mpsc::UnboundedReceiver<GossipEvent>> {
         if self.gossipsub.as_ref().is_none() && self.broadcast.as_ref().is_none() {
             return Err(DisabledProtocol("gossipsub and broadcast").into());
         }
         let (tx, rx) = mpsc::unbounded();
-        if let Some(subscribers) = self.subscriptions.get_mut(topic) {
+        if let Some(subscribers) = subscriptions.get_mut(topic) {
             subscribers.push(tx);
         } else {
             let gossip_topic = IdentTopic::new(topic);
             let broadcast_topic = Topic::new(gossip_topic.hash().as_str().as_ref());
-            self.subscriptions
-                .insert(gossip_topic.hash().as_str().to_string(), vec![tx]);
+            subscriptions.insert(gossip_topic.hash().as_str().to_string(), vec![tx]);
             if let Some(gossipsub) = self.gossipsub.as_mut() {
                 gossipsub
                     .subscribe(&gossip_topic)
@@ -669,12 +669,17 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         }
     }
 
-    fn notify_subscribers(&mut self, topic: &str, event: GossipEvent) {
-        if let Some(subscribers) = self.subscriptions.get_mut(topic) {
+    fn notify_subscribers(
+        &mut self,
+        topic: &str,
+        event: GossipEvent,
+        subscriptions: &mut FnvHashMap<String, Vec<mpsc::UnboundedSender<GossipEvent>>>,
+    ) {
+        if let Some(subscribers) = subscriptions.get_mut(topic) {
             subscribers.retain(|subscriber| subscriber.unbounded_send(event.clone()).is_ok());
             if subscribers.is_empty() {
                 self.unsubscribe(topic);
-                self.subscriptions.remove(topic);
+                subscriptions.remove(topic);
             }
         }
     }
@@ -711,11 +716,12 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         &mut self,
         cid: Cid,
         providers: impl Iterator<Item = PeerId>,
+        queries: &mut FnvHashMap<QueryId, QueryChannel>,
     ) -> (GetChannel, QueryId) {
         let bitswap = self.bitswap.as_mut().expect("bitswap enabled");
         let (tx, rx) = oneshot::channel();
         let id = bitswap.get(cid, providers);
-        self.queries.insert(id.into(), QueryChannel::Get(tx));
+        queries.insert(id.into(), QueryChannel::Get(tx));
         (rx, id.into())
     }
 
@@ -724,30 +730,23 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         cid: Cid,
         providers: Vec<PeerId>,
         missing: impl Iterator<Item = Cid>,
+        queries: &mut FnvHashMap<QueryId, QueryChannel>,
     ) -> (SyncChannel, QueryId) {
         let bitswap = self.bitswap.as_mut().expect("bitswap enabled");
         let (tx, rx) = mpsc::unbounded();
         let id = bitswap.sync(cid, providers, missing);
-        self.queries.insert(id.into(), QueryChannel::Sync(tx));
+        queries.insert(id.into(), QueryChannel::Sync(tx));
         (rx, id.into())
     }
 
-    pub fn cancel(&mut self, id: QueryId) {
-        self.queries.remove(&id);
+    pub fn cancel(&mut self, id: QueryId, queries: &mut FnvHashMap<QueryId, QueryChannel>) {
+        queries.remove(&id);
         if let QueryId(InnerQueryId::Bitswap(id)) = id {
             self.bitswap.as_mut().unwrap().cancel(id);
         }
     }
 
-    pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
-        if let Some(bitswap) = self.bitswap.as_ref() {
-            bitswap.register_metrics(registry)?;
-        }
-        self.peers.register_metrics(registry)?;
-        Ok(())
-    }
-
-    pub fn swarm_events(&mut self) -> SwarmEvents {
-        self.peers.swarm_events()
+    pub fn swarm_events(&mut self, tx: UnboundedSender<Event>) {
+        self.peers.swarm_events(tx)
     }
 }

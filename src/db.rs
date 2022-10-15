@@ -347,7 +347,7 @@ where
     } else {
         timer.stop_and_discard();
     }
-    Ok(res?)
+    res
 }
 
 struct SqliteStoreCollector<S: StoreParams> {
