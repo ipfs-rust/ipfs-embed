@@ -113,41 +113,34 @@ async fn run() -> Result<()> {
         line.clear();
         stdin.read_line(&mut line)?;
         #[allow(clippy::unit_arg)]
-        let result = match line.parse()? {
-            Command::AddAddress(peer, addr) => Ok(ipfs.lock().add_address(peer, addr)),
-            Command::Dial(peer) => Ok(ipfs.lock().dial(peer)),
-            Command::PrunePeers => Ok(ipfs.lock().prune_peers(Duration::ZERO)),
-            Command::Get(cid) => match ipfs.lock().get(&cid) {
-                Ok(block) => {
-                    writeln!(stdout, "{}", Event::Block(block))?;
-                    Ok(())
-                }
-                Err(err) => Err(err),
-            },
-            Command::Insert(block) => ipfs.lock().insert(block),
-            Command::Alias(alias, cid) => ipfs.lock().alias(&alias, cid.as_ref()),
-            Command::Flush =>
-            {
-                #[allow(clippy::await_holding_lock)]
-                match ipfs.lock().flush().await {
-                    Ok(_) => {
-                        writeln!(stdout, "{}", Event::Flushed)?;
-                        Ok(())
-                    }
-                    Err(err) => Err(err),
-                }
+        let result = match line.parse() {
+            Ok(Command::AddAddress(peer, addr)) => Ok(ipfs.lock().add_address(peer, addr)),
+            Ok(Command::Dial(peer)) => Ok(ipfs.lock().dial(peer)),
+            Ok(Command::PrunePeers) => Ok(ipfs.lock().prune_peers(Duration::ZERO)),
+            Ok(Command::Get(cid)) => ipfs
+                .lock()
+                .get(&cid)
+                .map(|block| writeln!(stdout, "{}", Event::Block(block)).expect("print")),
+            Ok(Command::Insert(block)) => ipfs.lock().insert(block),
+            Ok(Command::Alias(alias, cid)) => ipfs.lock().alias(&alias, cid.as_ref()),
+            Ok(Command::Flush) => {
+                let f = ipfs
+                    .lock()
+                    .flush()
+                    .inspect_ok(|_| writeln!(stdout, "{}", Event::Flushed).expect("print"));
+                f.await
             }
-            Command::Sync(cid) => {
+            Ok(Command::Sync(cid)) => {
                 let providers = ipfs.lock().peers();
                 tracing::debug!("sync {} from {:?}", cid, providers);
-                match ipfs.lock().sync(&cid, providers).and_then(|f| f).await {
-                    Ok(_) => {
-                        writeln!(stdout, "{}", Event::Synced)?;
-                        Ok(())
-                    }
-                    Err(err) => Err(err),
-                }
+                let f = ipfs
+                    .lock()
+                    .sync(&cid, providers)
+                    .and_then(|f| f)
+                    .inspect_ok(|_| writeln!(stdout, "{}", Event::Synced).expect("print"));
+                f.await
             }
+            Err(err) => Err(err),
         };
         if let Err(err) = result {
             eprintln!("main loop error (line = {}): {}", line, err);

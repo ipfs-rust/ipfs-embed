@@ -385,8 +385,8 @@ where
     /// Manually runs garbage collection to completion. This is mainly useful
     /// for testing and administrative interfaces. During normal operation,
     /// the garbage collector automatically runs in the background.
-    pub async fn evict(&self) -> Result<()> {
-        self.storage.evict().await
+    pub fn evict(&self) -> impl Future<Output = Result<()>> {
+        self.storage.evict()
     }
 
     pub fn sync(
@@ -422,8 +422,8 @@ where
 
     /// Flushes the block store. After `flush` completes successfully it is
     /// guaranteed that all writes have been persisted to disk.
-    pub async fn flush(&self) -> Result<()> {
-        self.storage.flush().await
+    pub fn flush(&self) -> impl Future<Output = Result<()>> {
+        self.storage.flush()
     }
 
     /// Perform a set of storage operations in a batch

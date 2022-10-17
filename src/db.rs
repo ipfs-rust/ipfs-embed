@@ -275,31 +275,29 @@ where
         self.rw("missing_blocks", |x| x.missing_blocks(cid))
     }
 
-    pub async fn evict(&self) -> Result<()> {
+    pub fn evict(&self) -> impl Future<Output = Result<()>> {
         let store = self.inner.store.clone();
         let gc_min_blocks = self.inner.gc_min_blocks;
         let gc_target_duration = self.inner.gc_target_duration;
-        self.inner
-            .executor
-            .spawn_blocking(move || {
-                while !store
-                    .lock()
-                    .incremental_gc(gc_min_blocks, gc_target_duration)?
-                {
-                    tracing::trace!("x");
-                }
-                Ok(())
-            })
-            .await?
+        let evict = self.inner.executor.spawn_blocking(move || {
+            while !store
+                .lock()
+                .incremental_gc(gc_min_blocks, gc_target_duration)?
+            {
+                tracing::trace!("x");
+            }
+            Ok(())
+        });
+        async { evict.await? }
     }
 
-    pub async fn flush(&self) -> Result<()> {
+    pub fn flush(&self) -> impl Future<Output = Result<()>> {
         let store = self.inner.store.clone();
         let flush = self
             .inner
             .executor
             .spawn_blocking(move || store.lock().flush());
-        Ok(observe_future("flush", flush).await??)
+        async { Ok(observe_future("flush", flush).await??) }
     }
 
     pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
