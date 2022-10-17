@@ -110,8 +110,11 @@ fn main() -> anyhow::Result<()> {
                             // we can’t attempt to dial while the connection exists
                             i.addresses.get(&i.connections[0]).map(|s| s.as_str()) ==
                                 Some("Candidate")
-                            // can’t check for full hashmap equality since the state where only the
-                            // Candidate is present may be lost to output race conditions
+                                // can’t check for full hashmap equality since the state where only the
+                                // Candidate is present may be lost to output race conditions
+                            || i.addresses.is_empty()
+                                // if consumer sent identify first, then the NAT address wasn’t known
+                                // and only falsifiable listen addresses are left
                         ))
                         .then(|| ())
                     })
@@ -137,22 +140,30 @@ fn main() -> anyhow::Result<()> {
                         .deadline(started, 30)
                         .await
                         .unwrap();
-                    m.drain_matching(|e| matches!(e, Event::DialFailure(p, ..) if p == peer));
+                    m.drain_matching(|e| matches!(e, Event::DialFailure(p, ..) | Event::Unreachable(p) if p == peer));
                     tracing::info!("provider {} saw close from {}", id, m_id);
                     m.send(Command::Dial(*peer));
-                    m.select(|e| matches!(e, Event::DialFailure(p, ..) if p == peer).then(|| ()))
+                    let alive = m
+                        .select(|e| match e {
+                            Event::DialFailure(p, ..) | Event::Unreachable(p) if p == peer => Some(true),
+                            Event::PeerRemoved(p) if p == peer => Some(false),
+                            _ => None,
+                        })
+                        .timeout(10)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    if alive {
+                        m.send(Command::PrunePeers);
+                        m.select(|e| {
+                            // prune_peers will remove the peer when a failure happens while not
+                            // connected
+                            matches!(e, Event::PeerRemoved(p) if p == peer).then(|| ())
+                        })
                         .timeout(10)
                         .await
                         .unwrap();
-                    m.send(Command::PrunePeers);
-                    m.select(|e| {
-                        // prune_peers will remove the peer when a failure happens while not
-                        // connected
-                        matches!(e, Event::PeerRemoved(p) if p == peer).then(|| ())
-                    })
-                    .timeout(10)
-                    .await
-                    .unwrap();
+                    }
                     tracing::info!("provider {} done with {}", id, m_id);
                 }
             }

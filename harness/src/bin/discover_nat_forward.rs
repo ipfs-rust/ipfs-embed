@@ -141,12 +141,12 @@ fn main() -> anyhow::Result<()> {
                         Event::PeerInfo(p, i) if p == peer => Some(i.connections[0].clone()),
                         _ => None
                     }).timeout(1).await.unwrap().unwrap();
-                    tracing::info!("first address is {}", a_1);
                     // the NAT may give us the correct port in a_1 already, so no second entry to
                     // check
                     let a_nat = a_1
                         .replace(1, |_| Some(Protocol::Tcp(30000)))
                         .filter(|a| *m_id == m_nat && *a != a_1);
+                    tracing::info!("first address is {}, a_nat={:?}", a_1, a_nat);
                     m.select(|e| {
                         matches!(e, Event::PeerInfo(p, i) if p == peer && (
                             // port_reuse unfortunately means that the NATed port is added to
@@ -156,10 +156,13 @@ fn main() -> anyhow::Result<()> {
                             a_nat.iter().all(|a_nat| {
                                 i.addresses.get(a_nat).map(|x| x.as_str()) == Some("Dial")
                             }))
+                            // if consumer sent identify first, then the NAT address wasn’t known
+                            // and only falsifiable listen addresses are left
+                            || i.addresses.is_empty()
                         )
                         .then(|| ())
                     })
-                    .deadline(started, 5).await.unwrap();
+                    .deadline(started, 10).await.unwrap();
                     tracing::info!("provider {} identified {}", id, m_id);
                 }
                 m.drain();
@@ -190,11 +193,21 @@ fn main() -> anyhow::Result<()> {
                 let m = sim.machine(*id);
                 for (m_id, (peer, _addr)) in consumers.iter() {
                     m.send(Command::Dial(*peer));
-                    m.select(|e| matches!(e, Event::DialFailure(p, ..) if p == peer).then(|| ()))
-                        .timeout(10).await.unwrap();
-                    m.send(Command::PrunePeers);
-                    m.select(|e| matches!(e, Event::PeerRemoved(p) if p == peer).then(|| ()))
-                        .timeout(10).await.unwrap();
+                    let alive = m
+                        .select(|e| match e {
+                            Event::DialFailure(p, ..) | Event::Unreachable(p) if p == peer => Some(true),
+                            Event::PeerRemoved(p) if p == peer => Some(false),
+                            _ => None,
+                        })
+                        .timeout(10)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    if alive {
+                        m.send(Command::PrunePeers);
+                        m.select(|e| matches!(e, Event::PeerRemoved(p) if p == peer).then(|| ()))
+                            .timeout(10).await.unwrap();
+                    }
                     tracing::info!("provider {} done with {}", id, m_id);
                 }
             }
