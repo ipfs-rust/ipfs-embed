@@ -45,8 +45,8 @@ async fn main() -> Result<()> {
         .init();
     let mut config = Config::new("/tmp/local1".as_ref(), Keypair::generate());
     config.network.kad = None;
-    let a = Ipfs::<DefaultParams>::new(config).await?;
-    a.listen_on("/ip4/127.0.0.1/tcp/0".parse()?)?
+    let mut a = Ipfs::<DefaultParams>::new(config).await?;
+    a.listen_on("/ip4/127.0.0.1/tcp/0".parse()?)
         .next()
         .await
         .unwrap();
@@ -76,6 +76,7 @@ async fn main() -> Result<()> {
 
     b.alias(ROOT, builder.prev.as_ref())?;
     b.sync(builder.prev.as_ref().unwrap(), vec![a.local_peer_id()])
+        .await?
         .await?;
     b.flush().await?;
 

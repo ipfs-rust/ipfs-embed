@@ -3,12 +3,12 @@ use super::{
     behaviour::MyHandlerError,
     peer_info::{AddressSource, Direction, PeerInfo},
 };
-use crate::net::peer_info::ConnectionFailure;
+use crate::{net::peer_info::ConnectionFailure, variable::Writer};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use fnv::{FnvHashMap, FnvHashSet};
 use futures::{
-    channel::mpsc,
+    channel::mpsc::{self, UnboundedSender},
     future::BoxFuture,
     stream::{FuturesUnordered, Stream},
     FutureExt, StreamExt,
@@ -16,13 +16,16 @@ use futures::{
 use futures_timer::Delay;
 use lazy_static::lazy_static;
 use libp2p::{
-    core::connection::{ConnectedPoint, ConnectionId, ListenerId},
+    core::{
+        connection::{ConnectedPoint, ConnectionId},
+        transport::ListenerId,
+    },
     identify::IdentifyInfo,
-    identity::ed25519::PublicKey,
     multiaddr::Protocol,
     swarm::{
         dial_opts::{DialOpts, PeerCondition},
-        ConnectionError, DialError, NetworkBehaviour, NetworkBehaviourAction, PollParameters,
+        AddressRecord, ConnectionError, DialError, NetworkBehaviour, NetworkBehaviourAction,
+        PollParameters,
     },
     Multiaddr, PeerId,
 };
@@ -186,11 +189,11 @@ impl MultiaddrExt for Multiaddr {
 pub struct AddressBook {
     port_reuse: bool,
     enable_loopback: bool,
-    local_node_name: String,
     local_peer_id: PeerId,
-    local_public_key: PublicKey,
-    listeners: FnvHashSet<Multiaddr>,
-    peers: FnvHashMap<PeerId, PeerInfo>,
+    listeners: Writer<FnvHashSet<Multiaddr>>,
+    peers: Writer<FnvHashMap<PeerId, PeerInfo>>,
+    external: Writer<Vec<AddressRecord>>,
+    refresh_external: bool,
     event_stream: Vec<mpsc::UnboundedSender<Event>>,
     pub(crate) actions: VecDeque<NetworkBehaviourAction<void::Void, IntoAddressHandler>>,
     deferred: FuturesUnordered<
@@ -201,31 +204,24 @@ pub struct AddressBook {
 impl AddressBook {
     pub fn new(
         local_peer_id: PeerId,
-        local_node_name: String,
-        local_public_key: PublicKey,
         port_reuse: bool,
         enable_loopback: bool,
+        listeners: Writer<FnvHashSet<Multiaddr>>,
+        peers: Writer<FnvHashMap<PeerId, PeerInfo>>,
+        external: Writer<Vec<AddressRecord>>,
     ) -> Self {
         Self {
             port_reuse,
             enable_loopback,
-            local_node_name,
             local_peer_id,
-            local_public_key,
-            listeners: Default::default(),
-            peers: Default::default(),
+            listeners,
+            peers,
+            external,
+            refresh_external: true,
             event_stream: Default::default(),
             actions: Default::default(),
             deferred: Default::default(),
         }
-    }
-
-    pub fn local_public_key(&self) -> &PublicKey {
-        &self.local_public_key
-    }
-
-    pub fn local_node_name(&self) -> &str {
-        &self.local_node_name
     }
 
     pub fn local_peer_id(&self) -> &PeerId {
@@ -251,12 +247,14 @@ impl AddressBook {
             return;
         }
         let target = normalize_addr_ref(&addr, peer);
-        if let Some(info) = self.peers.get(peer) {
-            if info.connections.contains_key(target.as_ref()) {
-                tracing::debug!(peer = %peer, addr = %&addr,
+        let mut peers = self.peers.write();
+        let info = peers.entry(*peer).or_default();
+        if info.connections.contains_key(target.as_ref()) {
+            tracing::debug!(peer = %peer, addr = %&addr,
                     "skipping dial since already connected");
-            }
+            return;
         }
+        drop(peers);
         tracing::debug!(peer = %peer, addr = %&addr, "request dialing");
         let handler = IntoAddressHandler(Some((target.into_owned(), SIM_OPEN_RETRIES + 1)));
         self.actions.push_back(NetworkBehaviourAction::Dial {
@@ -274,6 +272,7 @@ impl AddressBook {
         }
         let discovered = self
             .peers
+            .read()
             .get(peer)
             .filter(|info| info.confirmed_addresses().next().is_some())
             .is_none();
@@ -285,13 +284,16 @@ impl AddressBook {
             }
             Cow::Owned(a) => a,
         };
-        if !self.listeners.contains(&address) {
+        let is_listener = self.listeners.read().contains(&address);
+        if !is_listener {
             // addr_full is with peerId, address is guaranteed without
             tracing::debug!(peer = %peer, "adding address {} from {:?}", address, source);
-            let info = self.peers.entry(*peer).or_default();
-            if info.ingest_address(addr_full.clone(), source)
-                && !info.connections.contains_key(&addr_full)
-            {
+            let mut peers = self.peers.write();
+            let info = peers.entry(*peer).or_default();
+            let result = info.ingest_address(addr_full.clone(), source)
+                && !info.connections.contains_key(&addr_full);
+            drop(peers);
+            if result {
                 self.actions.push_back(NetworkBehaviourAction::Dial {
                     opts: DialOpts::peer_id(*peer)
                         .condition(PeerCondition::Always)
@@ -311,7 +313,7 @@ impl AddressBook {
     }
 
     pub fn remove_address(&mut self, peer: &PeerId, address: &Multiaddr) {
-        if let Some(info) = self.peers.get_mut(peer) {
+        if let Some(info) = self.peers.write().get_mut(peer) {
             let address = normalize_addr_ref(address, peer);
             tracing::trace!("removing address {}", address);
             info.addresses.remove(&address);
@@ -322,7 +324,7 @@ impl AddressBook {
         let _span = tracing::trace_span!("prune_peers").entered();
         let now = Utc::now();
         let mut remove = Vec::new();
-        'l: for (peer, info) in self.peers.iter() {
+        'l: for (peer, info) in self.peers.read().iter() {
             if info.connections().next().is_some() {
                 tracing::trace!(peer = %peer, "keeping connected");
                 continue;
@@ -350,7 +352,7 @@ impl AddressBook {
             remove.push(*peer);
         }
         for peer in remove {
-            self.peers.remove(&peer);
+            self.peers.write().remove(&peer);
             self.notify(Event::NewInfo(peer));
         }
     }
@@ -395,7 +397,8 @@ impl AddressBook {
             reason
         );
 
-        let entry = self.peers.entry(peer).or_default();
+        let mut peers = self.peers.write();
+        let entry = peers.entry(peer).or_default();
         entry.connections.remove(addr);
         let addr_no_peer = without_peer_id(addr);
         let failure = if peer_closed {
@@ -404,6 +407,8 @@ impl AddressBook {
             ConnectionFailure::us(addr_no_peer, reason, debug)
         };
         entry.push_failure(addr, failure, false);
+        drop(peers);
+
         self.notify(Event::ConnectionClosed(peer, conn));
         if num_established == 0 {
             self.notify(Event::Disconnected(peer));
@@ -411,42 +416,29 @@ impl AddressBook {
         self.notify(Event::NewInfo(peer));
     }
 
-    pub fn peers(&self) -> impl Iterator<Item = &PeerId> + '_ {
-        self.peers.keys()
+    #[cfg(test)]
+    pub fn peers(&self) -> Vec<PeerId> {
+        self.peers.read().keys().copied().collect()
     }
 
-    pub fn connections(
-        &self,
-    ) -> impl Iterator<Item = (PeerId, &Multiaddr, DateTime<Utc>, Direction)> {
-        self.peers.iter().flat_map(|(peer, info)| {
-            info.connections
-                .iter()
-                .map(move |(a, t)| (*peer, a, t.0, t.1))
-        })
-    }
-
-    pub fn is_connected(&self, peer: &PeerId) -> bool {
-        self.peers
-            .get(peer)
-            .map(|info| !info.connections.is_empty())
-            .unwrap_or(false)
-            || peer == self.local_peer_id()
-    }
-
-    pub fn info(&self, peer_id: &PeerId) -> Option<&PeerInfo> {
-        self.peers.get(peer_id)
+    #[cfg(test)]
+    pub fn info(&self, peer_id: &PeerId) -> Option<PeerInfo> {
+        self.peers.read().get(peer_id).cloned()
     }
 
     pub fn set_rtt(&mut self, peer_id: &PeerId, rtt: Option<Duration>) {
-        if let Some(info) = self.peers.get_mut(peer_id) {
+        let mut peers = self.peers.write();
+        if let Some(info) = peers.get_mut(peer_id) {
             info.set_rtt(rtt);
+            drop(peers);
             self.notify(Event::NewInfo(*peer_id));
         }
     }
 
     pub fn set_info(&mut self, peer_id: &PeerId, identify: IdentifyInfo) {
         let _span = tracing::trace_span!("set_info", peer = %peer_id).entered();
-        if let Some(info) = self.peers.get_mut(peer_id) {
+        let mut peers = self.peers.write();
+        if let Some(info) = peers.get_mut(peer_id) {
             info.protocol_version = Some(identify.protocol_version);
             info.agent_version = Some(identify.agent_version);
             info.protocols = identify.protocols;
@@ -522,7 +514,7 @@ impl AddressBook {
             for addr in translated {
                 let mut tcp = addr.clone();
                 tcp.pop();
-                if self.listeners.contains(&tcp) {
+                if self.listeners.read().contains(&tcp) {
                     // diallling our own listener somehow breaks the Swarm
                     tracing::trace!("not adding self-addr {}", tcp);
                     continue;
@@ -549,14 +541,13 @@ impl AddressBook {
                     }
                 }
             }
+            drop(peers);
             self.notify(Event::NewInfo(*peer_id));
         }
     }
 
-    pub fn swarm_events(&mut self) -> SwarmEvents {
-        let (tx, rx) = mpsc::unbounded();
+    pub fn swarm_events(&mut self, tx: UnboundedSender<Event>) {
         self.event_stream.push(tx);
-        SwarmEvents(rx)
     }
 
     pub fn notify(&mut self, event: Event) {
@@ -564,19 +555,19 @@ impl AddressBook {
         self.event_stream
             .retain(|tx| tx.unbounded_send(event.clone()).is_ok());
     }
+}
 
-    pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
-        registry.register(Box::new(LISTENERS.clone()))?;
-        registry.register(Box::new(LISTEN_ADDRS.clone()))?;
-        registry.register(Box::new(EXTERNAL_ADDRS.clone()))?;
-        registry.register(Box::new(DISCOVERED.clone()))?;
-        registry.register(Box::new(CONNECTED.clone()))?;
-        registry.register(Box::new(CONNECTIONS.clone()))?;
-        registry.register(Box::new(LISTENER_ERROR.clone()))?;
-        registry.register(Box::new(ADDRESS_REACH_FAILURE.clone()))?;
-        registry.register(Box::new(DIAL_FAILURE.clone()))?;
-        Ok(())
-    }
+pub fn register_metrics(registry: &Registry) -> Result<()> {
+    registry.register(Box::new(LISTENERS.clone()))?;
+    registry.register(Box::new(LISTEN_ADDRS.clone()))?;
+    registry.register(Box::new(EXTERNAL_ADDRS.clone()))?;
+    registry.register(Box::new(DISCOVERED.clone()))?;
+    registry.register(Box::new(CONNECTED.clone()))?;
+    registry.register(Box::new(CONNECTIONS.clone()))?;
+    registry.register(Box::new(LISTENER_ERROR.clone()))?;
+    registry.register(Box::new(ADDRESS_REACH_FAILURE.clone()))?;
+    registry.register(Box::new(DIAL_FAILURE.clone()))?;
+    Ok(())
 }
 
 fn ip_port(m: &Multiaddr) -> Option<(IpAddr, u16)> {
@@ -600,7 +591,14 @@ fn diff_time(former: DateTime<Utc>, latter: DateTime<Utc>) -> Duration {
         .unwrap_or(Duration::ZERO)
 }
 
+#[derive(Debug)]
 pub struct SwarmEvents(mpsc::UnboundedReceiver<Event>);
+
+impl SwarmEvents {
+    pub fn new(channel: mpsc::UnboundedReceiver<Event>) -> Self {
+        Self(channel)
+    }
+}
 
 impl Stream for SwarmEvents {
     type Item = Event;
@@ -619,7 +617,7 @@ impl NetworkBehaviour for AddressBook {
     }
 
     fn addresses_of_peer(&mut self, peer_id: &PeerId) -> Vec<Multiaddr> {
-        if let Some(info) = self.peers.get(peer_id) {
+        if let Some(info) = self.peers.read().get(peer_id) {
             info.confirmed_addresses().cloned().collect()
         } else {
             vec![]
@@ -631,8 +629,12 @@ impl NetworkBehaviour for AddressBook {
     fn poll(
         &mut self,
         cx: &mut Context,
-        _params: &mut impl PollParameters,
+        params: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<void::Void, IntoAddressHandler>> {
+        if self.refresh_external {
+            self.refresh_external = false;
+            *self.external.write() = params.external_addresses().collect();
+        }
         if let Some(action) = self.actions.pop_front() {
             Poll::Ready(action)
         } else if !self.deferred.is_empty() {
@@ -664,6 +666,7 @@ impl NetworkBehaviour for AddressBook {
         };
         self.add_address(peer_id, address.clone(), src);
         self.peers
+            .write()
             .entry(*peer_id)
             .or_default()
             .connections
@@ -697,11 +700,14 @@ impl NetworkBehaviour for AddressBook {
             AddressSource::Incoming
         };
         self.add_address(peer_id, new_addr.clone(), src);
-        let entry = self.peers.entry(*peer_id).or_default();
+        let mut peers = self.peers.write();
+        let entry = peers.entry(*peer_id).or_default();
         entry.connections.remove(old_addr);
         entry
             .connections
             .insert(new_addr.clone(), (Utc::now(), Direction::from(&new)));
+        drop(peers);
+
         self.notify(Event::AddressChanged(*peer_id, old, new));
     }
 
@@ -717,7 +723,8 @@ impl NetworkBehaviour for AddressBook {
             tracing::debug!("dial failure without peer ID: {}", error);
             return;
         };
-        if let Some(info) = self.peers.get_mut(&peer_id) {
+        let mut peer = self.peers.write();
+        if let Some(info) = peer.get_mut(&peer_id) {
             if let IntoAddressHandler(Some((addr, retries))) = handler {
                 // this was our own validation dial
                 let transport = matches!(error, DialError::Transport(_));
@@ -753,6 +760,8 @@ impl NetworkBehaviour for AddressBook {
                     self.deferred
                         .push(Delay::new(delay).map(move |_| action).boxed());
                 }
+                drop(peer);
+
                 self.notify(Event::DialFailure(peer_id, addr, error));
                 self.notify(Event::NewInfo(peer_id));
             } else if let DialError::Transport(v) = error {
@@ -776,6 +785,7 @@ impl NetworkBehaviour for AddressBook {
                     }
                     events.push(Event::DialFailure(peer_id, addr.clone(), error));
                 }
+                drop(peer);
                 for event in events {
                     self.notify(event);
                 }
@@ -791,6 +801,7 @@ impl NetworkBehaviour for AddressBook {
             } else if let DialError::DialPeerConditionFalse(d) = error {
                 tracing::trace!(peer = %peer_id, cond = ?d, "dial condition not satisfied");
             } else {
+                drop(peer);
                 tracing::debug!(peer = %peer_id, error = %error, "dial failure");
                 if !matches!(error, DialError::Banned | DialError::LocalPeerId) {
                     self.notify(Event::Unreachable(peer_id));
@@ -809,15 +820,17 @@ impl NetworkBehaviour for AddressBook {
 
     fn inject_new_listen_addr(&mut self, id: ListenerId, addr: &Multiaddr) {
         tracing::trace!("listener {:?}: new listen addr {}", id, addr);
-        LISTEN_ADDRS.inc();
-        self.listeners.insert(addr.clone());
+        if self.listeners.write().insert(addr.clone()) {
+            LISTEN_ADDRS.inc();
+        }
         self.notify(Event::NewListenAddr(id, addr.clone()));
     }
 
     fn inject_expired_listen_addr(&mut self, id: ListenerId, addr: &Multiaddr) {
         tracing::trace!("listener {:?}: expired listen addr {}", id, addr);
-        LISTEN_ADDRS.dec();
-        self.listeners.remove(addr);
+        if self.listeners.write().remove(addr) {
+            LISTEN_ADDRS.dec();
+        }
         self.notify(Event::ExpiredListenAddr(id, addr.clone()));
     }
 
@@ -835,6 +848,7 @@ impl NetworkBehaviour for AddressBook {
     }
 
     fn inject_new_external_addr(&mut self, addr: &Multiaddr) {
+        self.refresh_external = true;
         let mut addr = addr.clone();
         normalize_addr(&mut addr, self.local_peer_id());
         tracing::trace!("new external addr {}", addr);
@@ -843,6 +857,7 @@ impl NetworkBehaviour for AddressBook {
     }
 
     fn inject_expired_external_addr(&mut self, addr: &Multiaddr) {
+        self.refresh_external = true;
         let mut addr = addr.clone();
         normalize_addr(&mut addr, self.local_peer_id());
         tracing::trace!("expired external addr {}", addr);

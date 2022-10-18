@@ -1,5 +1,6 @@
 use anyhow::Result;
 use async_std::stream::StreamExt;
+use futures::TryFutureExt;
 use ipfs_embed::{DefaultParams, Ipfs, NetworkConfig, StorageConfig};
 use ipfs_embed_cli::{keypair, Command, Config, Event};
 use parking_lot::Mutex;
@@ -45,11 +46,11 @@ async fn run() -> Result<()> {
     };
     network.identify.as_mut().unwrap().agent_version = node_name;
 
-    let ipfs = Ipfs::<DefaultParams>::new(ipfs_embed::Config { storage, network }).await?;
-    let mut events = ipfs.swarm_events();
+    let mut ipfs = Ipfs::<DefaultParams>::new(ipfs_embed::Config { storage, network }).await?;
+    let mut events = ipfs.swarm_events().await?;
 
     for addr in config.listen_on {
-        let _ = ipfs.listen_on(addr)?;
+        let _ = ipfs.listen_on(addr);
     }
 
     for addr in config.external {
@@ -111,36 +112,38 @@ async fn run() -> Result<()> {
     loop {
         line.clear();
         stdin.read_line(&mut line)?;
-        match line.parse()? {
-            Command::AddAddress(peer, addr) => {
-                ipfs.lock().add_address(&peer, addr);
+        #[allow(clippy::unit_arg)]
+        let result = match line.parse() {
+            Ok(Command::AddAddress(peer, addr)) => Ok(ipfs.lock().add_address(peer, addr)),
+            Ok(Command::Dial(peer)) => Ok(ipfs.lock().dial(peer)),
+            Ok(Command::PrunePeers) => Ok(ipfs.lock().prune_peers(Duration::ZERO)),
+            Ok(Command::Get(cid)) => ipfs
+                .lock()
+                .get(&cid)
+                .map(|block| writeln!(stdout, "{}", Event::Block(block)).expect("print")),
+            Ok(Command::Insert(block)) => ipfs.lock().insert(block),
+            Ok(Command::Alias(alias, cid)) => ipfs.lock().alias(&alias, cid.as_ref()),
+            Ok(Command::Flush) => {
+                let f = ipfs
+                    .lock()
+                    .flush()
+                    .inspect_ok(|_| writeln!(stdout, "{}", Event::Flushed).expect("print"));
+                f.await
             }
-            Command::Dial(peer) => {
-                ipfs.lock().dial(&peer);
-            }
-            Command::PrunePeers => {
-                ipfs.lock().prune_peers(Duration::ZERO);
-            }
-            Command::Get(cid) => {
-                let block = ipfs.lock().get(&cid)?;
-                writeln!(stdout, "{}", Event::Block(block))?;
-            }
-            Command::Insert(block) => {
-                ipfs.lock().insert(block)?;
-            }
-            Command::Alias(alias, cid) => {
-                ipfs.lock().alias(&alias, cid.as_ref())?;
-            }
-            Command::Flush => {
-                ipfs.lock().flush().await?;
-                writeln!(stdout, "{}", Event::Flushed)?;
-            }
-            Command::Sync(cid) => {
+            Ok(Command::Sync(cid)) => {
                 let providers = ipfs.lock().peers();
                 tracing::debug!("sync {} from {:?}", cid, providers);
-                ipfs.lock().sync(&cid, providers).await?;
-                writeln!(stdout, "{}", Event::Synced)?;
+                let f = ipfs
+                    .lock()
+                    .sync(&cid, providers)
+                    .and_then(|f| f)
+                    .inspect_ok(|_| writeln!(stdout, "{}", Event::Synced).expect("print"));
+                f.await
             }
+            Err(err) => Err(err),
+        };
+        if let Err(err) = result {
+            eprintln!("main loop error (line = {}): {}", line, err);
         }
     }
 }

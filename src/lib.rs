@@ -5,8 +5,8 @@
 //! # #[async_std::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! # use ipfs_embed::{Config, DefaultParams, Ipfs};
-//! let ipfs = Ipfs::<DefaultParams>::new(Config::default()).await?;
-//! ipfs.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
+//! let mut ipfs = Ipfs::<DefaultParams>::new(Config::default()).await?;
+//! ipfs.listen_on("/ip4/0.0.0.0/tcp/0".parse()?);
 //! # Ok(()) }
 //! ```
 
@@ -17,6 +17,7 @@ mod net;
 mod telemetry;
 #[cfg(test)]
 mod test_util;
+mod variable;
 
 /// convenience re-export of configuration types from libp2p
 pub mod config {
@@ -45,7 +46,7 @@ pub use crate::{
 
 pub use libipld::{store::DefaultParams, Block, Cid};
 pub use libp2p::{
-    core::{connection::ListenerId, ConnectedPoint, Multiaddr, PeerId},
+    core::{transport::ListenerId, ConnectedPoint, Multiaddr, PeerId},
     identity,
     kad::{kbucket::Key as BucketKey, record::Key, PeerRecord, Quorum, Record},
     multiaddr,
@@ -55,7 +56,7 @@ pub use libp2p::{
 use crate::net::NetworkService;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures::stream::Stream;
+use futures::{stream::Stream, Future};
 use libipld::{
     codec::References,
     error::BlockNotFound,
@@ -98,7 +99,7 @@ impl Default for Config {
 #[derive(Clone)]
 pub struct Ipfs<P: StoreParams> {
     storage: StorageService<P>,
-    network: NetworkService<P>,
+    network: NetworkService,
 }
 
 impl<P: StoreParams> std::fmt::Debug for Ipfs<P> {
@@ -167,7 +168,7 @@ where
     }
 
     /// Listens on a new `Multiaddr`.
-    pub fn listen_on(&self, addr: Multiaddr) -> Result<impl Stream<Item = ListenerEvent>> {
+    pub fn listen_on(&mut self, addr: Multiaddr) -> impl Stream<Item = ListenerEvent> {
         self.network.listen_on(addr)
     }
 
@@ -177,7 +178,7 @@ where
     }
 
     /// Adds an external address.
-    pub fn add_external_address(&self, addr: Multiaddr) {
+    pub fn add_external_address(&mut self, addr: Multiaddr) {
         self.network.add_external_address(addr)
     }
 
@@ -187,39 +188,39 @@ where
     }
 
     /// Adds a known `Multiaddr` for a `PeerId`.
-    pub fn add_address(&self, peer: &PeerId, addr: Multiaddr) {
+    pub fn add_address(&mut self, peer: PeerId, addr: Multiaddr) {
         self.network.add_address(peer, addr)
     }
 
     /// Removes a `Multiaddr` for a `PeerId`.
-    pub fn remove_address(&self, peer: &PeerId, addr: &Multiaddr) {
+    pub fn remove_address(&mut self, peer: PeerId, addr: Multiaddr) {
         self.network.remove_address(peer, addr)
     }
 
     /// Removes all unconnected peers without addresses which have been
     /// in this state for at least the given duration
-    pub fn prune_peers(&self, min_age: Duration) {
+    pub fn prune_peers(&mut self, min_age: Duration) {
         self.network.prune_peers(min_age);
     }
 
     /// Dials a `PeerId` using a known address.
-    pub fn dial(&self, peer: &PeerId) {
+    pub fn dial(&mut self, peer: PeerId) {
         self.network.dial(peer);
     }
 
     /// Dials a `PeerId` using `Multiaddr`.
-    pub fn dial_address(&self, peer: &PeerId, addr: Multiaddr) {
+    pub fn dial_address(&mut self, peer: PeerId, addr: Multiaddr) {
         self.network.dial_address(peer, addr);
     }
 
     /// Bans a `PeerId` from the swarm, dropping all existing connections and
     /// preventing new connections from the peer.
-    pub fn ban(&self, peer: PeerId) {
+    pub fn ban(&mut self, peer: PeerId) {
         self.network.ban(peer)
     }
 
     /// Unbans a previously banned `PeerId`.
-    pub fn unban(&self, peer: PeerId) {
+    pub fn unban(&mut self, peer: PeerId) {
         self.network.unban(peer)
     }
 
@@ -245,9 +246,11 @@ where
 
     /// Bootstraps the dht using a set of bootstrap nodes. After bootstrap
     /// completes it provides all blocks in the block store.
-    pub async fn bootstrap(&self, nodes: &[(PeerId, Multiaddr)]) -> Result<()> {
-        self.network.bootstrap(nodes).await?;
-        Ok(())
+    pub fn bootstrap(
+        &mut self,
+        nodes: Vec<(PeerId, Multiaddr)>,
+    ) -> impl Future<Output = Result<()>> {
+        self.network.bootstrap(nodes)
     }
 
     /// Returns true if the dht was bootstrapped.
@@ -257,59 +260,70 @@ where
 
     /// Gets the closest peer to a key. Useful for finding the `Multiaddr` of a
     /// `PeerId`.
-    pub async fn get_closest_peers<K>(&self, key: K) -> Result<()>
-    where
-        K: Into<BucketKey<K>> + Into<Vec<u8>> + Clone,
-    {
-        self.network.get_closest_peers(key).await?;
-        Ok(())
-    }
+    // pub async fn get_closest_peers<K>(&self, key: K) -> Result<()>
+    // where
+    //     K: Into<BucketKey<K>> + Into<Vec<u8>> + Clone,
+    // {
+    //     self.network.get_closest_peers(key).await?;
+    //     Ok(())
+    // }
 
     /// Gets providers of a key from the dht.
-    pub async fn providers(&self, key: Key) -> Result<HashSet<PeerId>> {
-        self.network.providers(key).await
+    pub fn providers(&mut self, key: Key) -> impl Future<Output = Result<HashSet<PeerId>>> {
+        self.network.providers(key)
     }
 
     /// Provides a key in the dht.
-    pub async fn provide(&self, key: Key) -> Result<()> {
-        self.network.provide(key).await
+    pub fn provide(&mut self, key: Key) -> impl Future<Output = Result<()>> {
+        self.network.provide(key)
     }
 
     /// Stops providing a key in the dht.
-    pub fn unprovide(&self, key: &Key) {
+    pub fn unprovide(&mut self, key: Key) -> Result<()> {
         self.network.unprovide(key)
     }
 
     /// Gets a record from the dht.
-    pub async fn get_record(&self, key: Key, quorum: Quorum) -> Result<Vec<PeerRecord>> {
-        self.network.get_record(key, quorum).await
+    pub fn get_record(
+        &mut self,
+        key: Key,
+        quorum: Quorum,
+    ) -> impl Future<Output = Result<Vec<PeerRecord>>> {
+        self.network.get_record(key, quorum)
     }
 
     /// Puts a new record in the dht.
-    pub async fn put_record(&self, record: Record, quorum: Quorum) -> Result<()> {
-        self.network.put_record(record, quorum).await
+    pub fn put_record(
+        &mut self,
+        record: Record,
+        quorum: Quorum,
+    ) -> impl Future<Output = Result<()>> {
+        self.network.put_record(record, quorum)
     }
 
     /// Removes a record from the dht.
-    pub fn remove_record(&self, key: &Key) {
+    pub fn remove_record(&mut self, key: Key) -> Result<()> {
         self.network.remove_record(key)
     }
 
     /// Subscribes to a `topic` returning a `Stream` of messages. If all
     /// `Stream`s for a topic are dropped it unsubscribes from the `topic`.
-    pub fn subscribe(&self, topic: &str) -> Result<impl Stream<Item = GossipEvent>> {
+    pub fn subscribe(
+        &mut self,
+        topic: String,
+    ) -> impl Future<Output = Result<impl Stream<Item = GossipEvent>>> {
         self.network.subscribe(topic)
     }
 
     /// Publishes a new message in a `topic`, sending the message to all
     /// subscribed peers.
-    pub fn publish(&self, topic: &str, msg: Vec<u8>) -> Result<()> {
+    pub fn publish(&mut self, topic: String, msg: Vec<u8>) -> impl Future<Output = Result<()>> {
         self.network.publish(topic, msg)
     }
 
     /// Publishes a new message in a `topic`, sending the message to all
     /// subscribed connected peers.
-    pub fn broadcast(&self, topic: &str, msg: Vec<u8>) -> Result<()> {
+    pub fn broadcast(&mut self, topic: String, msg: Vec<u8>) -> impl Future<Output = Result<()>> {
         self.network.broadcast(topic, msg)
     }
 
@@ -352,7 +366,7 @@ where
             return Ok(block);
         }
         if !providers.is_empty() {
-            self.network.get(*cid, providers.into_iter()).await?;
+            self.network.get(*cid, providers).await?.await?;
             if let Some(data) = self.storage.get(cid)? {
                 let block = Block::new_unchecked(*cid, data);
                 return Ok(block);
@@ -371,11 +385,15 @@ where
     /// Manually runs garbage collection to completion. This is mainly useful
     /// for testing and administrative interfaces. During normal operation,
     /// the garbage collector automatically runs in the background.
-    pub async fn evict(&self) -> Result<()> {
-        self.storage.evict().await
+    pub fn evict(&self) -> impl Future<Output = Result<()>> {
+        self.storage.evict()
     }
 
-    pub fn sync(&self, cid: &Cid, providers: Vec<PeerId>) -> SyncQuery<P> {
+    pub fn sync(
+        &self,
+        cid: &Cid,
+        providers: Vec<PeerId>,
+    ) -> impl Future<Output = anyhow::Result<SyncQuery>> {
         let missing = self.storage.missing_blocks(cid).ok().unwrap_or_default();
         tracing::trace!(cid = %cid, missing = %missing.len(), "sync");
         self.network.sync(*cid, providers, missing)
@@ -404,8 +422,8 @@ where
 
     /// Flushes the block store. After `flush` completes successfully it is
     /// guaranteed that all writes have been persisted to disk.
-    pub async fn flush(&self) -> Result<()> {
-        self.storage.flush().await
+    pub fn flush(&self) -> impl Future<Output = Result<()>> {
+        self.storage.flush()
     }
 
     /// Perform a set of storage operations in a batch
@@ -419,12 +437,12 @@ where
     /// Registers prometheus metrics in a registry.
     pub fn register_metrics(&self, registry: &Registry) -> Result<()> {
         self.storage.register_metrics(registry)?;
-        self.network.register_metrics(registry)?;
+        net::register_metrics(registry)?;
         Ok(())
     }
 
     /// Subscribes to the swarm event stream.
-    pub fn swarm_events(&self) -> SwarmEvents {
+    pub fn swarm_events(&mut self) -> impl Future<Output = Result<SwarmEvents>> {
         self.network.swarm_events()
     }
 }
@@ -479,7 +497,7 @@ where
     }
 
     async fn sync(&self, cid: &Cid) -> Result<()> {
-        Ipfs::sync(self, cid, self.peers()).await
+        Ipfs::sync(self, cid, self.peers()).await?.await
     }
 }
 
@@ -511,8 +529,8 @@ mod tests {
             network.mdns = None;
         }
 
-        let ipfs = Ipfs::new(Config { storage, network }).await?;
-        ipfs.listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())?
+        let mut ipfs = Ipfs::new(Config { storage, network }).await?;
+        ipfs.listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())
             .next()
             .await
             .unwrap();
@@ -561,15 +579,15 @@ mod tests {
     async fn test_exchange_kad() -> Result<()> {
         tracing_try_init();
         let (store, _tmp) = create_store(false).await?;
-        let (store1, _tmp) = create_store(false).await?;
-        let (store2, _tmp) = create_store(false).await?;
+        let (mut store1, _tmp) = create_store(false).await?;
+        let (mut store2, _tmp) = create_store(false).await?;
 
         let addr = store.listeners()[0].clone();
         let peer_id = store.local_peer_id();
         let nodes = [(peer_id, addr)];
 
-        let b1 = store1.bootstrap(&nodes);
-        let b2 = store2.bootstrap(&nodes);
+        let b1 = store1.bootstrap(nodes[..].into());
+        let b2 = store2.bootstrap(nodes[..].into());
         let (r1, r2) = join!(b1, b2);
         r1.unwrap();
         r2.unwrap();
@@ -640,10 +658,10 @@ mod tests {
     #[async_std::test]
     async fn test_sync() -> Result<()> {
         tracing_try_init();
-        let (local1, _tmp) = create_store(false).await?;
-        let (local2, _tmp) = create_store(false).await?;
-        local1.add_address(&local2.local_peer_id(), local2.listeners()[0].clone());
-        local2.add_address(&local1.local_peer_id(), local1.listeners()[0].clone());
+        let (mut local1, _tmp) = create_store(false).await?;
+        let (mut local2, _tmp) = create_store(false).await?;
+        local1.add_address(local2.local_peer_id(), local2.listeners()[0].clone());
+        local2.add_address(local1.local_peer_id(), local1.listeners()[0].clone());
 
         let a1 = create_ipld_block(&ipld!({ "a": 0 }))?;
         let b1 = create_ipld_block(&ipld!({ "b": 0 }))?;
@@ -662,7 +680,10 @@ mod tests {
         assert_pinned!(&local1, &c1);
 
         local2.alias(&x, Some(c1.cid()))?;
-        local2.sync(c1.cid(), vec![local1.local_peer_id()]).await?;
+        local2
+            .sync(c1.cid(), vec![local1.local_peer_id()])
+            .await?
+            .await?;
         local2.flush().await?;
         assert_pinned!(&local2, &a1);
         assert_pinned!(&local2, &b1);
@@ -679,7 +700,10 @@ mod tests {
         assert_pinned!(&local2, &c2);
 
         local1.alias(x, Some(c2.cid()))?;
-        local1.sync(c2.cid(), vec![local2.local_peer_id()]).await?;
+        local1
+            .sync(c2.cid(), vec![local2.local_peer_id()])
+            .await?
+            .await?;
         local1.flush().await?;
         assert_pinned!(&local1, &a1);
         assert_unpinned!(&local1, &b1);
@@ -709,22 +733,24 @@ mod tests {
     #[allow(clippy::eval_order_dependence)]
     async fn test_dht_record() -> Result<()> {
         tracing_try_init();
-        let stores = [create_store(false).await?, create_store(false).await?];
+        let mut stores = [create_store(false).await?, create_store(false).await?];
         async_std::task::sleep(Duration::from_millis(100)).await;
         stores[0]
             .0
-            .bootstrap(&[(
+            .bootstrap(vec![(
                 stores[1].0.local_peer_id(),
                 stores[1].0.listeners()[0].clone(),
             )])
             .await?;
         stores[1]
             .0
-            .bootstrap(&[(
+            .bootstrap(vec![(
                 stores[0].0.local_peer_id(),
                 stores[0].0.listeners()[0].clone(),
             )])
             .await?;
+
+        async_std::task::sleep(Duration::from_millis(500)).await;
         let key: Key = b"key".to_vec().into();
 
         stores[0]
@@ -743,7 +769,7 @@ mod tests {
     #[allow(clippy::eval_order_dependence)]
     async fn test_gossip_and_broadcast() -> Result<()> {
         tracing_try_init();
-        let stores = [
+        let mut stores = [
             create_store(false).await?,
             create_store(false).await?,
             create_store(false).await?,
@@ -752,27 +778,48 @@ mod tests {
             create_store(false).await?,
         ];
         let mut subscriptions = vec![];
-        let topic = "topic";
-        for (store, _) in &stores {
-            for (other, _) in &stores {
-                if store.local_peer_id() != other.local_peer_id() {
-                    store.dial_address(&other.local_peer_id(), other.listeners()[0].clone());
+        let topic = "topic".to_owned();
+        let others = stores
+            .iter()
+            .map(|store| {
+                (
+                    store.0.local_peer_id(),
+                    store.0.listeners().into_iter().next().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (store, _) in &mut stores {
+            for (peer, addr) in &others {
+                if store.local_peer_id() != *peer {
+                    store.dial_address(*peer, addr.clone());
                 }
             }
         }
 
-        async_std::task::sleep(Duration::from_millis(500)).await;
-        // Make sure everyone is peered before subscribing
+        // TCP sim open redials may take a second
+        async_std::task::sleep(Duration::from_millis(1500)).await;
         for (store, _) in &stores {
-            subscriptions.push(store.subscribe(topic)?);
+            for (peer, _) in &others {
+                assert!(store.is_connected(peer));
+            }
+        }
+        for (store, _) in &mut stores {
+            subscriptions.push(store.subscribe(topic.clone()).await?);
         }
         async_std::task::sleep(Duration::from_millis(500)).await;
 
         stores[0]
             .0
-            .publish(topic, b"hello gossip".to_vec())
+            .publish(topic.clone(), b"hello gossip".to_vec())
+            .await
             .unwrap();
 
+        /*
+         * This test used to assume that calling subscribe immediately updates the local subscription
+         * while sending that subscription over the network takes some time, meaning that all participants
+         * received all Subscribed messages. With the new asynchronous NetworkCommand this is no longer
+         * true, so Subscribed messages are sometimes missed.
+         */
         for (idx, subscription) in subscriptions.iter_mut().enumerate() {
             let mut expected = stores
                 .iter()
@@ -798,42 +845,58 @@ mod tests {
                     Box::new(std::iter::empty())
                 })
                 .collect::<Vec<GossipEvent>>();
-            while !expected.is_empty() {
+            while expected
+                .iter()
+                .any(|msg| matches!(msg, GossipEvent::Message(..)))
+            {
                 let ev = timeout(Duration::from_millis(100), subscription.next())
                     .await
-                    .unwrap()
+                    .expect(&*format!("idx {} timeout waiting for {:?}", idx, expected))
                     .unwrap();
-                assert!(expected.contains(&ev));
+                assert!(expected.contains(&ev), ", received {:?}", ev);
                 if let Some(idx) = expected.iter().position(|e| e == &ev) {
                     // Can't retain, as there might be multiple messages
                     expected.remove(idx);
                 }
+            }
+            if idx != 0 {
+                assert!(
+                    expected.len() < (stores.len() - 1) * 2,
+                    ", idx {} did not receive any Subscribed message",
+                    idx
+                );
             }
         }
 
         // Check broadcast subscription
         stores[0]
             .0
-            .broadcast(topic, b"hello broadcast".to_vec())
+            .broadcast(topic.clone(), b"hello broadcast".to_vec())
+            .await
             .unwrap();
 
         for subscription in &mut subscriptions[1..] {
-            if let GossipEvent::Message(p, data) = subscription.next().await.unwrap() {
-                assert_eq!(p, stores[0].0.local_peer_id());
-                assert_eq!(data[..], b"hello broadcast"[..]);
-            } else {
-                panic!()
+            match subscription.next().await.unwrap() {
+                GossipEvent::Message(p, data) => {
+                    assert_eq!(p, stores[0].0.local_peer_id());
+                    assert_eq!(data[..], b"hello broadcast"[..]);
+                }
+                x => {
+                    panic!("received unexpected message: {:?}", x);
+                }
             }
         }
 
         // trigger cleanup
+        let mut last_sub = subscriptions.drain(..1).next().unwrap();
+        drop(subscriptions);
+
         stores[0]
             .0
             .broadcast(topic, b"r u still listening?".to_vec())
+            .await
             .unwrap();
 
-        let mut last_sub = subscriptions.drain(..1).next().unwrap();
-        drop(subscriptions);
         let mut expected = stores[1..]
             .iter()
             .map(|s| s.0.local_peer_id())
@@ -847,7 +910,12 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert!(expected.contains(&ev));
+            // this is idx==0 which didn’t have a message to receive in the gossipsub round,
+            // so the Subscribed messages are still lingering in this channel
+            if let GossipEvent::Subscribed(..) = ev {
+                continue;
+            }
+            assert!(expected.contains(&ev), ", received {:?}", ev);
             if let Some(idx) = expected.iter().position(|e| e == &ev) {
                 // Can't retain, as there might be multiple messages
                 expected.remove(idx);
@@ -920,6 +988,7 @@ mod tests {
         let t0 = Instant::now();
         let _ = b
             .sync(&cid, vec![a.local_peer_id()])
+            .await?
             .for_each(|x| async move { tracing::debug!("sync progress {:?}", x) })
             .await;
         b.flush().await?;
@@ -960,6 +1029,7 @@ mod tests {
         let t0 = Instant::now();
         let _ = b
             .sync(&cid, vec![a.local_peer_id()])
+            .await?
             .for_each(|x| async move { tracing::debug!("sync progress {:?}", x) })
             .await;
         b.flush().await?;

@@ -11,9 +11,10 @@ description = "small embeddable ipfs implementation"
 repository = "https://github.com/ipfs-rust/ipfs-embed"
 
 [features]
-default = ["async_global"]
-async_global = ["async-global-executor", "libp2p/tcp-async-io", "libp2p/dns-async-std"]
-tokio = ["tokio-crate", "libp2p/tcp-tokio", "libp2p/dns-tokio"]
+default = ["async_global", "rsa"]
+rsa = ["libp2p/rsa"]
+async_global = ["async-global-executor", "libp2p/tcp-async-io", "libp2p/dns-async-std", "libp2p/mdns-async-io"]
+tokio = ["tokio-crate", "libp2p/tcp-tokio", "libp2p/dns-tokio", "libp2p/mdns-tokio"]
 telemetry = ["tide", "async_global"]
 # Makes it possible to exchange data via Bitswap with a go-ipfs node
 compat = ["libp2p-bitswap/compat"]
@@ -28,11 +29,11 @@ chrono = "0.4.19"
 fnv = "1.0.7"
 futures = "0.3.21"
 futures-timer = "3.0.2"
-ipfs-sqlite-block-store = "0.12.0"
+ipfs-sqlite-block-store = "0.13.0"
 lazy_static = "1.4.0"
-libipld = { version = "0.12.0", default-features = false }
-libp2p-bitswap = "0.22.0"
-libp2p-broadcast = "0.9.1"
+libipld = { version = "0.14.0", default-features = false }
+libp2p-bitswap = "0.23.0"
+libp2p-broadcast = "0.10.0"
 names = "0.13.0"
 parking_lot = "0.11.2"
 pin-project = "1.0.10"
@@ -42,19 +43,17 @@ thiserror = "1.0.30"
 tide = { version = "0.16.0", optional = true }
 tokio-crate = { package = "tokio", version = "1.17.0", features = ["rt"], optional = true }
 tracing = "0.1.32"
-trust-dns-resolver = "0.20"
+trust-dns-resolver = "0.21.2"
 void = "1.0.2"
 
 [dependencies.libp2p]
-version = "0.43.0"
+version = "0.48.0"
 default-features = false
 features = [
     "gossipsub",
     "identify",
     "kad",
-    "mdns",
     "ping",
-    #"relay",
     "mplex",
     "noise",
     "pnet",
@@ -62,10 +61,11 @@ features = [
 ]
 
 [dev-dependencies]
+anyhow = { version = "1", features = ["backtrace"] }
 async-std = { version = "1.11.0", features = ["attributes"] }
-libipld = { version = "0.12.0", default-features = false, features = ["dag-cbor", "dag-pb", "derive"] }
-libp2p-bitswap = { version = "0.22.0", default-features = false, features = ["compat"] }
-multihash = { version = "0.14.0", default-features = false, features = ["blake3"] }
+libipld = { version = "0.14.0", default-features = false, features = ["dag-cbor", "dag-pb", "derive"] }
+libp2p-bitswap = { version = "0.23.0", default-features = false, features = ["compat"] }
+multihash = { version = "0.16.1", default-features = false, features = ["blake3"] }
 rand = "0.8.5"
 regex = "1.5.5"
 tempdir = "0.3.7"

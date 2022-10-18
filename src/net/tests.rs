@@ -10,7 +10,7 @@ use libp2p::{
     swarm::{DialError, NetworkBehaviour, NetworkBehaviourAction},
     TransportError,
 };
-use std::{cell::RefCell, io::ErrorKind};
+use std::{cell::RefCell, collections::HashMap, io::ErrorKind};
 use tracing_subscriber::EnvFilter;
 use Event::*;
 
@@ -46,14 +46,17 @@ fn test_dial_basic() {
 
     let mut book = AddressBook::new(
         PeerId::random(),
-        "".into(),
-        Keypair::generate().public(),
         false,
         false,
+        Writer::new(HashSet::default()),
+        Writer::new(HashMap::default()),
+        Writer::new(vec![]),
     );
 
     let events = Default::default();
-    let events = Events::new(book.swarm_events(), &events);
+    let (tx, rx) = mpsc::unbounded();
+    book.swarm_events(tx);
+    let events = Events::new(SwarmEvents::new(rx), &events);
 
     let peer_a = PeerId::random();
     let addr_1: Multiaddr = "/ip4/1.1.1.1/tcp/3333".parse().unwrap();
@@ -68,8 +71,8 @@ fn test_dial_basic() {
     assert_eq!(events.next(), vec!(Discovered(peer_a), NewInfo(peer_a)));
     book.add_address(&peer_a, addr_2.clone(), AddressSource::Incoming);
     assert_eq!(events.next(), vec!(NewInfo(peer_a)));
-    let peers = book.peers().collect::<Vec<_>>();
-    assert_eq!(peers, vec![&peer_a]);
+    let peers = book.peers();
+    assert_eq!(peers, vec![peer_a]);
     book.inject_dial_failure(
         Some(peer_a),
         IntoAddressHandler(Some((addr_1.clone(), 3))),
@@ -106,7 +109,7 @@ fn test_dial_basic() {
             NewInfo(peer_a)
         )
     );
-    assert_eq!(book.peers().next(), Some(&peer_a));
+    assert_eq!(book.peers().into_iter().next(), Some(peer_a));
     assert_eq!(dials(&mut book), vec![]);
 
     assert_eq!(
@@ -204,13 +207,16 @@ fn from_docker_host() {
 
     let mut book = AddressBook::new(
         peer_a,
-        "name".to_owned(),
-        Keypair::generate().public(),
         false,
         false,
+        Writer::new(HashSet::default()),
+        Writer::new(HashMap::default()),
+        Writer::new(vec![]),
     );
     let events = Default::default();
-    let events = Events::new(book.swarm_events(), &events);
+    let (tx, rx) = mpsc::unbounded();
+    book.swarm_events(tx);
+    let events = Events::new(SwarmEvents::new(rx), &events);
 
     let key_b = libp2p::identity::PublicKey::Ed25519(Keypair::generate().public());
     let peer_b = PeerId::from(&key_b);
@@ -324,13 +330,16 @@ fn from_docker_container() {
 
     let mut book = AddressBook::new(
         peer_a,
-        "name".to_owned(),
-        Keypair::generate().public(),
         false,
         false,
+        Writer::new(HashSet::default()),
+        Writer::new(HashMap::default()),
+        Writer::new(vec![]),
     );
     let events = Default::default();
-    let events = Events::new(book.swarm_events(), &events);
+    let (tx, rx) = mpsc::unbounded();
+    book.swarm_events(tx);
+    let events = Events::new(SwarmEvents::new(rx), &events);
 
     let key_b = libp2p::identity::PublicKey::Ed25519(Keypair::generate().public());
     let peer_b = PeerId::from(&key_b);

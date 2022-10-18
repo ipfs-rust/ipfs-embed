@@ -13,10 +13,10 @@ async-std = "1.11.0"
 escargot = "0.5.7"
 futures = "0.3.21"
 ipfs-embed-cli = { path = "../cli" }
-libipld = { version = "0.12.0", default-features = false, features = ["dag-cbor", "dag-pb", "derive"] }
-libp2p = { version = "0.43.0", default-features = false }
+libipld = { version = "0.14.0", default-features = false, features = ["dag-cbor", "dag-pb", "derive"] }
+libp2p = { version = "0.48.0", default-features = false }
 maplit = "1.0.2"
-multihash = { version = "0.14.0", default-features = false, features = ["blake3"] }
+multihash = { version = "0.16.1", default-features = false, features = ["blake3"] }
 netsim-embed = "0.7.1"
 rand = "0.8.5"
 structopt = "0.3.26"

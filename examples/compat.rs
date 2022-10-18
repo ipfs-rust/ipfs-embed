@@ -21,10 +21,10 @@ fn tracing_try_init() {
 async fn main() -> anyhow::Result<()> {
     tracing_try_init();
     let config = Config::default();
-    let ipfs = Ipfs::<Sp>::new(config).await?;
+    let mut ipfs = Ipfs::<Sp>::new(config).await?;
     let peer: PeerId = "QmRSGx67Kq8w7xSBDia7hQfbfuvauMQGgxcwSWw976x4BS".parse()?;
     let addr: Multiaddr = "/ip4/54.173.33.96/tcp/4001".parse()?;
-    ipfs.dial_address(&peer, addr);
+    ipfs.dial_address(peer, addr);
 
     // 10 random bytes
     let _cid_rand10: Cid = "QmXQsqVRpp2W7fbYZHi4aB2Xkqfd3DpwWskZoLVEYigMKC".parse()?;
@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
     let block = ipfs.fetch(&cid_simple_dag, vec![peer]).await?;
     println!("got single block. len = {}", block.data().len());
 
-    let mut updates = ipfs.sync(&cid_simple_dag, vec![peer]);
+    let mut updates = ipfs.sync(&cid_simple_dag, vec![peer]).await?;
     println!("starting sync of large file");
     while let Some(update) = updates.next().await {
         println!("{:?}", update);
