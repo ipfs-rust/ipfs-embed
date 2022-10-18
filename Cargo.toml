@@ -11,7 +11,8 @@ description = "small embeddable ipfs implementation"
 repository = "https://github.com/ipfs-rust/ipfs-embed"
 
 [features]
-default = ["async_global"]
+default = ["async_global", "rsa"]
+rsa = ["libp2p/rsa"]
 async_global = ["async-global-executor", "libp2p/tcp-async-io", "libp2p/dns-async-std", "libp2p/mdns-async-io"]
 tokio = ["tokio-crate", "libp2p/tcp-tokio", "libp2p/dns-tokio", "libp2p/mdns-tokio"]
 telemetry = ["tide", "async_global"]

@@ -1905,6 +1905,7 @@ dependencies = [
  "prost 0.11.0",
  "prost-build 0.11.1",
  "rand 0.8.5",
+ "ring",
  "rw-stream-sink",
  "sha2 0.10.2",
  "smallvec",

@@ -56,7 +56,7 @@ impl<T: Copy> Reader<T> {
 }
 
 impl<T: Clone> Reader<T> {
-    pub fn cloned(&self) -> T {
+    pub fn get_cloned(&self) -> T {
         self.0.value.read().clone()
     }
 }

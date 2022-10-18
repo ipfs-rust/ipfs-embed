@@ -23,7 +23,7 @@ use chrono::{DateTime, Utc};
 use fnv::{FnvHashMap, FnvHashSet};
 use futures::{
     channel::{
-        mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender},
+        mpsc::{self, Receiver, Sender, TrySendError, UnboundedReceiver, UnboundedSender},
         oneshot,
     },
     future::{self, Either},
@@ -42,7 +42,7 @@ use libp2p::tcp::TokioTcpConfig as TcpConfig;
 use libp2p::{
     core::{
         either::EitherTransport,
-        transport::Transport,
+        transport::{ListenerId, Transport},
         upgrade::{SelectUpgrade, Version},
     },
     identity::ed25519::PublicKey,
@@ -273,23 +273,17 @@ impl NetworkService {
     }
 
     fn cmd(&mut self, msg: NetworkCommand) -> Option<(NetworkCommand, &'static str)> {
-        match self.cmd.try_send(msg) {
-            Ok(_) => None,
-            Err(err) => {
-                let reason = if err.is_disconnected() {
-                    "receiver went away"
-                } else {
-                    "channel is full"
-                };
-                let val = err.into_inner();
-                tracing::warn!("failed IPFS swarm command {:?}: {}", val, reason);
-                Some((val, reason))
-            }
-        }
+        Self::handle_send_result(self.cmd.try_send(msg))
     }
 
     fn cmd_shared(&self, msg: NetworkCommand) -> Option<(NetworkCommand, &'static str)> {
-        match self.cmd.clone().try_send(msg) {
+        Self::handle_send_result(self.cmd.clone().try_send(msg))
+    }
+
+    fn handle_send_result(
+        res: Result<(), TrySendError<NetworkCommand>>,
+    ) -> Option<(NetworkCommand, &'static str)> {
+        match res {
             Ok(_) => None,
             Err(err) => {
                 let reason = if err.is_disconnected() {
@@ -328,7 +322,7 @@ impl NetworkService {
     }
 
     pub fn external_addresses(&self) -> Vec<AddressRecord> {
-        self.external.cloned()
+        self.external.get_cloned()
     }
 
     pub fn add_address(&mut self, peer: PeerId, addr: Multiaddr) {
@@ -504,6 +498,7 @@ impl NetworkService {
         async { rx.await? }.right_future()
     }
 
+    // This cannot take `&mut self` due to trait constraints, so it needs to use the less efficient cmd_shared.
     pub fn get(&self, cid: Cid, providers: Vec<PeerId>) -> impl Future<Output = Result<GetQuery>> {
         let (tx, rx) = oneshot::channel();
         if let Some((_, err)) = self.cmd_shared(NetworkCommand::Get(cid, providers, tx)) {
@@ -512,6 +507,7 @@ impl NetworkService {
         async { Ok(rx.await?) }.right_future()
     }
 
+    // This cannot take `&mut self` due to trait constraints, so it needs to use the less efficient cmd_shared.
     pub fn sync(
         &self,
         cid: Cid,
@@ -581,6 +577,7 @@ async fn poll_swarm<P: StoreParams>(
                         behaviour::NetworkBackendBehaviourEvent::Kad(e) => {
                             let mut bootstrap_complete = *bootstrapped.read();
                             let bootstrap_old = bootstrap_complete;
+                            // DO NOT HOLD bootstrapped LOCK ACROSS ARBITRARY CODE
                             swarm.inject_kad_event(e, &mut bootstrap_complete, &mut queries);
                             if bootstrap_complete != bootstrap_old {
                                 *bootstrapped.write() = bootstrap_complete;
@@ -618,33 +615,7 @@ async fn poll_swarm<P: StoreParams>(
                     swarm.behaviour_mut().swarm_events(tx);
                     match swarm.listen_on(addr.clone()) {
                         Ok(listener) => executor
-                            .spawn(
-                                rx.take_while(move |event| match event {
-                                    Event::ListenerClosed(id) if *id == listener => {
-                                        future::ready(false)
-                                    }
-                                    Event::NewListenAddr(id, addr) if *id == listener => {
-                                        future::ready(
-                                            response
-                                                .unbounded_send(ListenerEvent::NewListenAddr(
-                                                    addr.clone(),
-                                                ))
-                                                .is_ok(),
-                                        )
-                                    }
-                                    Event::ExpiredListenAddr(id, addr) if *id == listener => {
-                                        future::ready(
-                                            response
-                                                .unbounded_send(ListenerEvent::ExpiredListenAddr(
-                                                    addr.clone(),
-                                                ))
-                                                .is_ok(),
-                                        )
-                                    }
-                                    _ => future::ready(true),
-                                })
-                                .for_each(|_| future::ready(())),
-                            )
+                            .spawn(forward_listener_events(listener, response, rx))
                             .detach(),
                         Err(error) => {
                             response
@@ -777,6 +748,28 @@ async fn poll_swarm<P: StoreParams>(
     }
 }
 
+fn forward_listener_events(
+    listener: ListenerId,
+    response: UnboundedSender<ListenerEvent>,
+    rx: UnboundedReceiver<Event>,
+) -> impl Future<Output = ()> {
+    rx.take_while(move |event| match event {
+        Event::ListenerClosed(id) if *id == listener => future::ready(false),
+        Event::NewListenAddr(id, addr) if *id == listener => future::ready(
+            response
+                .unbounded_send(ListenerEvent::NewListenAddr(addr.clone()))
+                .is_ok(),
+        ),
+        Event::ExpiredListenAddr(id, addr) if *id == listener => future::ready(
+            response
+                .unbounded_send(ListenerEvent::ExpiredListenAddr(addr.clone()))
+                .is_ok(),
+        ),
+        _ => future::ready(true),
+    })
+    .for_each(|_| future::ready(()))
+}
+
 #[derive(Debug)]
 pub struct GetQuery {
     swarm: Sender<NetworkCommand>,
@@ -790,7 +783,7 @@ impl Future for GetQuery {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         match Pin::new(&mut self.rx).poll(cx) {
             Poll::Ready(Ok(result)) => Poll::Ready(result),
-            Poll::Ready(Err(err)) => Poll::Ready(Err(anyhow!("{}", err))),
+            Poll::Ready(Err(err)) => Poll::Ready(Err(err.into())),
             Poll::Pending => Poll::Pending,
         }
     }
@@ -799,7 +792,9 @@ impl Future for GetQuery {
 impl Drop for GetQuery {
     fn drop(&mut self) {
         if let Err(err) = self.swarm.try_send(NetworkCommand::CancelQuery(self.id)) {
-            tracing::warn!("cannot cancel dropped GetQuery: {}", err.into_send_error());
+            if !err.is_disconnected() {
+                tracing::warn!("cannot cancel dropped GetQuery: {}", err.into_send_error());
+            }
         }
     }
 }
@@ -852,10 +847,11 @@ impl Stream for SyncQuery {
 
 impl Drop for SyncQuery {
     fn drop(&mut self) {
-        if let Some(id) = self.id.take() {
-            let swarm = self.swarm.as_mut().unwrap();
+        if let (Some(id), Some(mut swarm)) = (self.id.take(), self.swarm.take()) {
             if let Err(err) = swarm.try_send(NetworkCommand::CancelQuery(id)) {
-                tracing::warn!("cannot cancel dropped SyncQuery: {}", err.into_send_error());
+                if !err.is_disconnected() {
+                    tracing::warn!("cannot cancel dropped SyncQuery: {}", err.into_send_error());
+                }
             }
         }
     }
