@@ -34,6 +34,10 @@ pub struct NetworkConfig {
     pub identify: Option<IdentifyConfig>,
     /// Gossipsub config.
     pub gossipsub: Option<GossipsubConfig>,
+    /// Enables Dcutr
+    pub dcutr: bool,
+    /// Enables Circuit Relay v2 (Client)
+    pub relay_client: bool,
     /// Broadcast config.
     pub broadcast: Option<BroadcastConfig>,
     /// Bitswap config.
@@ -79,6 +83,8 @@ impl NetworkConfig {
             ping: None,
             identify: Some(identify),
             gossipsub: Some(GossipsubConfig::default()),
+            dcutr: false,
+            relay_client: false,
             broadcast: Some(BroadcastConfig::default()),
             bitswap: Some(BitswapConfig::default()),
         }

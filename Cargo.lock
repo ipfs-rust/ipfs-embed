@@ -603,6 +603,9 @@ name = "bytes"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4872d67bab6358e59559027aa3b9157c53d9358c51423c17554809a8858e0f8"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "cache-padded"
@@ -1827,7 +1830,9 @@ dependencies = [
  "getrandom 0.2.5",
  "instant",
  "lazy_static",
+ "libp2p-autonat",
  "libp2p-core",
+ "libp2p-dcutr",
  "libp2p-dns",
  "libp2p-gossipsub",
  "libp2p-identify",
@@ -1838,6 +1843,7 @@ dependencies = [
  "libp2p-noise",
  "libp2p-ping",
  "libp2p-pnet",
+ "libp2p-relay",
  "libp2p-request-response",
  "libp2p-swarm",
  "libp2p-swarm-derive",
@@ -1848,6 +1854,25 @@ dependencies = [
  "pin-project",
  "rand 0.7.3",
  "smallvec",
+]
+
+[[package]]
+name = "libp2p-autonat"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "994920fe343302fec9d8f4b86fca78cc19817334b8eaff89f5e5bc3441a6dbae"
+dependencies = [
+ "async-trait",
+ "futures",
+ "futures-timer",
+ "instant",
+ "libp2p-core",
+ "libp2p-request-response",
+ "libp2p-swarm",
+ "log",
+ "prost 0.11.0",
+ "prost-build 0.11.1",
+ "rand 0.8.5",
 ]
 
 [[package]]
@@ -1907,12 +1932,35 @@ dependencies = [
  "rand 0.8.5",
  "ring",
  "rw-stream-sink",
+ "serde",
  "sha2 0.10.2",
  "smallvec",
  "thiserror",
  "unsigned-varint",
  "void",
  "zeroize",
+]
+
+[[package]]
+name = "libp2p-dcutr"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0d652db6bed879dce87ce61fa4279da29163d9eae0880f358ce252842100f97"
+dependencies = [
+ "asynchronous-codec",
+ "bytes",
+ "either",
+ "futures",
+ "futures-timer",
+ "instant",
+ "libp2p-core",
+ "libp2p-swarm",
+ "log",
+ "prost 0.11.0",
+ "prost-build 0.11.1",
+ "prost-codec",
+ "thiserror",
+ "void",
 ]
 
 [[package]]
@@ -1952,6 +2000,7 @@ dependencies = [
  "prost-build 0.11.1",
  "rand 0.7.3",
  "regex",
+ "serde",
  "sha2 0.10.2",
  "smallvec",
  "unsigned-varint",
@@ -1999,6 +2048,7 @@ dependencies = [
  "prost 0.11.0",
  "prost-build 0.11.1",
  "rand 0.7.3",
+ "serde",
  "sha2 0.10.2",
  "smallvec",
  "thiserror",
@@ -2036,10 +2086,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a74ab339e8b5d989e8c1000a78adb5c064a6319245bb22d1e70b415ec18c39b8"
 dependencies = [
  "libp2p-core",
+ "libp2p-dcutr",
  "libp2p-gossipsub",
  "libp2p-identify",
  "libp2p-kad",
  "libp2p-ping",
+ "libp2p-relay",
  "libp2p-swarm",
  "prometheus-client",
 ]
@@ -2112,6 +2164,32 @@ dependencies = [
  "rand 0.7.3",
  "salsa20",
  "sha3",
+]
+
+[[package]]
+name = "libp2p-relay"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56d9c1390382ab8938f490783dfb6e7c7b559f6c6f2e1bef92fdbf57d3cd4aa1"
+dependencies = [
+ "asynchronous-codec",
+ "bytes",
+ "either",
+ "futures",
+ "futures-timer",
+ "instant",
+ "libp2p-core",
+ "libp2p-swarm",
+ "log",
+ "pin-project",
+ "prost 0.11.0",
+ "prost-build 0.11.1",
+ "prost-codec",
+ "rand 0.8.5",
+ "smallvec",
+ "static_assertions",
+ "thiserror",
+ "void",
 ]
 
 [[package]]
@@ -2370,6 +2448,8 @@ dependencies = [
  "core2",
  "digest 0.10.3",
  "multihash-derive",
+ "serde",
+ "serde-big-array",
  "sha2 0.10.2",
  "unsigned-varint",
 ]
@@ -3420,6 +3500,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "728eb6351430bccb993660dfffc5a72f91ccc1295abaa8ce19b27ebe4f75568b"
 dependencies = [
  "serde_derive",
+]
+
+[[package]]
+name = "serde-big-array"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd31f59f6fe2b0c055371bb2f16d7f0aa7d8881676c04a55b1596d1a17cd10a4"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

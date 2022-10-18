@@ -27,6 +27,8 @@ use libp2p::{
         behaviour::toggle::Toggle, AddressRecord, ConnectionError, ConnectionHandler,
         IntoConnectionHandler, NetworkBehaviour,
     },
+    relay::v2::client::{Client as RelayClient, Event as RelayClientEvent, transport::ClientTransport},
+    dcutr::behaviour::{Behaviour as Dcutr, Event as DcutrEvent},
     Multiaddr, NetworkBehaviour, PeerId,
 };
 use libp2p_bitswap::{Bitswap, BitswapEvent, BitswapStore};
@@ -97,6 +99,8 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     kad: Toggle<Kademlia<MemoryStore>>,
     mdns: Toggle<Mdns>,
     ping: Toggle<Ping>,
+    relay_client: Toggle<RelayClient>,
+    dcutr: Toggle<Dcutr>,
     identify: Toggle<Identify>,
     bitswap: Toggle<Bitswap<P>>,
     gossipsub: Toggle<Gossipsub>,
@@ -312,6 +316,22 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
     }
 }
 
+impl<P: StoreParams> NetworkBackendBehaviour<P> {
+    pub fn inject_relay_client_event(&mut self, event: RelayClientEvent) {
+        match event {
+            _ => {}
+        }
+    }
+}
+
+impl<P: StoreParams> NetworkBackendBehaviour<P> {
+    pub fn inject_dcutr_event(&mut self, event: DcutrEvent) {
+        match event {
+            _ => {}
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 #[error("{0:?}")]
 pub struct GossipsubPublishError(pub libp2p::gossipsub::error::PublishError);
@@ -404,7 +424,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         listeners: Writer<FnvHashSet<Multiaddr>>,
         peers: Writer<FnvHashMap<PeerId, PeerInfo>>,
         external: Writer<Vec<AddressRecord>>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, Option<ClientTransport>)> {
         let node_key = libp2p::identity::Keypair::Ed25519(config.node_key.clone());
         let node_name = config.node_name.clone();
         let peer_id = node_key.public().to_peer_id();
@@ -434,12 +454,20 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         } else {
             None
         };
+        let dcutr = config.dcutr.then(Dcutr::new);
+        let (transport, relay_client) = match config.relay_client {
+            true => {
+                let (transport, client) = RelayClient::new_transport_and_behaviour(peer_id);
+                (Some(transport), Some(client))
+            },
+            false => (None, None)
+        };
         let broadcast = config.broadcast.take().map(Broadcast::new);
         let bitswap = config
             .bitswap
             .take()
             .map(|config| Bitswap::new(config, store));
-        Ok(Self {
+        Ok((Self {
             peers: AddressBook::new(
                 peer_id,
                 config.port_reuse,
@@ -454,8 +482,10 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             identify: identify.into(),
             bitswap: bitswap.into(),
             gossipsub: gossipsub.into(),
+            dcutr: dcutr.into(),
+            relay_client: relay_client.into(),
             broadcast: broadcast.into(),
-        })
+        }, transport))
     }
 
     pub fn add_address(&mut self, peer_id: &PeerId, addr: Multiaddr, source: AddressSource) {

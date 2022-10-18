@@ -42,7 +42,7 @@ use libp2p::tcp::TokioTcpConfig as TcpConfig;
 use libp2p::{
     core::{
         either::EitherTransport,
-        transport::{ListenerId, Transport},
+        transport::{ListenerId, OrTransport, Transport},
         upgrade::{SelectUpgrade, Version},
     },
     identity::ed25519::PublicKey,
@@ -140,7 +140,7 @@ impl NetworkService {
         let listeners2 = listeners.reader();
         let external = Writer::new(vec![]);
         let external2 = external.reader();
-        let behaviour =
+        let (behaviour, relay_transport) =
             NetworkBackendBehaviour::new(&mut config, store, listeners, peers, external).await?;
 
         let tcp = {
@@ -159,15 +159,29 @@ impl NetworkService {
                     config.node_key.clone(),
                 ))
                 .unwrap();
-            transport
-                .upgrade(Version::V1)
-                .authenticate(NoiseConfig::xx(dh_key).into_authenticated())
-                .multiplex(SelectUpgrade::new(
-                    YamuxConfig::default(),
-                    MplexConfig::new(),
-                ))
-                .timeout(Duration::from_secs(5))
-                .boxed()
+            match relay_transport {
+                Some(relay) => {
+                    let transport = OrTransport::new(relay, transport);
+                    transport
+                        .upgrade(Version::V1)
+                        .authenticate(NoiseConfig::xx(dh_key).into_authenticated())
+                        .multiplex(SelectUpgrade::new(
+                            YamuxConfig::default(),
+                            MplexConfig::new(),
+                        ))
+                        .timeout(Duration::from_secs(5))
+                        .boxed()
+                }
+                None => transport
+                    .upgrade(Version::V1)
+                    .authenticate(NoiseConfig::xx(dh_key).into_authenticated())
+                    .multiplex(SelectUpgrade::new(
+                        YamuxConfig::default(),
+                        MplexConfig::new(),
+                    ))
+                    .timeout(Duration::from_secs(5))
+                    .boxed(),
+            }
         };
         /*let quic = {
             QuicConfig {
@@ -600,6 +614,12 @@ async fn poll_swarm<P: StoreParams>(
                         }
                         behaviour::NetworkBackendBehaviourEvent::Broadcast(e) => {
                             swarm.inject_broadcast_event(e, &mut subscriptions);
+                        }
+                        behaviour::NetworkBackendBehaviourEvent::RelayClient(e) => {
+                            swarm.inject_relay_client_event(e)
+                        }
+                        behaviour::NetworkBackendBehaviourEvent::Dcutr(e) => {
+                            swarm.inject_dcutr_event(e)
                         }
                     }
                 }

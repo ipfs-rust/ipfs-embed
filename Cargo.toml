@@ -16,6 +16,7 @@ rsa = ["libp2p/rsa"]
 async_global = ["async-global-executor", "libp2p/tcp-async-io", "libp2p/dns-async-std", "libp2p/mdns-async-io"]
 tokio = ["tokio-crate", "libp2p/tcp-tokio", "libp2p/dns-tokio", "libp2p/mdns-tokio"]
 telemetry = ["tide", "async_global"]
+serde = ["libp2p/serde"]
 # Makes it possible to exchange data via Bitswap with a go-ipfs node
 compat = ["libp2p-bitswap/compat"]
 
@@ -52,6 +53,9 @@ default-features = false
 features = [
     "gossipsub",
     "identify",
+    "autonat",
+    "dcutr",
+    "relay",
     "kad",
     "ping",
     "mplex",
