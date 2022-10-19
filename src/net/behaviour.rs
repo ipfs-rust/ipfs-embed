@@ -12,6 +12,10 @@ use futures::channel::{
     oneshot,
 };
 use libipld::{store::StoreParams, Cid, DefaultParams, Result};
+#[cfg(feature = "async_global")]
+use libp2p::mdns::Mdns;
+#[cfg(all(feature = "tokio", not(feature = "async_global")))]
+use libp2p::mdns::TokioMdns as Mdns;
 use libp2p::{
     core::ConnectedPoint,
     gossipsub::{Gossipsub, GossipsubEvent, GossipsubMessage, IdentTopic, MessageAuthenticity},
@@ -21,7 +25,7 @@ use libp2p::{
         AddProviderOk, BootstrapOk, GetClosestPeersOk, GetProvidersOk, GetRecordOk, Kademlia,
         KademliaEvent, PeerRecord, PutRecordOk, QueryResult, Quorum,
     },
-    mdns::{Mdns, MdnsEvent},
+    mdns::MdnsEvent,
     ping,
     swarm::{
         behaviour::toggle::Toggle, AddressRecord, ConnectionError, ConnectionHandler,

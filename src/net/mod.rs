@@ -36,9 +36,9 @@ use libp2p::dns::DnsConfig as Dns;
 #[cfg(all(feature = "tokio", not(feature = "async_global")))]
 use libp2p::dns::TokioDnsConfig as Dns;
 #[cfg(feature = "async_global")]
-use libp2p::tcp::GenTcpConfig as TcpConfig;
+use libp2p::tcp::TcpTransport;
 #[cfg(all(feature = "tokio", not(feature = "async_global")))]
-use libp2p::tcp::TokioTcpConfig as TcpConfig;
+use libp2p::tcp::TokioTcpTransport as TcpTransport;
 use libp2p::{
     core::{
         either::EitherTransport,
@@ -52,7 +52,7 @@ use libp2p::{
     noise::{self, NoiseConfig, X25519Spec},
     pnet::{PnetConfig, PreSharedKey},
     swarm::{AddressRecord, AddressScore, Swarm, SwarmBuilder, SwarmEvent},
-    tcp::TcpTransport,
+    tcp::GenTcpConfig as TcpConfig,
     yamux::YamuxConfig,
     Multiaddr, PeerId,
 };
