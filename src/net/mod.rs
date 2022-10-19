@@ -123,6 +123,27 @@ pub struct NetworkService {
     _swarm_task: Arc<JoinHandle<()>>,
 }
 
+type TransportError = libp2p::core::transport::timeout::TransportTimeoutError<
+    libp2p::core::either::EitherError<
+        libp2p::core::either::EitherError<
+            libp2p::core::either::EitherError<
+                libp2p::core::either::EitherError<std::io::Error, libp2p::pnet::PnetError>,
+                std::io::Error,
+            >,
+            libp2p::core::upgrade::UpgradeError<libp2p::noise::NoiseError>,
+        >,
+        libp2p::core::upgrade::UpgradeError<
+            libp2p::core::either::EitherError<std::io::Error, std::io::Error>,
+        >,
+    >,
+>;
+
+fn assert_transport_error_type<T>(_: &T)
+where
+    T: Transport<Error = TransportError>,
+{
+}
+
 impl NetworkService {
     pub async fn new<S: BitswapStore>(
         mut config: NetworkConfig,
@@ -141,7 +162,7 @@ impl NetworkService {
         let external = Writer::new(vec![]);
         let external2 = external.reader();
         let behaviour =
-            NetworkBackendBehaviour::new(&mut config, store, listeners, peers, external).await?;
+            NetworkBackendBehaviour::new(&mut config, store, listeners, peers, external)?;
 
         let tcp = {
             let transport =
@@ -167,8 +188,8 @@ impl NetworkService {
                     MplexConfig::new(),
                 ))
                 .timeout(Duration::from_secs(5))
-                .boxed()
         };
+        assert_transport_error_type(&tcp);
         /*let quic = {
             QuicConfig {
                 keypair: config.node_key,
@@ -183,7 +204,7 @@ impl NetworkService {
             EitherOutput::First(first) => first,
             EitherOutput::Second(second) => second,
         });*/
-        let quic_or_tcp = tcp;
+        let quic_or_tcp = tcp.boxed();
         #[cfg(feature = "async_global")]
         let transport = if let Some(config) = config.dns {
             match config {
@@ -228,6 +249,7 @@ impl NetworkService {
             .executor(Box::new(move |fut| {
                 exec.spawn(fut).detach();
             }))
+            .max_negotiating_inbound_streams(10000)
             .build();
         /*
         // Required for swarm book keeping.

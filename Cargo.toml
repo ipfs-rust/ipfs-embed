@@ -11,10 +11,12 @@ description = "small embeddable ipfs implementation"
 repository = "https://github.com/ipfs-rust/ipfs-embed"
 
 [features]
-default = ["async_global", "rsa"]
+default = ["async_global", "rsa", "ecdsa", "secp256k1"]
 rsa = ["libp2p/rsa"]
-async_global = ["async-global-executor", "libp2p/tcp-async-io", "libp2p/dns-async-std", "libp2p/mdns-async-io"]
-tokio = ["tokio-crate", "libp2p/tcp-tokio", "libp2p/dns-tokio", "libp2p/mdns-tokio"]
+ecdsa = ["libp2p/ecdsa"]
+secp256k1 = ["libp2p/secp256k1"]
+async_global = ["async-global-executor", "libp2p/async-std"]
+tokio = ["tokio-crate", "libp2p/tokio"]
 telemetry = ["tide", "async_global"]
 # Makes it possible to exchange data via Bitswap with a go-ipfs node
 compat = ["libp2p-bitswap/compat"]
@@ -32,8 +34,8 @@ futures-timer = "3.0.2"
 ipfs-sqlite-block-store = "0.13.0"
 lazy_static = "1.4.0"
 libipld = { version = "0.14.0", default-features = false }
-libp2p-bitswap = "0.23.0"
-libp2p-broadcast = "0.10.0"
+libp2p-bitswap = "0.24.0"
+libp2p-broadcast = "0.11.0"
 names = "0.13.0"
 parking_lot = "0.11.2"
 pin-project = "1.0.10"
@@ -43,20 +45,22 @@ thiserror = "1.0.30"
 tide = { version = "0.16.0", optional = true }
 tokio-crate = { package = "tokio", version = "1.17.0", features = ["rt"], optional = true }
 tracing = "0.1.32"
-trust-dns-resolver = "0.21.2"
+trust-dns-resolver = "0.22.0"
 void = "1.0.2"
 
 [dependencies.libp2p]
-version = "0.48.0"
-default-features = false
+version = "0.49.0"
 features = [
+    "dns",
     "gossipsub",
     "identify",
     "kad",
-    "ping",
+    "mdns",
     "mplex",
     "noise",
+    "ping",
     "pnet",
+    "tcp",
     "yamux",
 ]
 
@@ -64,7 +68,7 @@ features = [
 anyhow = { version = "1", features = ["backtrace"] }
 async-std = { version = "1.11.0", features = ["attributes"] }
 libipld = { version = "0.14.0", default-features = false, features = ["dag-cbor", "dag-pb", "derive"] }
-libp2p-bitswap = { version = "0.23.0", default-features = false, features = ["compat"] }
+libp2p-bitswap = { version = "0.24.0", default-features = false, features = ["compat"] }
 multihash = { version = "0.16.1", default-features = false, features = ["blake3"] }
 rand = "0.8.5"
 regex = "1.5.5"
