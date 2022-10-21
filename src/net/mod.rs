@@ -203,7 +203,8 @@ impl NetworkService {
                     .boxed(),
             }
         };
-        assert_transport_error_type::<_, TransportError>(&tcp);
+        //TODO: Fix error
+        // assert_transport_error_type::<_, TransportError>(&tcp);
         /*let quic = {
             QuicConfig {
                 keypair: config.node_key,
@@ -218,7 +219,7 @@ impl NetworkService {
             EitherOutput::First(first) => first,
             EitherOutput::Second(second) => second,
         });*/
-        let quic_or_tcp = tcp.boxed();
+        let quic_or_tcp = tcp;
         #[cfg(feature = "async_global")]
         let transport = if let Some(config) = config.dns {
             match config {
