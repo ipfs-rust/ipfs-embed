@@ -36,22 +36,23 @@ use libp2p::dns::DnsConfig as Dns;
 #[cfg(all(feature = "tokio", not(feature = "async_global")))]
 use libp2p::dns::TokioDnsConfig as Dns;
 #[cfg(feature = "async_global")]
-use libp2p::tcp::GenTcpConfig as TcpConfig;
+use libp2p::tcp::TcpTransport;
 #[cfg(all(feature = "tokio", not(feature = "async_global")))]
-use libp2p::tcp::TokioTcpConfig as TcpConfig;
+use libp2p::tcp::TokioTcpTransport as TcpTransport;
 use libp2p::{
     core::{
         either::EitherTransport,
         transport::{ListenerId, OrTransport, Transport},
         upgrade::{SelectUpgrade, Version},
     },
+    dns::DnsErr,
     identity::ed25519::PublicKey,
     kad::{record::Key, PeerRecord, Quorum, Record},
     mplex::MplexConfig,
     noise::{self, NoiseConfig, X25519Spec},
     pnet::{PnetConfig, PreSharedKey},
     swarm::{AddressRecord, AddressScore, Swarm, SwarmBuilder, SwarmEvent},
-    tcp::TcpTransport,
+    tcp::GenTcpConfig as TcpConfig,
     yamux::YamuxConfig,
     Multiaddr, PeerId,
 };
@@ -123,6 +124,24 @@ pub struct NetworkService {
     _swarm_task: Arc<JoinHandle<()>>,
 }
 
+type TransportError = libp2p::core::transport::timeout::TransportTimeoutError<
+    libp2p::core::either::EitherError<
+        libp2p::core::either::EitherError<
+            libp2p::core::either::EitherError<
+                libp2p::core::either::EitherError<std::io::Error, libp2p::pnet::PnetError>,
+                std::io::Error,
+            >,
+            libp2p::core::upgrade::UpgradeError<libp2p::noise::NoiseError>,
+        >,
+        libp2p::core::upgrade::UpgradeError<
+            libp2p::core::either::EitherError<std::io::Error, std::io::Error>,
+        >,
+    >,
+>;
+
+/// if this fails compilation, also change peers::is_sim_open()
+fn assert_transport_error_type<T: Transport<Error = U>, U>(_: &T) {}
+
 impl NetworkService {
     pub async fn new<S: BitswapStore>(
         mut config: NetworkConfig,
@@ -140,8 +159,9 @@ impl NetworkService {
         let listeners2 = listeners.reader();
         let external = Writer::new(vec![]);
         let external2 = external.reader();
+
         let (behaviour, relay_transport) =
-            NetworkBackendBehaviour::new(&mut config, store, listeners, peers, external).await?;
+            NetworkBackendBehaviour::new(&mut config, store, listeners, peers, external)?;
 
         let tcp = {
             let transport =
@@ -183,6 +203,7 @@ impl NetworkService {
                     .boxed(),
             }
         };
+        assert_transport_error_type::<_, TransportError>(&tcp);
         /*let quic = {
             QuicConfig {
                 keypair: config.node_key,
@@ -197,51 +218,51 @@ impl NetworkService {
             EitherOutput::First(first) => first,
             EitherOutput::Second(second) => second,
         });*/
-        let quic_or_tcp = tcp;
+        let quic_or_tcp = tcp.boxed();
         #[cfg(feature = "async_global")]
         let transport = if let Some(config) = config.dns {
             match config {
                 DnsConfig::Custom { config, opts } => {
-                    Dns::custom(quic_or_tcp, config, opts).await?.boxed()
+                    Dns::custom(quic_or_tcp, config, opts).await?
                 }
                 DnsConfig::SystemWithFallback { config, opts } => {
                     match trust_dns_resolver::system_conf::read_system_conf() {
-                        Ok((config, opts)) => Dns::custom(quic_or_tcp, config, opts).await?.boxed(),
+                        Ok((config, opts)) => Dns::custom(quic_or_tcp, config, opts).await?,
                         Err(e) => {
                             tracing::warn!("falling back to custom DNS config, system default yielded error `${:#}`", e);
-                            Dns::custom(quic_or_tcp, config, opts).await?.boxed()
+                            Dns::custom(quic_or_tcp, config, opts).await?
                         }
                     }
                 }
             }
         } else {
-            Dns::system(quic_or_tcp).await?.boxed()
+            Dns::system(quic_or_tcp).await?
         };
         #[cfg(all(feature = "tokio", not(feature = "async_global")))]
         let transport = if let Some(config) = config.dns {
             match config {
-                DnsConfig::Custom { config, opts } => {
-                    Dns::custom(quic_or_tcp, config, opts)?.boxed()
-                }
+                DnsConfig::Custom { config, opts } => Dns::custom(quic_or_tcp, config, opts)?,
                 DnsConfig::SystemWithFallback { config, opts } => {
                     match trust_dns_resolver::system_conf::read_system_conf() {
-                        Ok((config, opts)) => Dns::custom(quic_or_tcp, config, opts)?.boxed(),
+                        Ok((config, opts)) => Dns::custom(quic_or_tcp, config, opts)?,
                         Err(e) => {
                             tracing::warn!("falling back to custom DNS config, system default yielded error `${:#}`", e);
-                            Dns::custom(quic_or_tcp, config, opts)?.boxed()
+                            Dns::custom(quic_or_tcp, config, opts)?
                         }
                     }
                 }
             }
         } else {
-            Dns::system(quic_or_tcp)?.boxed()
+            Dns::system(quic_or_tcp)?
         };
+        assert_transport_error_type::<_, DnsErr<std::io::Error>>(&transport);
 
         let exec = executor.clone();
-        let swarm = SwarmBuilder::new(transport, behaviour, peer_id)
+        let swarm = SwarmBuilder::new(transport.boxed(), behaviour, peer_id)
             .executor(Box::new(move |fut| {
                 exec.spawn(fut).detach();
             }))
+            .max_negotiating_inbound_streams(10000)
             .build();
         /*
         // Required for swarm book keeping.

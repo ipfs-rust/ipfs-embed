@@ -90,8 +90,9 @@ impl<T> JoinHandle<T> {
     }
     #[allow(unused_mut)]
     pub fn abort(mut self) {
-        #[cfg(feature = "tokio")]
-        if let Self::Tokio(t) = self {
+        #[cfg(all(feature = "tokio", not(feature = "async_global")))]
+        {
+            let Self::Tokio(t) = self;
             t.abort()
         }
         // async-global-executor task cancels when drop

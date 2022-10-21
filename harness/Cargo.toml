@@ -14,7 +14,7 @@ escargot = "0.5.7"
 futures = "0.3.21"
 ipfs-embed-cli = { path = "../cli" }
 libipld = { version = "0.14.0", default-features = false, features = ["dag-cbor", "dag-pb", "derive"] }
-libp2p = { version = "0.48.0", default-features = false }
+libp2p = { version = "0.49.0", default-features = false }
 maplit = "1.0.2"
 multihash = { version = "0.16.1", default-features = false, features = ["blake3"] }
 netsim-embed = "0.7.1"

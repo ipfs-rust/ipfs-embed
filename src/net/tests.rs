@@ -4,7 +4,7 @@ use async_executor::LocalExecutor;
 use futures::{future::ready, stream::StreamExt};
 use libp2p::{
     core::{connection::ConnectionId, ConnectedPoint, Endpoint},
-    identify::IdentifyInfo,
+    identify,
     identity::ed25519::Keypair,
     multiaddr::Protocol,
     swarm::{DialError, NetworkBehaviour, NetworkBehaviourAction},
@@ -248,7 +248,7 @@ fn from_docker_host() {
         vec![(addr_b_1p, AddressSource::Incoming)]
     );
 
-    let info = IdentifyInfo {
+    let info = identify::Info {
         public_key: key_b,
         protocol_version: "my protocol".to_owned(),
         agent_version: "my agent".to_owned(),
@@ -371,7 +371,7 @@ fn from_docker_container() {
         vec![(addr_b_1p, AddressSource::Incoming)]
     );
 
-    let info = IdentifyInfo {
+    let info = identify::Info {
         public_key: key_b.clone(),
         protocol_version: "my protocol".to_owned(),
         agent_version: "my agent".to_owned(),
@@ -396,7 +396,7 @@ fn from_docker_container() {
     // here we assume that our observeration of that peer’s address will eventually
     // be included by that peer in its Identify info
 
-    let info = IdentifyInfo {
+    let info = identify::Info {
         public_key: key_b,
         protocol_version: "my protocol".to_owned(),
         agent_version: "my agent".to_owned(),

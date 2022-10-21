@@ -71,9 +71,9 @@ fn main() -> anyhow::Result<()> {
         for id in consumers.keys() {
             let m = sim.machine(*id);
             for (peer, addr) in providers.values() {
-                m.select(|e| {
+                m.select_draining(|e| {
                     matches!(e, Event::PeerInfo(p, i)
-                        if p == peer && i.addresses == hashmap!(addr.clone() => "Dial".to_owned())
+                        if p == *peer && i.addresses == hashmap!(addr.clone() => "Dial".to_owned())
                     )
                     .then(|| ())
                 })

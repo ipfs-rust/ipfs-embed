@@ -18,22 +18,27 @@ use lazy_static::lazy_static;
 use libp2p::{
     core::{
         connection::{ConnectedPoint, ConnectionId},
-        transport::ListenerId,
+        either::EitherError,
+        transport::{timeout::TransportTimeoutError, ListenerId},
+        UpgradeError,
     },
-    identify::IdentifyInfo,
+    dns::DnsErr,
+    identify,
     multiaddr::Protocol,
+    noise::NoiseError,
     swarm::{
         dial_opts::{DialOpts, PeerCondition},
         AddressRecord, ConnectionError, DialError, NetworkBehaviour, NetworkBehaviourAction,
         PollParameters,
     },
-    Multiaddr, PeerId,
+    Multiaddr, PeerId, TransportError,
 };
 use prometheus::{IntCounter, IntGauge, Registry};
 use std::{
     borrow::Cow,
     collections::VecDeque,
     convert::TryInto,
+    io::ErrorKind,
     net::IpAddr,
     pin::Pin,
     task::{Context, Poll},
@@ -437,7 +442,7 @@ impl AddressBook {
         }
     }
 
-    pub fn set_info(&mut self, peer_id: &PeerId, identify: IdentifyInfo) {
+    pub fn set_info(&mut self, peer_id: &PeerId, identify: identify::Info) {
         let _span = tracing::trace_span!("set_info", peer = %peer_id).entered();
         let mut peers = self.peers.write();
         if let Some(info) = peers.get_mut(peer_id) {
@@ -734,6 +739,12 @@ impl NetworkBehaviour for AddressBook {
                 let probe_result =
                     transport || wrong_peer || matches!(error, DialError::ConnectionIo(_));
                 let failure = ConnectionFailure::dial(without_peer_id(&addr), error);
+                let is_sim_open = if let DialError::Transport(v) = error {
+                    v.iter().any(|(_, e)| is_sim_open(e))
+                } else {
+                    false
+                };
+
                 let error = error.to_string();
                 tracing::debug!(addr = %&addr, error = %&error, active = probe_result,
                     "validation dial failure");
@@ -743,10 +754,7 @@ impl NetworkBehaviour for AddressBook {
                     // regardless of whether it was confirmed
                     info.addresses.remove(&addr);
                 }
-                if transport
-                    && retries > 0
-                    && error.contains("Other(A(B(Apply(Io(Kind(InvalidData))))))")
-                {
+                if is_sim_open && retries > 0 {
                     // TCP simultaneous open leads to both sides being initiator in the Noise
                     // handshake, which yields this particular error
                     if retries == SIM_OPEN_RETRIES + 1 {
@@ -770,13 +778,14 @@ impl NetworkBehaviour for AddressBook {
                 let mut events = Vec::with_capacity(v.len());
                 let mut deferred = Vec::new();
                 for (addr, error) in v {
+                    let is_sim_open = is_sim_open(error);
                     let failure = ConnectionFailure::transport(without_peer_id(addr), error);
                     let error = format!("{:?}", error);
                     tracing::debug!(addr = %&addr, error = %&error, "non-validation dial failure");
                     info.push_failure(normalize_addr_ref(addr, &peer_id).as_ref(), failure, true);
                     // TCP simultaneous open leads to both sides being initiator in the Noise
                     // handshake, which yields this particular error
-                    if error.contains("Other(A(B(Apply(Io(Kind(InvalidData))))))") {
+                    if is_sim_open {
                         tracing::debug!("scheduling redial after presumed TCP simultaneous open");
                         deferred.push(NetworkBehaviourAction::Dial {
                             opts: DialOpts::peer_id(peer_id)
@@ -865,5 +874,31 @@ impl NetworkBehaviour for AddressBook {
         tracing::trace!("expired external addr {}", addr);
         EXTERNAL_ADDRS.dec();
         self.notify(Event::ExpiredExternalAddr(addr));
+    }
+}
+
+fn is_sim_open(error: &TransportError<std::io::Error>) -> bool {
+    match error {
+        libp2p::TransportError::MultiaddrNotSupported(_x) => false,
+        libp2p::TransportError::Other(err) => {
+            let err = err
+                .get_ref()
+                .and_then(|e| e.downcast_ref::<DnsErr<std::io::Error>>());
+            if let Some(DnsErr::Transport(err)) = err {
+                let err = err
+                    .get_ref()
+                    .and_then(|e| e.downcast_ref::<super::TransportError>());
+                if let Some(TransportTimeoutError::Other(EitherError::A(EitherError::B(
+                    UpgradeError::Apply(NoiseError::Io(err)),
+                )))) = err
+                {
+                    err.kind() == ErrorKind::InvalidData
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
     }
 }

@@ -12,23 +12,29 @@ use futures::channel::{
     oneshot,
 };
 use libipld::{store::StoreParams, Cid, DefaultParams, Result};
+#[cfg(feature = "async_global")]
+use libp2p::mdns::Mdns;
+#[cfg(all(feature = "tokio", not(feature = "async_global")))]
+use libp2p::mdns::TokioMdns as Mdns;
 use libp2p::{
     core::ConnectedPoint,
+    dcutr::behaviour::{Behaviour as Dcutr, Event as DcutrEvent},
     gossipsub::{Gossipsub, GossipsubEvent, GossipsubMessage, IdentTopic, MessageAuthenticity},
-    identify::{Identify, IdentifyEvent},
+    identify,
     kad::{
         record::{store::MemoryStore, Key, Record},
         AddProviderOk, BootstrapOk, GetClosestPeersOk, GetProvidersOk, GetRecordOk, Kademlia,
         KademliaEvent, PeerRecord, PutRecordOk, QueryResult, Quorum,
     },
-    mdns::{Mdns, MdnsEvent},
-    ping::{Ping, PingEvent, PingFailure, PingSuccess},
+    mdns::MdnsEvent,
+    ping,
+    relay::v2::client::{
+        transport::ClientTransport, Client as RelayClient, Event as RelayClientEvent,
+    },
     swarm::{
         behaviour::toggle::Toggle, AddressRecord, ConnectionError, ConnectionHandler,
         IntoConnectionHandler, NetworkBehaviour,
     },
-    relay::v2::client::{Client as RelayClient, Event as RelayClientEvent, transport::ClientTransport},
-    dcutr::behaviour::{Behaviour as Dcutr, Event as DcutrEvent},
     Multiaddr, NetworkBehaviour, PeerId,
 };
 use libp2p_bitswap::{Bitswap, BitswapEvent, BitswapStore};
@@ -98,10 +104,10 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
     peers: AddressBook,
     kad: Toggle<Kademlia<MemoryStore>>,
     mdns: Toggle<Mdns>,
-    ping: Toggle<Ping>,
+    ping: Toggle<ping::Ping>,
     relay_client: Toggle<RelayClient>,
     dcutr: Toggle<Dcutr>,
-    identify: Toggle<Identify>,
+    identify: Toggle<identify::Identify>,
     bitswap: Toggle<Bitswap<P>>,
     gossipsub: Toggle<Gossipsub>,
     broadcast: Toggle<Broadcast>,
@@ -278,27 +284,27 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
 }
 
 impl<P: StoreParams> NetworkBackendBehaviour<P> {
-    pub fn inject_ping_event(&mut self, event: PingEvent) {
+    pub fn inject_ping_event(&mut self, event: ping::Event) {
         // Don't really need to do anything here as ping handles disconnecting
         // automatically.
         let peer = event.peer;
         match event.result {
-            Ok(PingSuccess::Ping { rtt }) => {
+            Ok(ping::Success::Ping { rtt }) => {
                 //tracing::trace!("ping: rtt to {} is {} ms", peer, rtt.as_millis());
                 self.peers.set_rtt(&peer, Some(rtt));
             }
-            Ok(PingSuccess::Pong) => {
+            Ok(ping::Success::Pong) => {
                 //tracing::trace!("ping: pong from {}", peer);
             }
-            Err(PingFailure::Timeout) => {
+            Err(ping::Failure::Timeout) => {
                 tracing::debug!("ping: timeout to {}", peer);
                 self.peers.set_rtt(&peer, None);
             }
-            Err(PingFailure::Other { error }) => {
+            Err(ping::Failure::Other { error }) => {
                 tracing::info!("ping: failure with {}: {}", peer, error);
                 self.peers.set_rtt(&peer, None);
             }
-            Err(PingFailure::Unsupported) => {
+            Err(ping::Failure::Unsupported) => {
                 tracing::warn!("ping: {} does not support the ping protocol", peer);
             }
         }
@@ -306,11 +312,11 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
 }
 
 impl<P: StoreParams> NetworkBackendBehaviour<P> {
-    pub fn inject_id_event(&mut self, event: IdentifyEvent) {
+    pub fn inject_id_event(&mut self, event: identify::Event) {
         // When a peer opens a connection we only have it's outgoing address. The
         // identify protocol sends the listening address which needs to be
         // registered with kademlia.
-        if let IdentifyEvent::Received { peer_id, info } = event {
+        if let identify::Event::Received { peer_id, info } = event {
             self.peers.set_info(&peer_id, info);
         }
     }
@@ -418,7 +424,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
 
 impl<P: StoreParams> NetworkBackendBehaviour<P> {
     /// Create a Kademlia behaviour with the IPFS bootstrap nodes.
-    pub async fn new<S: BitswapStore<Params = P>>(
+    pub fn new<S: BitswapStore<Params = P>>(
         config: &mut NetworkConfig,
         store: S,
         listeners: Writer<FnvHashSet<Multiaddr>>,
@@ -429,7 +435,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         let node_name = config.node_name.clone();
         let peer_id = node_key.public().to_peer_id();
         let mdns = if let Some(config) = config.mdns.take() {
-            Some(Mdns::new(config).await?)
+            Some(Mdns::new(config)?)
         } else {
             None
         };
@@ -439,11 +445,11 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         } else {
             None
         };
-        let ping = config.ping.take().map(Ping::new);
+        let ping = config.ping.take().map(ping::Behaviour::new);
         let identify = if let Some(mut config) = config.identify.take() {
             config.local_public_key = node_key.public();
-            config.agent_version = node_name.clone();
-            Some(Identify::new(config))
+            config.agent_version = node_name;
+            Some(identify::Behaviour::new(config))
         } else {
             None
         };
@@ -459,33 +465,36 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
             true => {
                 let (transport, client) = RelayClient::new_transport_and_behaviour(peer_id);
                 (Some(transport), Some(client))
-            },
-            false => (None, None)
+            }
+            false => (None, None),
         };
         let broadcast = config.broadcast.take().map(Broadcast::new);
         let bitswap = config
             .bitswap
             .take()
             .map(|config| Bitswap::new(config, store));
-        Ok((Self {
-            peers: AddressBook::new(
-                peer_id,
-                config.port_reuse,
-                config.enable_loopback,
-                listeners,
-                peers,
-                external,
-            ),
-            mdns: mdns.into(),
-            kad: kad.into(),
-            ping: ping.into(),
-            identify: identify.into(),
-            bitswap: bitswap.into(),
-            gossipsub: gossipsub.into(),
-            dcutr: dcutr.into(),
-            relay_client: relay_client.into(),
-            broadcast: broadcast.into(),
-        }, transport))
+        Ok((
+            Self {
+                peers: AddressBook::new(
+                    peer_id,
+                    config.port_reuse,
+                    config.enable_loopback,
+                    listeners,
+                    peers,
+                    external,
+                ),
+                mdns: mdns.into(),
+                kad: kad.into(),
+                ping: ping.into(),
+                identify: identify.into(),
+                bitswap: bitswap.into(),
+                gossipsub: gossipsub.into(),
+                dcutr: dcutr.into(),
+                relay_client: relay_client.into(),
+                broadcast: broadcast.into(),
+            },
+            transport,
+        ))
     }
 
     pub fn add_address(&mut self, peer_id: &PeerId, addr: Multiaddr, source: AddressSource) {

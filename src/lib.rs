@@ -24,10 +24,10 @@ pub mod config {
     pub use libp2p::{
         dns::{ResolverConfig, ResolverOpts},
         gossipsub::GossipsubConfig,
-        identify::IdentifyConfig,
+        identify::Config as IdentifyConfig,
         kad::record::store::MemoryStoreConfig as KadConfig,
         mdns::MdnsConfig,
-        ping::PingConfig,
+        ping::Config as PingConfig,
     };
     pub use libp2p_bitswap::BitswapConfig;
     pub use libp2p_broadcast::BroadcastConfig;
