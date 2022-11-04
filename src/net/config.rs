@@ -38,6 +38,8 @@ pub struct NetworkConfig {
     pub broadcast: Option<BroadcastConfig>,
     /// Bitswap config.
     pub bitswap: Option<BitswapConfig>,
+    /// Keep explicitly dialed and incoming connections open indefinitely
+    pub keep_alive: bool,
 }
 
 /// `DNS` configuration.
@@ -81,6 +83,7 @@ impl NetworkConfig {
             gossipsub: Some(GossipsubConfig::default()),
             broadcast: Some(BroadcastConfig::default()),
             bitswap: Some(BitswapConfig::default()),
+            keep_alive: false,
         }
     }
 }

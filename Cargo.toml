@@ -3,7 +3,7 @@ members = [".", "cli", "harness"]
 
 [package]
 name = "ipfs-embed"
-version = "0.24.0"
+version = "0.25.0"
 authors = ["David Craven <david@craven.ch>", "Roland Kuhn <roland@actyx.io>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
@@ -23,9 +23,7 @@ compat = ["libp2p-bitswap/compat"]
 
 [dependencies]
 anyhow = "1.0.56"
-async-executor = "1.4.1"
 async-global-executor = { version = "2.0.3", optional = true }
-async-io = "1.6.0"
 async-trait = "0.1.52"
 chrono = "0.4.19"
 fnv = "1.0.7"
@@ -66,6 +64,7 @@ features = [
 
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
+async-executor = "1.4.1"
 async-std = { version = "1.11.0", features = ["attributes"] }
 libipld = { version = "0.14.0", default-features = false, features = ["dag-cbor", "dag-pb", "derive"] }
 libp2p-bitswap = { version = "0.24.0", default-features = false, features = ["compat"] }

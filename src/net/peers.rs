@@ -194,6 +194,7 @@ impl MultiaddrExt for Multiaddr {
 pub struct AddressBook {
     port_reuse: bool,
     enable_loopback: bool,
+    keep_alive: bool,
     local_peer_id: PeerId,
     listeners: Writer<FnvHashSet<Multiaddr>>,
     peers: Writer<FnvHashMap<PeerId, PeerInfo>>,
@@ -211,6 +212,7 @@ impl AddressBook {
         local_peer_id: PeerId,
         port_reuse: bool,
         enable_loopback: bool,
+        keep_alive: bool,
         listeners: Writer<FnvHashSet<Multiaddr>>,
         peers: Writer<FnvHashMap<PeerId, PeerInfo>>,
         external: Writer<Vec<AddressRecord>>,
@@ -218,6 +220,7 @@ impl AddressBook {
         Self {
             port_reuse,
             enable_loopback,
+            keep_alive,
             local_peer_id,
             listeners,
             peers,
@@ -261,7 +264,10 @@ impl AddressBook {
         }
         drop(peers);
         tracing::debug!(peer = %peer, addr = %&addr, "request dialing");
-        let handler = IntoAddressHandler(Some((target.into_owned(), SIM_OPEN_RETRIES + 1)));
+        let handler = IntoAddressHandler(
+            Some((target.into_owned(), SIM_OPEN_RETRIES + 1)),
+            self.keep_alive,
+        );
         self.actions.push_back(NetworkBehaviourAction::Dial {
             opts: DialOpts::peer_id(*peer).addresses(vec![addr]).build(),
             handler,
@@ -304,7 +310,7 @@ impl AddressBook {
                         .condition(PeerCondition::Always)
                         .addresses(vec![address])
                         .build(),
-                    handler: IntoAddressHandler(Some((addr_full, SIM_OPEN_RETRIES + 1))),
+                    handler: IntoAddressHandler(Some((addr_full, SIM_OPEN_RETRIES + 1)), false),
                 });
             }
             if discovered && source.is_confirmed() {
@@ -541,7 +547,7 @@ impl AddressBook {
                                 .condition(PeerCondition::Always)
                                 .addresses(vec![tcp])
                                 .build(),
-                            handler: IntoAddressHandler(Some((addr, 4))),
+                            handler: IntoAddressHandler(Some((addr, 4)), false),
                         })
                     }
                 }
@@ -618,7 +624,7 @@ impl NetworkBehaviour for AddressBook {
     type OutEvent = void::Void;
 
     fn new_handler(&mut self) -> Self::ConnectionHandler {
-        IntoAddressHandler(None)
+        IntoAddressHandler(None, self.keep_alive)
     }
 
     fn addresses_of_peer(&mut self, peer_id: &PeerId) -> Vec<Multiaddr> {
@@ -730,7 +736,7 @@ impl NetworkBehaviour for AddressBook {
         };
         let mut peer = self.peers.write();
         if let Some(info) = peer.get_mut(&peer_id) {
-            if let IntoAddressHandler(Some((addr, retries))) = handler {
+            if let IntoAddressHandler(Some((addr, retries)), keep_alive) = handler {
                 // this was our own validation dial
                 let transport = matches!(error, DialError::Transport(_));
                 let wrong_peer = matches!(error, DialError::WrongPeerId { .. });
@@ -763,7 +769,7 @@ impl NetworkBehaviour for AddressBook {
                         opts: DialOpts::peer_id(peer_id)
                             .addresses(vec![addr.clone()])
                             .build(),
-                        handler: IntoAddressHandler(Some((addr.clone(), retries - 1))),
+                        handler: IntoAddressHandler(Some((addr.clone(), retries - 1)), keep_alive),
                     };
                     self.deferred
                         .push(Delay::new(delay).map(move |_| action).boxed());
@@ -789,7 +795,10 @@ impl NetworkBehaviour for AddressBook {
                             opts: DialOpts::peer_id(peer_id)
                                 .addresses(vec![addr.clone()])
                                 .build(),
-                            handler: IntoAddressHandler(Some((addr.clone(), SIM_OPEN_RETRIES))),
+                            handler: IntoAddressHandler(
+                                Some((addr.clone(), SIM_OPEN_RETRIES)),
+                                self.keep_alive,
+                            ),
                         })
                     }
                     events.push(Event::DialFailure(peer_id, addr.clone(), error));

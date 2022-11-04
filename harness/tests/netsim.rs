@@ -39,7 +39,10 @@ fn run(bin: &str, args: impl IntoIterator<Item = &'static str>) -> anyhow::Resul
 #[cfg(target_os = "linux")]
 #[test]
 fn netsim_bitswap() -> anyhow::Result<()> {
-    run("bitswap", ["--enable-mdns", "--tree-depth=2"])
+    run(
+        "bitswap",
+        ["--enable-mdns", "--tree-depth=2", "--tree-width=4"],
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -47,7 +50,12 @@ fn netsim_bitswap() -> anyhow::Result<()> {
 fn netsim_bitswap_no_reuse() -> anyhow::Result<()> {
     run(
         "bitswap",
-        ["--enable-mdns", "--tree-depth=2", "--disable-port-reuse"],
+        [
+            "--enable-mdns",
+            "--tree-depth=2",
+            "--disable-port-reuse",
+            "--tree-width=4",
+        ],
     )
 }
 

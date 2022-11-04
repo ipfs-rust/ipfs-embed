@@ -448,6 +448,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
                 peer_id,
                 config.port_reuse,
                 config.enable_loopback,
+                config.keep_alive,
                 listeners,
                 peers,
                 external,

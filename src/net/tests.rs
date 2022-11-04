@@ -48,6 +48,7 @@ fn test_dial_basic() {
         PeerId::random(),
         false,
         false,
+        false,
         Writer::new(HashSet::default()),
         Writer::new(HashMap::default()),
         Writer::new(vec![]),
@@ -75,7 +76,7 @@ fn test_dial_basic() {
     assert_eq!(peers, vec![peer_a]);
     book.inject_dial_failure(
         Some(peer_a),
-        IntoAddressHandler(Some((addr_1.clone(), 3))),
+        IntoAddressHandler(Some((addr_1.clone(), 3)), false),
         &DialError::ConnectionIo(error),
     );
     assert_eq!(
@@ -94,7 +95,7 @@ fn test_dial_basic() {
     let error = std::io::Error::new(ErrorKind::Other, "my other error");
     book.inject_dial_failure(
         Some(peer_a),
-        IntoAddressHandler(None),
+        IntoAddressHandler(None, false),
         &DialError::Transport(vec![(addr_2.clone(), TransportError::Other(error))]),
     );
     assert_eq!(
@@ -209,6 +210,7 @@ fn from_docker_host() {
         peer_a,
         false,
         false,
+        false,
         Writer::new(HashSet::default()),
         Writer::new(HashMap::default()),
         Writer::new(vec![]),
@@ -297,7 +299,7 @@ fn from_docker_host() {
     let error = std::io::Error::new(ErrorKind::Other, "didn’t work, mate!");
     book.inject_dial_failure(
         Some(peer_b),
-        IntoAddressHandler(Some((addr_b_3p.clone(), 3))),
+        IntoAddressHandler(Some((addr_b_3p.clone(), 3)), false),
         &DialError::ConnectionIo(error),
     );
     assert_eq!(
@@ -330,6 +332,7 @@ fn from_docker_container() {
 
     let mut book = AddressBook::new(
         peer_a,
+        false,
         false,
         false,
         Writer::new(HashSet::default()),
@@ -419,7 +422,7 @@ fn from_docker_container() {
     let error = std::io::Error::new(ErrorKind::Other, "play it again, Sam");
     book.inject_dial_failure(
         Some(peer_b),
-        IntoAddressHandler(Some((addr_b_3p.clone(), 3))),
+        IntoAddressHandler(Some((addr_b_3p.clone(), 3)), false),
         &DialError::ConnectionIo(error),
     );
     assert_eq!(
@@ -465,7 +468,7 @@ fn from_docker_container() {
     let error = std::io::Error::new(ErrorKind::Other, "play it yet another time, Sam");
     book.inject_dial_failure(
         Some(peer_b),
-        IntoAddressHandler(Some((addr_b_2p.clone(), 3))),
+        IntoAddressHandler(Some((addr_b_2p.clone(), 3)), false),
         &DialError::ConnectionIo(error),
     );
     assert_eq!(
@@ -533,7 +536,7 @@ fn dials(book: &mut AddressBook) -> Vec<Dial> {
         .drain(..)
         .filter_map(|a| match a {
             NetworkBehaviourAction::Dial {
-                handler: IntoAddressHandler(Some((address, _retries))),
+                handler: IntoAddressHandler(Some((address, _retries)), false),
                 ..
             } => Some(Dial::A(address)),
             NetworkBehaviourAction::Dial { opts, .. } => opts

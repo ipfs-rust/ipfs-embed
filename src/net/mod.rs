@@ -568,7 +568,10 @@ async fn poll_swarm<P: StoreParams>(
     let mut queries = FnvHashMap::<QueryId, QueryChannel>::default();
     loop {
         match future::select(
-            future::poll_fn(|cx| swarm.poll_next_unpin(cx)),
+            future::poll_fn(|cx| {
+                tracing::trace!("polling swarm ({:?})", std::thread::current().id());
+                swarm.poll_next_unpin(cx)
+            }),
             cmd_rx.next(),
         )
         .await

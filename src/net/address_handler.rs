@@ -14,7 +14,7 @@ use std::{
 use void::Void;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IntoAddressHandler(pub Option<(Multiaddr, u8)>);
+pub struct IntoAddressHandler(pub Option<(Multiaddr, u8)>, pub bool);
 
 impl IntoAddressHandler {
     pub fn peer_id(&self) -> Option<PeerId> {
@@ -38,6 +38,7 @@ impl IntoConnectionHandler for IntoAddressHandler {
             own_dial: self.0,
             remote_peer_id: *remote_peer_id,
             connected_point: connected_point.clone(),
+            keep_alive: self.1,
         }
     }
 
@@ -51,6 +52,7 @@ pub struct AddressHandler {
     pub own_dial: Option<(Multiaddr, u8)>,
     pub remote_peer_id: PeerId,
     pub connected_point: ConnectedPoint,
+    pub keep_alive: bool,
 }
 
 impl ConnectionHandler for AddressHandler {
@@ -94,7 +96,11 @@ impl ConnectionHandler for AddressHandler {
     }
 
     fn connection_keep_alive(&self) -> KeepAlive {
-        KeepAlive::No
+        if self.keep_alive {
+            KeepAlive::Yes
+        } else {
+            KeepAlive::No
+        }
     }
 
     #[allow(clippy::type_complexity)]
