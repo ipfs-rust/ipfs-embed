@@ -722,14 +722,14 @@ async fn poll_swarm<P: StoreParams>(
                     swarm.behaviour_mut().remove_record(&key);
                 }
                 NetworkCommand::Subscribe(topic, tx) => {
-                    tx.send(swarm.behaviour_mut().subscribe(&*topic, &mut subscriptions))
+                    tx.send(swarm.behaviour_mut().subscribe(&topic, &mut subscriptions))
                         .ok();
                 }
                 NetworkCommand::Publish(topic, msg, tx) => {
-                    tx.send(swarm.behaviour_mut().publish(&*topic, msg)).ok();
+                    tx.send(swarm.behaviour_mut().publish(&topic, msg)).ok();
                 }
                 NetworkCommand::Broadcast(topic, msg, tx) => {
-                    tx.send(swarm.behaviour_mut().broadcast(&*topic, msg)).ok();
+                    tx.send(swarm.behaviour_mut().broadcast(&topic, msg)).ok();
                 }
                 NetworkCommand::Get(cid, providers, tx) => {
                     let (rx, id) =

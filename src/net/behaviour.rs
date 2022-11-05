@@ -85,7 +85,7 @@ pub enum QueryChannel {
     GetRecord(oneshot::Sender<Result<Vec<PeerRecord>>>),
     PutRecord(oneshot::Sender<Result<()>>),
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GossipEvent {
     Subscribed(PeerId),
     Message(PeerId, Arc<[u8]>),
@@ -339,7 +339,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
                 ..
             } => {
                 self.notify_subscribers(
-                    &*topic.to_string(),
+                    &topic.to_string(),
                     GossipEvent::Message(source.unwrap_or(propagation_source), data.into()),
                     subscriptions,
                 );
@@ -349,7 +349,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
                     .notify(Event::Subscribed(peer_id, topic.to_string()));
 
                 self.notify_subscribers(
-                    &*topic.to_string(),
+                    &topic.to_string(),
                     GossipEvent::Subscribed(peer_id),
                     subscriptions,
                 );
@@ -358,7 +358,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
                 self.peers
                     .notify(Event::Unsubscribed(peer_id, topic.to_string()));
                 self.notify_subscribers(
-                    &*topic.to_string(),
+                    &topic.to_string(),
                     GossipEvent::Unsubscribed(peer_id),
                     subscriptions,
                 );

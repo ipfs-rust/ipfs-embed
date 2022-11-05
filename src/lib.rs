@@ -460,7 +460,7 @@ where
     }
 
     fn temp_pin(&self, tmp: &Self::TempPin, cid: &Cid) -> Result<()> {
-        Ipfs::temp_pin(self, &mut *tmp.lock(), cid)
+        Ipfs::temp_pin(self, &mut tmp.lock(), cid)
     }
 
     fn contains(&self, cid: &Cid) -> Result<bool> {
@@ -472,7 +472,7 @@ where
     }
 
     fn insert(&self, block: &Block<P>) -> Result<()> {
-        let _ = Ipfs::insert(self, block.clone())?;
+        Ipfs::insert(self, block.clone())?;
         Ok(())
     }
 
@@ -548,7 +548,7 @@ mod tests {
         let block = create_block(b"test_local_store")?;
         let mut tmp = store.create_temp_pin()?;
         store.temp_pin(&mut tmp, block.cid())?;
-        let _ = store.insert(block.clone())?;
+        store.insert(block.clone())?;
         let block2 = store.get(block.cid())?;
         assert_eq!(block.data(), block2.data());
         Ok(())
@@ -563,7 +563,7 @@ mod tests {
         let block = create_block(b"test_exchange_mdns")?;
         let mut tmp1 = store1.create_temp_pin()?;
         store1.temp_pin(&mut tmp1, block.cid())?;
-        let _ = store1.insert(block.clone())?;
+        store1.insert(block.clone())?;
         store1.flush().await?;
         let mut tmp2 = store2.create_temp_pin()?;
         store2.temp_pin(&mut tmp2, block.cid())?;
@@ -670,9 +670,9 @@ mod tests {
         let c2 = create_ipld_block(&ipld!({ "c": [a1.cid(), b2.cid()] }))?;
         let x = alias!(x);
 
-        let _ = local1.insert(a1.clone())?;
-        let _ = local1.insert(b1.clone())?;
-        let _ = local1.insert(c1.clone())?;
+        local1.insert(a1.clone())?;
+        local1.insert(b1.clone())?;
+        local1.insert(c1.clone())?;
         local1.alias(x, Some(c1.cid()))?;
         local1.flush().await?;
         assert_pinned!(&local1, &a1);
@@ -689,8 +689,8 @@ mod tests {
         assert_pinned!(&local2, &b1);
         assert_pinned!(&local2, &c1);
 
-        let _ = local2.insert(b2.clone())?;
-        let _ = local2.insert(c2.clone())?;
+        local2.insert(b2.clone())?;
+        local2.insert(c2.clone())?;
         local2.alias(x, Some(c2.cid()))?;
         local2.flush().await?;
         assert_pinned!(&local2, &a1);
@@ -730,7 +730,6 @@ mod tests {
     }
 
     #[async_std::test]
-    #[allow(clippy::eval_order_dependence)]
     async fn test_dht_record() -> Result<()> {
         tracing_try_init();
         let mut stores = [create_store(false).await?, create_store(false).await?];
@@ -766,7 +765,6 @@ mod tests {
     }
 
     #[async_std::test]
-    #[allow(clippy::eval_order_dependence)]
     async fn test_gossip_and_broadcast() -> Result<()> {
         tracing_try_init();
         let mut stores = [
@@ -851,7 +849,7 @@ mod tests {
             {
                 let ev = timeout(Duration::from_millis(100), subscription.next())
                     .await
-                    .expect(&*format!("idx {} timeout waiting for {:?}", idx, expected))
+                    .unwrap_or_else(|_| panic!("idx {} timeout waiting for {:?}", idx, expected))
                     .unwrap();
                 assert!(expected.contains(&ev), ", received {:?}", ev);
                 if let Some(idx) = expected.iter().position(|e| e == &ev) {
@@ -981,13 +979,12 @@ mod tests {
         let size: usize = blocks.iter().map(|block| block.data().len()).sum();
         tracing::info!("chain built {} blocks, {} bytes", blocks.len(), size);
         for block in blocks.iter() {
-            let _ = a.insert(block.clone())?;
+            a.insert(block.clone())?;
         }
         a.flush().await?;
 
         let t0 = Instant::now();
-        let _ = b
-            .sync(&cid, vec![a.local_peer_id()])
+        b.sync(&cid, vec![a.local_peer_id()])
             .await?
             .for_each(|x| async move { tracing::debug!("sync progress {:?}", x) })
             .await;
@@ -1022,13 +1019,12 @@ mod tests {
         let size: usize = blocks.iter().map(|block| block.data().len()).sum();
         tracing::info!("chain built {} blocks, {} bytes", blocks.len(), size);
         for block in blocks.iter() {
-            let _ = a.insert(block.clone())?;
+            a.insert(block.clone())?;
         }
         a.flush().await?;
 
         let t0 = Instant::now();
-        let _ = b
-            .sync(&cid, vec![a.local_peer_id()])
+        b.sync(&cid, vec![a.local_peer_id()])
             .await?
             .for_each(|x| async move { tracing::debug!("sync progress {:?}", x) })
             .await;

@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
     for _ in 0..1000 {
         let block = builder.create()?;
         a.temp_pin(&mut tmp, block.cid())?;
-        let _ = a.insert(block)?;
+        a.insert(block)?;
     }
     a.alias(ROOT, builder.prev.as_ref())?;
     a.flush().await?;
