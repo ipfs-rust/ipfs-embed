@@ -1,5 +1,5 @@
 use super::{address_handler::IntoAddressHandler, *};
-use crate::net::peers::AddressBook;
+use crate::net::{peer_info::ConnectionFailureKind, peers::AddressBook};
 use async_executor::LocalExecutor;
 use futures::{future::ready, stream::StreamExt};
 use libp2p::{
@@ -111,6 +111,16 @@ fn test_dial_basic() {
         )
     );
     assert_eq!(book.peers().into_iter().next(), Some(peer_a));
+    let failure = book
+        .info(&peer_a)
+        .unwrap()
+        .recent_failures()
+        .next()
+        .cloned()
+        .unwrap();
+    assert_eq!(failure.kind(), ConnectionFailureKind::DialError);
+    assert_eq!(failure.addr(), &addr_2);
+    assert_eq!(failure.display(), "transport error: my other error");
     assert_eq!(dials(&mut book), vec![]);
 
     assert_eq!(

@@ -3,7 +3,9 @@ use fnv::FnvHashMap;
 use libp2p::{
     core::ConnectedPoint, multiaddr::Protocol, swarm::DialError, Multiaddr, TransportError,
 };
-use std::{borrow::Cow, cmp::Ordering, collections::VecDeque, fmt::Write, time::Duration};
+use std::{
+    borrow::Cow, cmp::Ordering, collections::VecDeque, error::Error, fmt::Write, io, time::Duration,
+};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PeerInfo {
@@ -263,7 +265,7 @@ pub struct ConnectionFailure {
     debug: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionFailureKind {
     DialError,
     PeerDisconnected,
@@ -287,12 +289,12 @@ impl ConnectionFailure {
             DialError::Transport(e) => {
                 if e.len() == 1 {
                     // this should always be the case since we only get here for validation dials
-                    format!("transport error: {}", e[0].1)
+                    format!("transport error: {}", D(&e[0].1))
                 } else {
                     let mut s = "transport errors:".to_owned();
                     for (addr, err) in e {
                         s.push('\n');
-                        let _ = write!(&mut s, "{} {}", without_peer(addr), err);
+                        let _ = write!(&mut s, "{} {}", without_peer(addr), D(err));
                     }
                     s
                 }
@@ -313,7 +315,7 @@ impl ConnectionFailure {
             kind: ConnectionFailureKind::DialError,
             addr: without_peer(&addr).into_owned(),
             time: Utc::now(),
-            display: format!("transport error: {}", error),
+            display: format!("transport error: {}", D(error)),
             debug: format!("{:?}", error),
         }
     }
@@ -338,6 +340,10 @@ impl ConnectionFailure {
         }
     }
 
+    pub fn kind(&self) -> ConnectionFailureKind {
+        self.kind
+    }
+
     pub fn addr(&self) -> &Multiaddr {
         &self.addr
     }
@@ -352,5 +358,17 @@ impl ConnectionFailure {
 
     pub fn debug(&self) -> &str {
         self.debug.as_str()
+    }
+}
+
+struct D<'a>(&'a TransportError<io::Error>);
+
+impl<'a> std::fmt::Display for D<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)?;
+        if let Some(cause) = self.0.source() {
+            write!(f, "{}", cause)?;
+        }
+        Ok(())
     }
 }
