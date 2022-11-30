@@ -109,7 +109,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: apk
-          args: -- build --target ${{ matrix.platform.target }}
+          args: -- build --target ${{ matrix.platform.target }} -p ipfs-embed
 
       - name: Rust tests
         if: matrix.platform.cross == false
