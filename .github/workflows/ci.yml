@@ -95,14 +95,14 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --all --target ${{ matrix.platform.target }}
+          args: --target ${{ matrix.platform.target }}
 
       - name: Build Tokio
         if: contains(matrix.platform.target, 'android') == false
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --all --target ${{ matrix.platform.target }} --no-default-features --features tokio
+          args: --target ${{ matrix.platform.target }} --no-default-features --features tokio
 
       - name: Build android
         if: contains(matrix.platform.target, 'android')
@@ -116,14 +116,6 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --all
-
-      - name: Rust tests (all features)
-        if: matrix.platform.cross == false
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --all --all-features
 
       - name: Build netsim integration tests
         if: contains(matrix.platform.target, 'linux-gnu')
