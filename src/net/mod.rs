@@ -36,9 +36,9 @@ use libp2p::dns::DnsConfig as Dns;
 #[cfg(all(feature = "tokio", not(feature = "async_global")))]
 use libp2p::dns::TokioDnsConfig as Dns;
 #[cfg(feature = "async_global")]
-use libp2p::tcp::TcpTransport;
+use libp2p::tcp::async_io::Transport as TcpTransport;
 #[cfg(all(feature = "tokio", not(feature = "async_global")))]
-use libp2p::tcp::TokioTcpTransport as TcpTransport;
+use libp2p::tcp::tokio::Transport as TcpTransport;
 use libp2p::{
     core::{
         either::EitherTransport,
@@ -52,7 +52,7 @@ use libp2p::{
     noise::{self, NoiseConfig, X25519Spec},
     pnet::{PnetConfig, PreSharedKey},
     swarm::{AddressRecord, AddressScore, Swarm, SwarmBuilder, SwarmEvent},
-    tcp::GenTcpConfig as TcpConfig,
+    tcp::Config as TcpConfig,
     yamux::YamuxConfig,
     Multiaddr, PeerId,
 };
@@ -242,12 +242,16 @@ impl NetworkService {
         assert_transport_error_type::<_, DnsErr<std::io::Error>>(&transport);
 
         let exec = executor.clone();
-        let swarm = SwarmBuilder::new(transport.boxed(), behaviour, peer_id)
-            .executor(Box::new(move |fut| {
+        let swarm = SwarmBuilder::with_executor(
+            transport.boxed(),
+            behaviour,
+            peer_id,
+            Box::new(move |fut| {
                 exec.spawn(fut).detach();
-            }))
-            .max_negotiating_inbound_streams(10000)
-            .build();
+            }),
+        )
+        .max_negotiating_inbound_streams(10000)
+        .build();
         /*
         // Required for swarm book keeping.
         swarm

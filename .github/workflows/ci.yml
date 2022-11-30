@@ -3,120 +3,179 @@ on: [push, pull_request]
 name: ipfs-embed
 
 jobs:
-    ci:
-        strategy:
-            fail-fast: false
-            matrix:
-                toolchain:
-                    - rust: "1.56.1"
-                #- rust: nightly
-                platform:
-                    - target: x86_64-unknown-linux-gnu
-                      host: ubuntu-latest
-                      cross: false
+  ci:
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain:
+          - rust: stable
+        #- rust: nightly
+        platform:
+          - target: x86_64-unknown-linux-gnu
+            host: ubuntu-latest
+            cross: false
 
-                    - target: x86_64-apple-darwin
-                      host: macos-latest
-                      cross: false
+          - target: x86_64-apple-darwin
+            host: macos-latest
+            cross: false
 
-                    - target: x86_64-pc-windows-msvc
-                      host: windows-latest
-                      cross: false
+          - target: x86_64-pc-windows-msvc
+            host: windows-latest
+            cross: false
 
-                    - target: armv7-linux-androideabi
-                      host: ubuntu-latest
-                      cross: true
-                    - target: aarch64-linux-android
-                      host: ubuntu-latest
-                      cross: true
+          - target: armv7-linux-androideabi
+            host: ubuntu-latest
+            cross: true
+          - target: aarch64-linux-android
+            host: ubuntu-latest
+            cross: true
 
-                    - target: aarch64-apple-ios
-                      host: macos-latest
-                      cross: true
+          - target: aarch64-apple-ios
+            host: macos-latest
+            cross: true
 
-                # - target: wasm32-unknown-unknown
-                #   host: ubuntu-latest
-                #   cross: true
-        env:
-            RUST_BACKTRACE: 1
-            RUST_LOG: netsim_embed_machine=debug,info
-            CARGO_INCREMENTAL: 0
-            LLVM_CONFIG_PATH: /usr/local/opt/llvm/bin/llvm-config
-            NDK_HOME: /usr/local/lib/android/sdk/ndk-bundle
+        # - target: wasm32-unknown-unknown
+        #   host: ubuntu-latest
+        #   cross: true
+    env:
+      RUST_BACKTRACE: 1
+      RUST_LOG: netsim_embed_machine=debug,info
+      CARGO_INCREMENTAL: 0
+      LLVM_CONFIG_PATH: /usr/local/opt/llvm/bin/llvm-config
+      NDK_HOME: /usr/local/lib/android/sdk/ndk-bundle
 
-        runs-on: ${{ matrix.platform.host }}
-        steps:
-            - name: Checkout sources
-              uses: actions/checkout@v2
+    runs-on: ${{ matrix.platform.host }}
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v3
 
-            - name: Cache cargo folder
-              uses: actions/cache@v1
-              with:
-                  path: ~/.cargo
-                  key: ${{ matrix.platform.target }}-cargo-${{ matrix.toolchain.rust }}
+      - name: Cache cargo folder
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ matrix.platform.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-            - name: Install dependencies ubuntu
-              if: matrix.platform.host == 'ubuntu-latest'
-              run: sudo apt-get install llvm-dev
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-            - name: Install dependencies macos
-              if: matrix.platform.host == 'macos-latest'
-              run: brew install llvm
+      - name: Install dependencies ubuntu
+        if: matrix.platform.host == 'ubuntu-latest'
+        run: sudo apt-get install llvm-dev
 
-            - name: Install dependencies windows
-              if: matrix.platform.host == 'windows-latest'
-              run: choco install llvm
+      - name: Install dependencies macos
+        if: matrix.platform.host == 'macos-latest'
+        run: brew install llvm
 
-            - name: Install rust toolchain
-              uses: hecrj/setup-rust-action@v1
-              with:
-                  rust-version: ${{ matrix.toolchain.rust }}
-                  targets: ${{ matrix.platform.target }}
+      - name: Install dependencies windows
+        if: matrix.platform.host == 'windows-latest'
+        run: choco install llvm
 
-            - name: Install cargo-apk
-              if: contains(matrix.platform.target, 'android')
-              run: cargo install cargo-apk
+      - name: Install rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.toolchain.rust }}
+          target: ${{ matrix.platform.target }}
 
-            - name: Build
-              if: contains(matrix.platform.target, 'android') == false
-              run: cargo build --all-features --target ${{ matrix.platform.target }}
+      - name: Install cargo-apk
+        if: contains(matrix.platform.target, 'android')
+        uses: baptiste0928/cargo-install@bf6758885262d0e6f61089a9d8c8790d3ac3368f # v1.3.0
+        with:
+          crate: cargo-apk
 
-            - name: Build android
-              if: contains(matrix.platform.target, 'android')
-              run: cargo apk check --all-features --target ${{ matrix.platform.target }}
+      - name: Build
+        if: contains(matrix.platform.target, 'android') == false
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --all --target ${{ matrix.platform.target }}
 
-            - name: Rust tests
-              if: matrix.platform.cross == false
-              run: cargo test --all-features
+      - name: Build Tokio
+        if: contains(matrix.platform.target, 'android') == false
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --all --target ${{ matrix.platform.target }} --no-default-features --features tokio
 
-            - name: Build netsim integration tests
-              if: contains(matrix.platform.target, 'linux-gnu')
-              run: cargo build -p ipfs-embed-cli -p harness --release
+      - name: Build android
+        if: contains(matrix.platform.target, 'android')
+        uses: actions-rs/cargo@v1
+        with:
+          command: apk
+          args: -- build --target ${{ matrix.platform.target }}
 
-            - name: Run netsim integration tests
-              if: contains(matrix.platform.target, 'linux-gnu')
-              run: cargo test --release -p harness
+      - name: Rust tests
+        if: matrix.platform.cross == false
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --all
 
-    lint-rust:
-        runs-on: ubuntu-latest
-        steps:
-            - name: Checkout sources
-              uses: actions/checkout@v2
+      - name: Rust tests (all features)
+        if: matrix.platform.cross == false
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --all --all-features
 
-            - name: Cache cargo folder
-              uses: actions/cache@v1
-              with:
-                  path: ~/.cargo
-                  key: lint-cargo
+      - name: Build netsim integration tests
+        if: contains(matrix.platform.target, 'linux-gnu')
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: -p ipfs-embed-cli -p harness --release
 
-            - name: Install rust toolchain
-              uses: hecrj/setup-rust-action@v1
-              with:
-                  rust-version: "1.56.1"
-                  components: clippy, rustfmt
+      - name: Run netsim integration tests
+        if: contains(matrix.platform.target, 'linux-gnu')
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --release -p harness
 
-            - name: cargo fmt
-              run: cargo fmt --all -- --check
+  lint-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v3
 
-            - name: cargo clippy
-              run: cargo clippy --workspace --examples --tests --all-features -- -D warnings
+      - name: Cache cargo folder
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          components: clippy, rustfmt
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: cargo fmt
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+
+      - name: cargo clippy
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --workspace --examples --tests -- -D warnings

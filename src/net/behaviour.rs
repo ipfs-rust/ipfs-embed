@@ -13,9 +13,9 @@ use futures::channel::{
 };
 use libipld::{store::StoreParams, Cid, DefaultParams, Result};
 #[cfg(feature = "async_global")]
-use libp2p::mdns::Mdns;
+use libp2p::mdns::async_io::Behaviour as Mdns;
 #[cfg(all(feature = "tokio", not(feature = "async_global")))]
-use libp2p::mdns::TokioMdns as Mdns;
+use libp2p::mdns::tokio::Behaviour as Mdns;
 use libp2p::{
     core::ConnectedPoint,
     gossipsub::{Gossipsub, GossipsubEvent, GossipsubMessage, IdentTopic, MessageAuthenticity},
@@ -23,15 +23,14 @@ use libp2p::{
     kad::{
         record::{store::MemoryStore, Key, Record},
         AddProviderOk, BootstrapOk, GetClosestPeersOk, GetProvidersOk, GetRecordOk, Kademlia,
-        KademliaEvent, PeerRecord, PutRecordOk, QueryResult, Quorum,
+        KademliaEvent, PeerRecord, ProgressStep, PutRecordOk, QueryResult, Quorum, K_VALUE,
     },
-    mdns::MdnsEvent,
-    ping,
+    mdns, ping,
     swarm::{
         behaviour::toggle::Toggle, AddressRecord, ConnectionError, ConnectionHandler,
         IntoConnectionHandler, NetworkBehaviour,
     },
-    Multiaddr, NetworkBehaviour, PeerId,
+    Multiaddr, PeerId,
 };
 use libp2p_bitswap::{Bitswap, BitswapEvent, BitswapStore};
 use libp2p_broadcast::{Broadcast, BroadcastEvent, Topic};
@@ -80,9 +79,13 @@ pub enum QueryChannel {
     Bootstrap(oneshot::Sender<Result<()>>),
     #[allow(dead_code)]
     GetClosestPeers(oneshot::Sender<Result<Vec<PeerId>>>),
-    GetProviders(oneshot::Sender<Result<HashSet<PeerId>>>),
+    GetProviders(HashSet<PeerId>, oneshot::Sender<Result<HashSet<PeerId>>>),
     StartProviding(oneshot::Sender<Result<()>>),
-    GetRecord(oneshot::Sender<Result<Vec<PeerRecord>>>),
+    GetRecord(
+        usize,
+        Vec<PeerRecord>,
+        oneshot::Sender<Result<Vec<PeerRecord>>>,
+    ),
     PutRecord(oneshot::Sender<Result<()>>),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,14 +111,14 @@ pub struct NetworkBackendBehaviour<P: StoreParams> {
 }
 
 impl<P: StoreParams> NetworkBackendBehaviour<P> {
-    pub fn inject_mdns_event(&mut self, event: MdnsEvent) {
+    pub fn inject_mdns_event(&mut self, event: mdns::Event) {
         match event {
-            MdnsEvent::Discovered(list) => {
+            mdns::Event::Discovered(list) => {
                 for (peer_id, addr) in list {
                     self.add_address(&peer_id, addr, AddressSource::Mdns);
                 }
             }
-            MdnsEvent::Expired(_) => {
+            mdns::Event::Expired(_) => {
                 // Ignore expired addresses
             }
         }
@@ -166,7 +169,13 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         queries: &mut FnvHashMap<QueryId, QueryChannel>,
     ) {
         tracing::trace!("kademlia event {:?}", event);
-        if let KademliaEvent::OutboundQueryCompleted { id, result, .. } = event {
+        if let KademliaEvent::OutboundQueryProgressed {
+            id,
+            result,
+            step: ProgressStep { last, .. },
+            ..
+        } = event
+        {
             match result {
                 QueryResult::Bootstrap(Ok(BootstrapOk { num_remaining, .. })) => {
                     tracing::trace!("remaining {}", num_remaining);
@@ -195,14 +204,26 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
                         ch.send(Err(KadGetClosestPeersError(err).into())).ok();
                     }
                 }
-                QueryResult::GetProviders(Ok(GetProvidersOk { providers, .. })) => {
-                    if let Some(QueryChannel::GetProviders(ch)) = queries.remove(&id.into()) {
-                        ch.send(Ok(providers)).ok();
+                QueryResult::GetProviders(Ok(res)) => {
+                    if let Some(QueryChannel::GetProviders(set, ..)) = queries.get_mut(&id.into()) {
+                        match res {
+                            GetProvidersOk::FoundProviders { providers, .. } => {
+                                set.extend(providers)
+                            }
+                            GetProvidersOk::FinishedWithNoAdditionalRecord { .. } => {}
+                        }
+                        if last {
+                            if let Some(QueryChannel::GetProviders(set, ch)) =
+                                queries.remove(&id.into())
+                            {
+                                ch.send(Ok(set)).ok();
+                            }
+                        }
                     }
                 }
                 QueryResult::GetProviders(Err(err)) => {
                     tracing::trace!("{:?}", err);
-                    if let Some(QueryChannel::GetProviders(ch)) = queries.remove(&id.into()) {
+                    if let Some(QueryChannel::GetProviders(_, ch)) = queries.remove(&id.into()) {
                         ch.send(Err(KadGetProvidersError(err).into())).ok();
                     }
                 }
@@ -221,14 +242,31 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
                 QueryResult::RepublishProvider(Err(err)) => {
                     tracing::trace!("{:?}", err);
                 }
-                QueryResult::GetRecord(Ok(GetRecordOk { records, .. })) => {
-                    if let Some(QueryChannel::GetRecord(ch)) = queries.remove(&id.into()) {
-                        ch.send(Ok(records)).ok();
+                QueryResult::GetRecord(Ok(res)) => {
+                    if let Some(QueryChannel::GetRecord(quorum, records, ..)) =
+                        queries.get_mut(&id.into())
+                    {
+                        match res {
+                            GetRecordOk::FoundRecord(record) => records.push(record),
+                            GetRecordOk::FinishedWithNoAdditionalRecord { .. } => {}
+                        }
+                        if last || records.len() >= *quorum {
+                            if let Some(mut q) =
+                                self.kad.as_mut().and_then(|kad| kad.query_mut(&id))
+                            {
+                                q.finish();
+                            }
+                            if let Some(QueryChannel::GetRecord(_, records, ch)) =
+                                queries.remove(&id.into())
+                            {
+                                ch.send(Ok(records)).ok();
+                            }
+                        }
                     }
                 }
                 QueryResult::GetRecord(Err(err)) => {
                     tracing::trace!("{:?}", err);
-                    if let Some(QueryChannel::GetRecord(ch)) = queries.remove(&id.into()) {
+                    if let Some(QueryChannel::GetRecord(_, _, ch)) = queries.remove(&id.into()) {
                         ch.send(Err(KadGetRecordError(err).into())).ok();
                     }
                 }
@@ -579,7 +617,7 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
         if bootstrap_complete {
             if let Some(kad) = self.kad.as_mut() {
                 let id = kad.get_providers(key);
-                queries.insert(id.into(), QueryChannel::GetProviders(tx));
+                queries.insert(id.into(), QueryChannel::GetProviders(HashSet::new(), tx));
             }
         } else {
             tx.send(Err(NotBootstrapped.into())).ok();
@@ -596,8 +634,14 @@ impl<P: StoreParams> NetworkBackendBehaviour<P> {
     ) {
         if bootstrap_complete {
             if let Some(kad) = self.kad.as_mut() {
-                let id = kad.get_record(key, quorum);
-                queries.insert(id.into(), QueryChannel::GetRecord(tx));
+                let quorum = match quorum {
+                    Quorum::One => 1,
+                    Quorum::Majority => K_VALUE.get() / 2 + 1,
+                    Quorum::All => K_VALUE.get(),
+                    Quorum::N(n) => n.get(),
+                };
+                let id = kad.get_record(key);
+                queries.insert(id.into(), QueryChannel::GetRecord(quorum, vec![], tx));
             }
         } else {
             tx.send(Err(NotBootstrapped.into())).ok();

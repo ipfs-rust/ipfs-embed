@@ -17,7 +17,7 @@ use futures_timer::Delay;
 use lazy_static::lazy_static;
 use libp2p::{
     core::{
-        connection::{ConnectedPoint, ConnectionId},
+        connection::ConnectedPoint,
         either::EitherError,
         transport::{timeout::TransportTimeoutError, ListenerId},
         UpgradeError,
@@ -27,6 +27,7 @@ use libp2p::{
     multiaddr::Protocol,
     noise::NoiseError,
     swarm::{
+        derive_prelude::FromSwarm,
         dial_opts::{DialOpts, PeerCondition},
         AddressRecord, ConnectionError, DialError, NetworkBehaviour, NetworkBehaviourAction,
         PollParameters,
@@ -566,166 +567,11 @@ impl AddressBook {
         self.event_stream
             .retain(|tx| tx.unbounded_send(event.clone()).is_ok());
     }
-}
 
-pub fn register_metrics(registry: &Registry) -> Result<()> {
-    registry.register(Box::new(LISTENERS.clone()))?;
-    registry.register(Box::new(LISTEN_ADDRS.clone()))?;
-    registry.register(Box::new(EXTERNAL_ADDRS.clone()))?;
-    registry.register(Box::new(DISCOVERED.clone()))?;
-    registry.register(Box::new(CONNECTED.clone()))?;
-    registry.register(Box::new(CONNECTIONS.clone()))?;
-    registry.register(Box::new(LISTENER_ERROR.clone()))?;
-    registry.register(Box::new(ADDRESS_REACH_FAILURE.clone()))?;
-    registry.register(Box::new(DIAL_FAILURE.clone()))?;
-    Ok(())
-}
-
-fn ip_port(m: &Multiaddr) -> Option<(IpAddr, u16)> {
-    let mut iter = m.iter();
-    let addr = match iter.next()? {
-        Protocol::Ip4(ip) => IpAddr::V4(ip),
-        Protocol::Ip6(ip) => IpAddr::V6(ip),
-        _ => return None,
-    };
-    let port = match iter.next()? {
-        Protocol::Tcp(p) => p,
-        _ => return None,
-    };
-    Some((addr, port))
-}
-
-fn diff_time(former: DateTime<Utc>, latter: DateTime<Utc>) -> Duration {
-    latter
-        .signed_duration_since(former)
-        .to_std()
-        .unwrap_or(Duration::ZERO)
-}
-
-#[derive(Debug)]
-pub struct SwarmEvents(mpsc::UnboundedReceiver<Event>);
-
-impl SwarmEvents {
-    pub fn new(channel: mpsc::UnboundedReceiver<Event>) -> Self {
-        Self(channel)
-    }
-}
-
-impl Stream for SwarmEvents {
-    type Item = Event;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.0).poll_next(cx)
-    }
-}
-
-impl NetworkBehaviour for AddressBook {
-    type ConnectionHandler = IntoAddressHandler;
-    type OutEvent = void::Void;
-
-    fn new_handler(&mut self) -> Self::ConnectionHandler {
-        IntoAddressHandler(None, self.keep_alive)
-    }
-
-    fn addresses_of_peer(&mut self, peer_id: &PeerId) -> Vec<Multiaddr> {
-        if let Some(info) = self.peers.read().get(peer_id) {
-            info.confirmed_addresses().cloned().collect()
-        } else {
-            vec![]
-        }
-    }
-
-    fn inject_event(&mut self, _peer_id: PeerId, _connection: ConnectionId, _event: void::Void) {}
-
-    fn poll(
+    pub(crate) fn dial_failure(
         &mut self,
-        cx: &mut Context,
-        params: &mut impl PollParameters,
-    ) -> Poll<NetworkBehaviourAction<void::Void, IntoAddressHandler>> {
-        if self.refresh_external {
-            self.refresh_external = false;
-            *self.external.write() = params.external_addresses().collect();
-        }
-        if let Some(action) = self.actions.pop_front() {
-            Poll::Ready(action)
-        } else if !self.deferred.is_empty() {
-            self.deferred.poll_next_unpin(cx).map(|p| p.unwrap())
-        } else {
-            Poll::Pending
-        }
-    }
-
-    fn inject_connection_established(
-        &mut self,
-        peer_id: &PeerId,
-        _: &ConnectionId,
-        conn: &ConnectedPoint,
-        _failures: Option<&Vec<Multiaddr>>,
-        other_established: usize,
-    ) {
-        let conn = normalize_connected_point(conn, &self.local_peer_id, peer_id);
-        let address = conn.get_remote_address();
-        tracing::debug!(
-            addr = %address,
-            out = conn.is_dialer(),
-            "connection established"
-        );
-        let src = if conn.is_dialer() {
-            AddressSource::Dial
-        } else {
-            AddressSource::Incoming
-        };
-        self.add_address(peer_id, address.clone(), src);
-        self.peers
-            .write()
-            .entry(*peer_id)
-            .or_default()
-            .connections
-            .insert(address.clone(), (Utc::now(), Direction::from(&conn)));
-        if other_established == 0 {
-            self.notify(Event::Connected(*peer_id));
-        }
-        self.notify(Event::ConnectionEstablished(*peer_id, conn));
-    }
-
-    fn inject_address_change(
-        &mut self,
-        peer_id: &PeerId,
-        _: &ConnectionId,
-        old: &ConnectedPoint,
-        new: &ConnectedPoint,
-    ) {
-        let old = normalize_connected_point(old, &self.local_peer_id, peer_id);
-        let new = normalize_connected_point(new, &self.local_peer_id, peer_id);
-        let old_addr = old.get_remote_address();
-        let new_addr = new.get_remote_address();
-        tracing::debug!(
-            old = %old.get_remote_address(),
-            new = %new_addr,
-            out = new.is_dialer(),
-            "address changed"
-        );
-        let src = if new.is_dialer() {
-            AddressSource::Dial
-        } else {
-            AddressSource::Incoming
-        };
-        self.add_address(peer_id, new_addr.clone(), src);
-        let mut peers = self.peers.write();
-        let entry = peers.entry(*peer_id).or_default();
-        entry.connections.remove(old_addr);
-        entry
-            .connections
-            .insert(new_addr.clone(), (Utc::now(), Direction::from(&new)));
-        drop(peers);
-
-        self.notify(Event::AddressChanged(*peer_id, old, new));
-    }
-
-    fn inject_dial_failure(
-        &mut self,
+        handler: IntoAddressHandler,
         peer_id: Option<PeerId>,
-        handler: Self::ConnectionHandler,
         error: &DialError,
     ) {
         let peer_id = if let Some(peer_id) = handler.peer_id().or(peer_id) {
@@ -829,58 +675,207 @@ impl NetworkBehaviour for AddressBook {
             tracing::debug!(peer = %peer_id, error = %error, "dial failure for unknown peer");
         }
     }
+}
 
-    fn inject_new_listener(&mut self, id: ListenerId) {
-        tracing::trace!("listener {:?}: created", id);
-        LISTENERS.inc();
-        self.notify(Event::NewListener(id));
+pub fn register_metrics(registry: &Registry) -> Result<()> {
+    registry.register(Box::new(LISTENERS.clone()))?;
+    registry.register(Box::new(LISTEN_ADDRS.clone()))?;
+    registry.register(Box::new(EXTERNAL_ADDRS.clone()))?;
+    registry.register(Box::new(DISCOVERED.clone()))?;
+    registry.register(Box::new(CONNECTED.clone()))?;
+    registry.register(Box::new(CONNECTIONS.clone()))?;
+    registry.register(Box::new(LISTENER_ERROR.clone()))?;
+    registry.register(Box::new(ADDRESS_REACH_FAILURE.clone()))?;
+    registry.register(Box::new(DIAL_FAILURE.clone()))?;
+    Ok(())
+}
+
+fn ip_port(m: &Multiaddr) -> Option<(IpAddr, u16)> {
+    let mut iter = m.iter();
+    let addr = match iter.next()? {
+        Protocol::Ip4(ip) => IpAddr::V4(ip),
+        Protocol::Ip6(ip) => IpAddr::V6(ip),
+        _ => return None,
+    };
+    let port = match iter.next()? {
+        Protocol::Tcp(p) => p,
+        _ => return None,
+    };
+    Some((addr, port))
+}
+
+fn diff_time(former: DateTime<Utc>, latter: DateTime<Utc>) -> Duration {
+    latter
+        .signed_duration_since(former)
+        .to_std()
+        .unwrap_or(Duration::ZERO)
+}
+
+#[derive(Debug)]
+pub struct SwarmEvents(mpsc::UnboundedReceiver<Event>);
+
+impl SwarmEvents {
+    pub fn new(channel: mpsc::UnboundedReceiver<Event>) -> Self {
+        Self(channel)
+    }
+}
+
+impl Stream for SwarmEvents {
+    type Item = Event;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.0).poll_next(cx)
+    }
+}
+
+impl NetworkBehaviour for AddressBook {
+    type ConnectionHandler = IntoAddressHandler;
+    type OutEvent = void::Void;
+
+    fn new_handler(&mut self) -> Self::ConnectionHandler {
+        IntoAddressHandler(None, self.keep_alive)
     }
 
-    fn inject_new_listen_addr(&mut self, id: ListenerId, addr: &Multiaddr) {
-        tracing::trace!("listener {:?}: new listen addr {}", id, addr);
-        if self.listeners.write().insert(addr.clone()) {
-            LISTEN_ADDRS.inc();
+    fn addresses_of_peer(&mut self, peer_id: &PeerId) -> Vec<Multiaddr> {
+        if let Some(info) = self.peers.read().get(peer_id) {
+            info.confirmed_addresses().cloned().collect()
+        } else {
+            vec![]
         }
-        self.notify(Event::NewListenAddr(id, addr.clone()));
     }
 
-    fn inject_expired_listen_addr(&mut self, id: ListenerId, addr: &Multiaddr) {
-        tracing::trace!("listener {:?}: expired listen addr {}", id, addr);
-        if self.listeners.write().remove(addr) {
-            LISTEN_ADDRS.dec();
+    fn poll(
+        &mut self,
+        cx: &mut Context,
+        params: &mut impl PollParameters,
+    ) -> Poll<NetworkBehaviourAction<void::Void, IntoAddressHandler>> {
+        if self.refresh_external {
+            self.refresh_external = false;
+            *self.external.write() = params.external_addresses().collect();
         }
-        self.notify(Event::ExpiredListenAddr(id, addr.clone()));
+        if let Some(action) = self.actions.pop_front() {
+            Poll::Ready(action)
+        } else if !self.deferred.is_empty() {
+            self.deferred.poll_next_unpin(cx).map(|p| p.unwrap())
+        } else {
+            Poll::Pending
+        }
     }
 
-    fn inject_listener_error(&mut self, id: ListenerId, err: &(dyn std::error::Error + 'static)) {
-        let err = format!("{:#}", err);
-        tracing::trace!("listener {:?}: listener error {}", id, err);
-        LISTENER_ERROR.inc();
-        self.notify(Event::ListenerError(id, err));
-    }
+    fn on_swarm_event(&mut self, event: FromSwarm<Self::ConnectionHandler>) {
+        match event {
+            FromSwarm::ConnectionEstablished(c) => {
+                let conn = normalize_connected_point(c.endpoint, &self.local_peer_id, &c.peer_id);
+                let address = conn.get_remote_address();
+                tracing::debug!(
+                    addr = %address,
+                    out = conn.is_dialer(),
+                    "connection established"
+                );
+                let src = if conn.is_dialer() {
+                    AddressSource::Dial
+                } else {
+                    AddressSource::Incoming
+                };
+                self.add_address(&c.peer_id, address.clone(), src);
+                self.peers
+                    .write()
+                    .entry(c.peer_id)
+                    .or_default()
+                    .connections
+                    .insert(address.clone(), (Utc::now(), Direction::from(&conn)));
+                if c.other_established == 0 {
+                    self.notify(Event::Connected(c.peer_id));
+                }
+                self.notify(Event::ConnectionEstablished(c.peer_id, conn));
+            }
+            FromSwarm::ConnectionClosed(_) => {
+                // handled via external SwarmEvent since that is the only way to get the reason
+            }
+            FromSwarm::AddressChange(a) => {
+                let old = normalize_connected_point(a.old, &self.local_peer_id, &a.peer_id);
+                let new = normalize_connected_point(a.new, &self.local_peer_id, &a.peer_id);
+                let old_addr = old.get_remote_address();
+                let new_addr = new.get_remote_address();
+                tracing::debug!(
+                    old = %old.get_remote_address(),
+                    new = %new_addr,
+                    out = new.is_dialer(),
+                    "address changed"
+                );
+                let src = if new.is_dialer() {
+                    AddressSource::Dial
+                } else {
+                    AddressSource::Incoming
+                };
+                self.add_address(&a.peer_id, new_addr.clone(), src);
+                let mut peers = self.peers.write();
+                let entry = peers.entry(a.peer_id).or_default();
+                entry.connections.remove(old_addr);
+                entry
+                    .connections
+                    .insert(new_addr.clone(), (Utc::now(), Direction::from(&new)));
+                drop(peers);
 
-    fn inject_listener_closed(&mut self, id: ListenerId, reason: Result<(), &std::io::Error>) {
-        tracing::trace!("listener {:?}: closed for reason {:?}", id, reason);
-        LISTENERS.dec();
-        self.notify(Event::ListenerClosed(id));
-    }
-
-    fn inject_new_external_addr(&mut self, addr: &Multiaddr) {
-        self.refresh_external = true;
-        let mut addr = addr.clone();
-        normalize_addr(&mut addr, self.local_peer_id());
-        tracing::trace!("new external addr {}", addr);
-        EXTERNAL_ADDRS.inc();
-        self.notify(Event::NewExternalAddr(addr));
-    }
-
-    fn inject_expired_external_addr(&mut self, addr: &Multiaddr) {
-        self.refresh_external = true;
-        let mut addr = addr.clone();
-        normalize_addr(&mut addr, self.local_peer_id());
-        tracing::trace!("expired external addr {}", addr);
-        EXTERNAL_ADDRS.dec();
-        self.notify(Event::ExpiredExternalAddr(addr));
+                self.notify(Event::AddressChanged(a.peer_id, old, new));
+            }
+            FromSwarm::DialFailure(d) => self.dial_failure(d.handler, d.peer_id, d.error),
+            FromSwarm::ListenFailure(_) => {}
+            FromSwarm::NewListener(l) => {
+                tracing::trace!("listener {:?}: created", l.listener_id);
+                LISTENERS.inc();
+                self.notify(Event::NewListener(l.listener_id));
+            }
+            FromSwarm::NewListenAddr(l) => {
+                tracing::trace!("listener {:?}: new listen addr {}", l.listener_id, l.addr);
+                if self.listeners.write().insert(l.addr.clone()) {
+                    LISTEN_ADDRS.inc();
+                }
+                self.notify(Event::NewListenAddr(l.listener_id, l.addr.clone()));
+            }
+            FromSwarm::ExpiredListenAddr(l) => {
+                tracing::trace!(
+                    "listener {:?}: expired listen addr {}",
+                    l.listener_id,
+                    l.addr
+                );
+                if self.listeners.write().remove(l.addr) {
+                    LISTEN_ADDRS.dec();
+                }
+                self.notify(Event::ExpiredListenAddr(l.listener_id, l.addr.clone()));
+            }
+            FromSwarm::ListenerError(l) => {
+                let err = format!("{:#}", l.err);
+                tracing::trace!("listener {:?}: listener error {}", l.listener_id, err);
+                LISTENER_ERROR.inc();
+                self.notify(Event::ListenerError(l.listener_id, err));
+            }
+            FromSwarm::ListenerClosed(l) => {
+                tracing::trace!(
+                    "listener {:?}: closed for reason {:?}",
+                    l.listener_id,
+                    l.reason
+                );
+                LISTENERS.dec();
+                self.notify(Event::ListenerClosed(l.listener_id));
+            }
+            FromSwarm::NewExternalAddr(a) => {
+                self.refresh_external = true;
+                let mut addr = a.addr.clone();
+                normalize_addr(&mut addr, self.local_peer_id());
+                tracing::trace!("new external addr {}", addr);
+                EXTERNAL_ADDRS.inc();
+                self.notify(Event::NewExternalAddr(addr));
+            }
+            FromSwarm::ExpiredExternalAddr(a) => {
+                self.refresh_external = true;
+                let mut addr = a.addr.clone();
+                normalize_addr(&mut addr, self.local_peer_id());
+                tracing::trace!("expired external addr {}", addr);
+                EXTERNAL_ADDRS.dec();
+                self.notify(Event::ExpiredExternalAddr(addr));
+            }
+        }
     }
 }
 

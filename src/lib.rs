@@ -26,7 +26,7 @@ pub mod config {
         gossipsub::GossipsubConfig,
         identify::Config as IdentifyConfig,
         kad::record::store::MemoryStoreConfig as KadConfig,
-        mdns::MdnsConfig,
+        mdns::Config as MdnsConfig,
         ping::Config as PingConfig,
     };
     pub use libp2p_bitswap::BitswapConfig;

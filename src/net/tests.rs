@@ -7,7 +7,10 @@ use libp2p::{
     identify,
     identity::ed25519::Keypair,
     multiaddr::Protocol,
-    swarm::{DialError, NetworkBehaviour, NetworkBehaviourAction},
+    swarm::{
+        derive_prelude::{ConnectionEstablished as CE, FromSwarm},
+        DialError, NetworkBehaviour, NetworkBehaviourAction,
+    },
     TransportError,
 };
 use std::{cell::RefCell, collections::HashMap, io::ErrorKind};
@@ -74,9 +77,9 @@ fn test_dial_basic() {
     assert_eq!(events.next(), vec!(NewInfo(peer_a)));
     let peers = book.peers();
     assert_eq!(peers, vec![peer_a]);
-    book.inject_dial_failure(
-        Some(peer_a),
+    book.dial_failure(
         IntoAddressHandler(Some((addr_1.clone(), 3)), false),
+        Some(peer_a),
         &DialError::ConnectionIo(error),
     );
     assert_eq!(
@@ -93,9 +96,9 @@ fn test_dial_basic() {
         )
     );
     let error = std::io::Error::new(ErrorKind::Other, "my other error");
-    book.inject_dial_failure(
-        Some(peer_a),
+    book.dial_failure(
         IntoAddressHandler(None, false),
+        Some(peer_a),
         &DialError::Transport(vec![(addr_2.clone(), TransportError::Other(error))]),
     );
     assert_eq!(
@@ -172,7 +175,7 @@ fn test_dial_basic() {
 //     book.add_address(&peer_a, addr_2.clone(), AddressSource::Incoming);
 //     assert_eq!(events.next(), vec!(NewInfo(peer_a)));
 
-//     book.inject_dial_failure(
+//     book.dial_failure(
 //         Some(peer_a),
 //         IntoAddressHandler(Some(addr_1)),
 //         &DialError::ConnectionIo(error),
@@ -185,13 +188,13 @@ fn test_dial_basic() {
 //         )
 //     );
 
-//     book.inject_dial_failure(peer_a);
+//     book.dial_failure(peer_a);
 //     // Incoming addresses are not eligible for dialling until verified
 //     assert_eq!(dials(&mut book), vec!(Dial::P(peer_a, vec!())));
 //     let peers = book.peers().collect::<Vec<_>>();
 //     assert_eq!(peers, vec![&peer_a]);
 
-//     book.inject_dial_failure(Some(&peer_a), &addr_2, &error);
+//     book.dial_failure(Some(&peer_a), &addr_2, &error);
 //     assert_eq!(
 //         events.next(),
 //         vec!(
@@ -200,7 +203,7 @@ fn test_dial_basic() {
 //         )
 //     );
 
-//     book.inject_dial_failure(&peer_a);
+//     book.dial_failure(&peer_a);
 //     assert_eq!(events.next(), vec!(NewInfo(peer_a), Unreachable(peer_a)));
 //     assert!(book.peers().next().is_none());
 // }
@@ -245,7 +248,13 @@ fn from_docker_host() {
         local_addr: addr_a_1p,
         send_back_addr: addr_b_1p.clone(),
     };
-    book.inject_connection_established(&peer_b, &id, &cp, None, 0);
+    book.on_swarm_event(FromSwarm::ConnectionEstablished(CE {
+        peer_id: peer_b,
+        connection_id: id,
+        endpoint: &cp,
+        failed_addresses: &[],
+        other_established: 0,
+    }));
     assert_eq!(
         events.next(),
         vec![
@@ -287,7 +296,13 @@ fn from_docker_host() {
         address: addr_b_2p.clone(),
         role_override: Endpoint::Dialer,
     };
-    book.inject_connection_established(&peer_b, &id2, &cp2, None, 0);
+    book.on_swarm_event(FromSwarm::ConnectionEstablished(CE {
+        peer_id: peer_b,
+        connection_id: id2,
+        endpoint: &cp2,
+        failed_addresses: &[],
+        other_established: 0,
+    }));
     assert_eq!(
         events.next(),
         vec![
@@ -307,9 +322,9 @@ fn from_docker_host() {
     );
 
     let error = std::io::Error::new(ErrorKind::Other, "didn’t work, mate!");
-    book.inject_dial_failure(
-        Some(peer_b),
+    book.dial_failure(
         IntoAddressHandler(Some((addr_b_3p.clone(), 3)), false),
+        Some(peer_b),
         &DialError::ConnectionIo(error),
     );
     assert_eq!(
@@ -369,7 +384,13 @@ fn from_docker_container() {
         local_addr: addr_a_1p,
         send_back_addr: addr_b_1p.clone(),
     };
-    book.inject_connection_established(&peer_b, &id, &cp, None, 0);
+    book.on_swarm_event(FromSwarm::ConnectionEstablished(CE {
+        peer_id: peer_b,
+        connection_id: id,
+        endpoint: &cp,
+        failed_addresses: &[],
+        other_established: 0,
+    }));
     assert_eq!(
         events.next(),
         vec![
@@ -430,9 +451,9 @@ fn from_docker_container() {
     );
 
     let error = std::io::Error::new(ErrorKind::Other, "play it again, Sam");
-    book.inject_dial_failure(
-        Some(peer_b),
+    book.dial_failure(
         IntoAddressHandler(Some((addr_b_3p.clone(), 3)), false),
+        Some(peer_b),
         &DialError::ConnectionIo(error),
     );
     assert_eq!(
@@ -459,7 +480,13 @@ fn from_docker_container() {
         address: addr_b_2p.clone(),
         role_override: Endpoint::Dialer,
     };
-    book.inject_connection_established(&peer_b, &id2, &cp2, None, 0);
+    book.on_swarm_event(FromSwarm::ConnectionEstablished(CE {
+        peer_id: peer_b,
+        connection_id: id2,
+        endpoint: &cp2,
+        failed_addresses: &[],
+        other_established: 0,
+    }));
     assert_eq!(
         events.next(),
         vec![
@@ -476,9 +503,9 @@ fn from_docker_container() {
     );
 
     let error = std::io::Error::new(ErrorKind::Other, "play it yet another time, Sam");
-    book.inject_dial_failure(
-        Some(peer_b),
+    book.dial_failure(
         IntoAddressHandler(Some((addr_b_2p.clone(), 3)), false),
+        Some(peer_b),
         &DialError::ConnectionIo(error),
     );
     assert_eq!(
