@@ -795,7 +795,7 @@ mod tests {
         }
 
         // TCP sim open redials may take a second
-        async_std::task::sleep(Duration::from_millis(1500)).await;
+        async_std::task::sleep(Duration::from_millis(2500)).await;
         for (store, _) in &stores {
             for (peer, _) in &others {
                 assert!(store.is_connected(peer));
