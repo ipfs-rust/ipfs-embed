@@ -610,7 +610,6 @@ impl AddressBook {
                     if retries == SIM_OPEN_RETRIES + 1 {
                         tracing::debug!("scheduling redial after presumed TCP simultaneous open");
                     }
-                    let delay = Duration::from_secs(1) * rand::random::<u32>() / u32::MAX;
                     let action = NetworkBehaviourAction::Dial {
                         opts: DialOpts::peer_id(peer_id)
                             .addresses(vec![addr.clone()])
@@ -618,7 +617,7 @@ impl AddressBook {
                         handler: IntoAddressHandler(Some((addr.clone(), retries - 1)), keep_alive),
                     };
                     self.deferred
-                        .push(Delay::new(delay).map(move |_| action).boxed());
+                        .push(Delay::new(self.redial_delay()).map(move |_| action).boxed());
                 }
                 drop(peer);
 
@@ -657,9 +656,8 @@ impl AddressBook {
                     self.notify(Event::Unreachable(peer_id));
                 }
                 for action in deferred {
-                    let delay = Duration::from_secs(1) * rand::random::<u32>() / u32::MAX;
                     self.deferred
-                        .push(Delay::new(delay).map(move |_| action).boxed());
+                        .push(Delay::new(self.redial_delay()).map(move |_| action).boxed());
                 }
                 self.notify(Event::NewInfo(peer_id));
             } else if let DialError::DialPeerConditionFalse(d) = error {
@@ -674,6 +672,15 @@ impl AddressBook {
         } else {
             tracing::debug!(peer = %peer_id, error = %error, "dial failure for unknown peer");
         }
+    }
+
+    fn redial_delay(&self) -> Duration {
+        Duration::from_secs(1) * rand::random::<u32>() / u32::MAX
+            + if self.port_reuse {
+                Duration::from_secs(1)
+            } else {
+                Duration::ZERO
+            }
     }
 }
 

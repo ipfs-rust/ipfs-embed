@@ -1,9 +1,9 @@
 #[cfg(target_os = "linux")]
 fn main() -> anyhow::Result<()> {
-    use harness::{MachineExt, MultiaddrExt};
+    use harness::{MachineExt, MultiaddrExt, MyFutureExt};
     use ipfs_embed_cli::{Command, Config, Event};
     use netsim_embed::{DelayBuffer, Ipv4Range, Netsim};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -57,8 +57,9 @@ fn main() -> anyhow::Result<()> {
         a.send(Command::Dial(b_id));
         b.send(Command::Dial(a_id));
 
+        let now = Instant::now();
         loop {
-            match a.recv().await {
+            match a.recv().deadline(now, 15).await.unwrap() {
                 Some(Event::Connected(id)) => {
                     if id == b_id {
                         break;
@@ -73,7 +74,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
         loop {
-            match b.recv().await {
+            match b.recv().deadline(now, 15).await.unwrap() {
                 Some(Event::Connected(id)) => {
                     if id == a_id {
                         break;

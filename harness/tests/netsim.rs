@@ -20,9 +20,14 @@ fn run(bin: &str, args: impl IntoIterator<Item = &'static str>) -> anyhow::Resul
         .assert();
     let out = cmd.get_output().stdout.clone();
     let err = cmd.get_output().stderr.clone();
+    let must_contain = if bin == "sim_open" {
+        "scheduling redial after presumed TCP simultaneous open"
+    } else {
+        "DEBUG"
+    };
     (|| {
         cmd.try_stderr(is_empty())?
-            .try_stdout(contains("ERROR").not())?
+            .try_stdout(contains("ERROR").not().and(contains(must_contain)))?
             .try_success()
     })()
     .map(|_| ())
