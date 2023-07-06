@@ -19,6 +19,27 @@ async fn main() {
     }
 }
 
+fn base16_decode_string(input: &str) -> Option<[u8; 32]> {
+    if input.len() % 2 != 0 {
+        return None; // Invalid input length
+    }
+
+    let mut decoded_bytes = [0u8; 32];
+
+    for (i, byte) in decoded_bytes.iter_mut().enumerate() {
+        let start = i * 2;
+        let end = start + 2;
+        let hex_byte = &input[start..end];
+        *byte = match u8::from_str_radix(hex_byte, 16) {
+            Ok(byte) => byte,
+            Err(_) => return None, // Invalid hex digit
+        };
+    }
+
+    Some(decoded_bytes)
+}
+
+
 async fn run() -> Result<()> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
@@ -32,6 +53,11 @@ async fn run() -> Result<()> {
         node_key: keypair(config.keypair),
         mdns: if config.enable_mdns {
             Some(Default::default())
+        } else {
+            None
+        },
+        psk: if let Some(psk) = config.psk {
+            Some(base16_decode_string(&psk).unwrap())
         } else {
             None
         },

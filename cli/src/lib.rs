@@ -15,6 +15,8 @@ pub struct Config {
     #[structopt(long)]
     pub node_name: Option<String>,
     #[structopt(long)]
+    pub psk: Option<String>,
+    #[structopt(long)]
     pub keypair: u64,
     #[structopt(long)]
     pub enable_mdns: bool,
@@ -26,7 +28,7 @@ pub struct Config {
     pub external: Vec<Multiaddr>,
     #[structopt(long)]
     pub disable_port_reuse: bool,
-}
+ }
 
 impl Config {
     pub fn new(keypair: u64) -> Self {
@@ -38,6 +40,7 @@ impl Config {
             bootstrap: vec![],
             external: vec![],
             enable_mdns: false,
+            psk: None,
             disable_port_reuse: false,
         }
     }
@@ -63,6 +66,9 @@ impl From<Config> for async_process::Command {
         if let Some(node_name) = config.node_name.as_ref() {
             cmd.arg("--node-name").arg(node_name);
         }
+        if let Some(psk) = config.psk.as_ref() {
+            cmd.arg("--psk").arg(psk);
+        }
         cmd.arg("--keypair").arg(config.keypair.to_string());
         for listen_on in &config.listen_on {
             cmd.arg("--listen-on").arg(listen_on.to_string());
@@ -79,6 +85,7 @@ impl From<Config> for async_process::Command {
         if config.disable_port_reuse {
             cmd.arg("--disable-port-reuse");
         }
+        
         cmd
     }
 }

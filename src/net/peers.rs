@@ -244,6 +244,7 @@ impl AddressBook {
         }
         tracing::debug!("request dialing {}", peer);
         let handler = self.new_handler();
+        println!("xoxo add dial action {}", peer.to_string());
         self.actions.push_back(NetworkBehaviourAction::Dial {
             opts: DialOpts::peer_id(*peer).build(),
             handler,

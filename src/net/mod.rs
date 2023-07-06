@@ -66,6 +66,8 @@ use std::{
     time::Duration,
 };
 use void::unreachable;
+use libp2p::websocket as websocket;
+use rcgen::generate_simple_self_signed;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ListenerEvent {
@@ -162,9 +164,21 @@ impl NetworkService {
         let behaviour =
             NetworkBackendBehaviour::new(&mut config, store, listeners, peers, external)?;
 
-        let tcp = {
-            let transport =
-                TcpTransport::new(TcpConfig::new().nodelay(true).port_reuse(config.port_reuse));
+        let tcp_or_ws = {
+            let transport = {
+                let tcp = TcpTransport::new(TcpConfig::new().nodelay(true).port_reuse(config.port_reuse));
+                let mut ws_tcp = websocket::WsConfig::new(
+                    TcpTransport::new(TcpConfig::new().nodelay(true).port_reuse(config.port_reuse))
+                );
+
+                let rcgen_cert = generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+                let priv_key = websocket::tls::PrivateKey::new(rcgen_cert.serialize_private_key_der());
+                let cert = websocket::tls::Certificate::new(rcgen_cert.serialize_der().unwrap());
+                ws_tcp.set_tls_config(websocket::tls::Config::new(priv_key, vec![cert]).unwrap());
+
+                tcp.or_transport(ws_tcp)
+            };
+
             let transport = if let Some(psk) = config.psk {
                 let psk = PreSharedKey::new(psk);
                 EitherTransport::Left(
@@ -187,40 +201,26 @@ impl NetworkService {
                 ))
                 .timeout(Duration::from_secs(5))
         };
-        assert_transport_error_type::<_, TransportError>(&tcp);
-        /*let quic = {
-            QuicConfig {
-                keypair: config.node_key,
-                transport: config.quic,
-                ..Default::default()
-            }
-            .listen_on("/ip4/0.0.0.0/udp/0/quic".parse().unwrap())
-            .await?
-            .boxed()
-        };
-        let quic_or_tcp = quic.or_transport(tcp).map(|either, _| match either {
-            EitherOutput::First(first) => first,
-            EitherOutput::Second(second) => second,
-        });*/
-        let quic_or_tcp = tcp.boxed();
+
+        let tcp_or_ws = tcp_or_ws.boxed();
         #[cfg(feature = "async_global")]
         let transport = if let Some(config) = config.dns {
             match config {
                 DnsConfig::Custom { config, opts } => {
-                    Dns::custom(quic_or_tcp, config, opts).await?
+                    Dns::custom(tcp_or_ws, config, opts).await?
                 }
                 DnsConfig::SystemWithFallback { config, opts } => {
                     match trust_dns_resolver::system_conf::read_system_conf() {
-                        Ok((config, opts)) => Dns::custom(quic_or_tcp, config, opts).await?,
+                        Ok((config, opts)) => Dns::custom(tcp_or_ws, config, opts).await?,
                         Err(e) => {
                             tracing::warn!("falling back to custom DNS config, system default yielded error `${:#}`", e);
-                            Dns::custom(quic_or_tcp, config, opts).await?
+                            Dns::custom(tcp_or_ws, config, opts).await?
                         }
                     }
                 }
             }
         } else {
-            Dns::system(quic_or_tcp).await?
+            Dns::system(tcp_or_ws).await?
         };
         #[cfg(all(feature = "tokio", not(feature = "async_global")))]
         let transport = if let Some(config) = config.dns {
