@@ -6,6 +6,7 @@ use ipfs_embed::{
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::PathBuf};
 use structopt::StructOpt;
+use libp2p::core::PeerId as p2pPeerId;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "ipfs_embed")]
@@ -108,6 +109,7 @@ pub enum Command {
     Dial(PeerId),
     PrunePeers,
     Get(Cid),
+    Fetch(Cid, Vec<p2pPeerId>),
     Insert(Block<DefaultParams>),
     Alias(String, Option<Cid>),
     Flush,
@@ -121,6 +123,7 @@ impl std::fmt::Display for Command {
             Self::Dial(peer) => write!(f, ">dial {}", peer)?,
             Self::PrunePeers => write!(f, ">prune-peers")?,
             Self::Get(cid) => write!(f, ">get {}", cid)?,
+            Self::Fetch(cid, providers) => write!(f, ">fetch {} {:?}", cid, providers)?,
             Self::Insert(block) => {
                 write!(f, ">insert {} ", block.cid())?;
                 for byte in block.data() {
@@ -159,6 +162,12 @@ impl std::str::FromStr for Command {
             Some(">get") => {
                 let cid = parts.next().unwrap().parse()?;
                 Self::Get(cid)
+            }
+            Some(">fetch") => {
+                let cid = parts.next().unwrap().parse()?;
+                let peer_id = parts.next().unwrap().parse()?;
+                let providers = vec![peer_id];
+                Self::Fetch(cid, providers)
             }
             Some(">insert") => {
                 let cid = parts.next().unwrap().parse()?;

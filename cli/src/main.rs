@@ -63,6 +63,7 @@ async fn run() -> Result<()> {
         },
         kad: None,
         port_reuse: !config.disable_port_reuse,
+        keep_alive: true,
         ..Default::default()
     };
     let node_name = if let Some(node_name) = config.node_name {
@@ -146,6 +147,8 @@ async fn run() -> Result<()> {
             Ok(Command::Get(cid)) => ipfs
                 .lock()
                 .get(&cid)
+                .map(|block| writeln!(stdout, "{}", Event::Block(block)).expect("print")),
+            Ok(Command::Fetch(cid, providers)) => ipfs.lock().fetch(&cid, providers).await
                 .map(|block| writeln!(stdout, "{}", Event::Block(block)).expect("print")),
             Ok(Command::Insert(block)) => ipfs.lock().insert(block),
             Ok(Command::Alias(alias, cid)) => ipfs.lock().alias(&alias, cid.as_ref()),

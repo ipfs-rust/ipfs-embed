@@ -2201,6 +2201,7 @@ dependencies = [
  "futures",
  "ipfs-embed",
  "libipld",
+ "libp2p",
  "multihash",
  "parking_lot 0.11.2",
  "serde",
