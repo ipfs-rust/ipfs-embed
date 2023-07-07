@@ -178,7 +178,8 @@ impl NetworkService {
 
                 tcp.or_transport(ws_tcp)
             };
-
+            
+            
             let transport = if let Some(psk) = config.psk {
                 let psk = PreSharedKey::new(psk);
                 EitherTransport::Left(
@@ -187,6 +188,7 @@ impl NetworkService {
             } else {
                 EitherTransport::Right(transport)
             };
+
             let dh_key = noise::Keypair::<X25519Spec>::new()
                 .into_authentic(&libp2p::core::identity::Keypair::Ed25519(
                     config.node_key.clone(),
