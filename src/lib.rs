@@ -192,6 +192,11 @@ where
         self.network.add_address(peer, addr)
     }
 
+    /// Adds a batch of known `Multiaddr` & `PeerId` pairs.
+    pub fn add_addresses(&mut self, addresses: Vec<(PeerId, Multiaddr)>) {
+        self.network.add_addresses(addresses)
+    }
+
     /// Removes a `Multiaddr` for a `PeerId`.
     pub fn remove_address(&mut self, peer: PeerId, addr: Multiaddr) {
         self.network.remove_address(peer, addr)

@@ -79,6 +79,7 @@ pub enum NetworkCommand {
     ListenOn(Multiaddr, UnboundedSender<ListenerEvent>),
     AddExternalAddress(Multiaddr),
     AddAddress(PeerId, Multiaddr),
+    AddAddresses(Vec<(PeerId, Multiaddr)>),
     RemoveAddress(PeerId, Multiaddr),
     PrunePeers(Duration),
     Dial(PeerId),
@@ -350,6 +351,10 @@ impl NetworkService {
 
     pub fn add_address(&mut self, peer: PeerId, addr: Multiaddr) {
         self.cmd(NetworkCommand::AddAddress(peer, addr));
+    }
+
+    pub fn add_addresses(&mut self, addresses: Vec<(PeerId, Multiaddr)>) {
+        self.cmd(NetworkCommand::AddAddresses(addresses));
     }
 
     pub fn remove_address(&mut self, peer: PeerId, addr: Multiaddr) {
@@ -660,6 +665,13 @@ async fn poll_swarm<P: StoreParams>(
                     swarm
                         .behaviour_mut()
                         .add_address(&peer, addr, AddressSource::User);
+                }
+                NetworkCommand::AddAddresses(addresses) => {
+                    for (peer, addr) in addresses {
+                        swarm
+                            .behaviour_mut()
+                            .add_address(&peer, addr, AddressSource::User);
+                    }
                 }
                 NetworkCommand::RemoveAddress(peer, addr) => {
                     swarm.behaviour_mut().remove_address(&peer, &addr);
