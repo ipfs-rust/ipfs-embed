@@ -3,7 +3,7 @@ members = [".", "cli", "harness"]
 
 [package]
 name = "ipfs-embed"
-version = "0.26.0"
+version = "0.26.1"
 authors = ["David Craven <david@craven.ch>", "Roland Kuhn <roland@actyx.io>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
