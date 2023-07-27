@@ -19,6 +19,27 @@ async fn main() {
     }
 }
 
+fn base16_decode_string(input: &str) -> Option<[u8; 32]> {
+    if input.len() % 2 != 0 {
+        return None; // Invalid input length
+    }
+
+    let mut decoded_bytes = [0u8; 32];
+
+    for (i, byte) in decoded_bytes.iter_mut().enumerate() {
+        let start = i * 2;
+        let end = start + 2;
+        let hex_byte = &input[start..end];
+        *byte = match u8::from_str_radix(hex_byte, 16) {
+            Ok(byte) => byte,
+            Err(_) => return None, // Invalid hex digit
+        };
+    }
+
+    Some(decoded_bytes)
+}
+
+
 async fn run() -> Result<()> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
@@ -35,8 +56,14 @@ async fn run() -> Result<()> {
         } else {
             None
         },
+        psk: if let Some(psk) = config.psk {
+            Some(base16_decode_string(&psk).unwrap())
+        } else {
+            None
+        },
         kad: None,
         port_reuse: !config.disable_port_reuse,
+        keep_alive: true,
         ..Default::default()
     };
     let node_name = if let Some(node_name) = config.node_name {
@@ -120,6 +147,8 @@ async fn run() -> Result<()> {
             Ok(Command::Get(cid)) => ipfs
                 .lock()
                 .get(&cid)
+                .map(|block| writeln!(stdout, "{}", Event::Block(block)).expect("print")),
+            Ok(Command::Fetch(cid, providers)) => ipfs.lock().fetch(&cid, providers).await
                 .map(|block| writeln!(stdout, "{}", Event::Block(block)).expect("print")),
             Ok(Command::Insert(block)) => ipfs.lock().insert(block),
             Ok(Command::Alias(alias, cid)) => ipfs.lock().alias(&alias, cid.as_ref()),
