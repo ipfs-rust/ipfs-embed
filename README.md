@@ -1,5 +1,5 @@
 # ipfs-embed
-A small, fast and reliable ipfs implementation designed for embedding in to complex p2p
+A small, fast, and reliable ipfs implementation designed for embedding into complex p2p
 applications.
 
 * node discovery via mdns
